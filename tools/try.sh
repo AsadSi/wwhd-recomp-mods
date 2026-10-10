@@ -32,6 +32,9 @@ Phantom Ganon (normal size) comes at about 30 s: fight him from the deck." ;;
 Molgera at about 30 s (80 health: 20 cannon hits; 300 rupees and a blue potion), then Titanic Phantom Ganon at about
 3.5 min (18 cannon hits drive him off). Get onto the deck first; sail the ship or man a cannon. Your Bomb Bag
 is filled up as each one comes; the fog is thinner while they are out." ;;
+  duo) ON=(BIG_SHIP MOLGERA PHANTOM_GANON); EVENT="molgera@+30;phantom@+35"; export WWHD_MOD_PHANTOM_GANON_CHOICE=1; NOTE="$SHIP
+Molgera and Titanic Phantom Ganon together, from about 30 s: get onto the deck first. Molgera 80 health (20 cannon
+hits; 300 rupees and a blue potion), Phantom 18 cannon hits drive him off. Your Bomb Bag is filled up as each comes." ;;
   titanic-deck) ON=(BIG_SHIP PHANTOM_GANON); EVENT="phantom@+30"; export WWHD_MOD_PHANTOM_GANON_CHOICE=1; NOTE="$SHIP
 Titanic (12x) Phantom Ganon comes at about 30 s: get onto the deck first, then fight him from it (cannons, bow,
 sword). His dark balls, their bursts and his hit sparks are his size." ;;
@@ -49,7 +52,7 @@ The Seahats should now swoop at you while you swim instead of drifting off." ;;
 Everything at once. The first minute is yours: get on the deck, try the helm and a cannon. Then, one after another:
   at 1 min the Leviathan (48 health), at about 4.5 min Molgera (80 health), at about 8 min Titanic Phantom Ganon, at about
   11 min Haunted sea. Each ends when you kill it, outrun it or after its time. Kills give rupees and a blue potion." ;;
-  *) echo "Usage: tools/try.sh <all|bosses|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim>"; exit 2 ;;
+  *) echo "Usage: tools/try.sh <all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim>"; exit 2 ;;
 esac
 for m in "${SPOOKY[@]}"; do export WWHD_MOD_$m=0; done
 for m in "${ON[@]}"; do export WWHD_MOD_$m=1; done
