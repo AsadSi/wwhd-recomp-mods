@@ -12,3 +12,6 @@
 0252A684  # dDoor_info_c::getDemoAction: a door event cut is running
 021C0078  # daMbdoor_c::getDemoAction
 025DC86C  # fopScnM_ChangeReq: scene change trigger (traces)
+# More built-in mods (mods/extras.cpp)
+@02167A64 # daGy_c::_create: the Boomerang check passes for Haunted sea's Gyorgs
+@0216BB70 # daGy_Ctrl_c::_create: the same for its GyCtrl

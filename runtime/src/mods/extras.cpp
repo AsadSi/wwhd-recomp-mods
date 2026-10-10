@@ -1,7 +1,7 @@
 // More built-in mods (Gameplay menu, all off by default), several ported from the Twilight Princess HD
 // recomp: damage and rupee multipliers, time of day, a turbo key; stormy weather and thick fog; and two that spawn
 // the game's own monsters around Link: Night of the dead (ReDeads, Stalfos and Poes on land at night) and
-// Haunted sea (Seahats and Kargarocs around Link on the open sea).
+// Haunted sea (Gyorgs, Seahats and Kargarocs around Link on the open sea).
 //
 // They run once per full logic step, after the actors' execute (interp.cpp hook_025DE788), and act on what
 // changed in that step, so the game's own rules (maxima, wallet, death) still apply. Offsets (WWHD):
@@ -52,7 +52,7 @@ uint32_t u32_bits(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
 // a monster from the object name table, and the parameter it is created with (0xFFFFFFFF: the defaults)
 struct Monster { int16_t proc; int8_t subtype; uint32_t param; };
 constexpr Monster kRedead{0xE0, 0, 0xFFFFFFFF}, kStalfos{0xBE, -1, 0xFFFFFFFF}, kPoe{0xD4, -1, 0xFFFFFFFF},
-                  kSeahat{0xD1, -1, 0xFFFFFFFF}, kKargaroc{0xB5, -1, 0};
+                  kGyorg{0xE4, -1, 0xFFFFFFFF}, kSeahat{0xD1, -1, 0xFFFFFFFF}, kKargaroc{0xB5, -1, 0};
 
 // the monsters a spawner has out, by process id; forgotten when they die or the stage changes
 struct Spawner {
@@ -63,12 +63,13 @@ struct Spawner {
     }
 };
 Spawner g_night, g_sea;
+constexpr Monster kGyCtrl{0xE5, -1, 0x7F00FF01};
 
 // spawns `m` at `dist` from Link, `behind` him (out of the camera's view) or anywhere around him, `dy` above him; a
 // monster `on_ground` only where the game's ground check (dGrass's checkGroundY, 02549F4C) finds land within 250 of
 // Link's height and above the sea (y 0), never over water or off a cliff (6 tries, the last 3 all around him, else
 // not this time)
-void spawn(Cpu* c, Spawner& s, Monster m, uint32_t link, float dist, bool behind, float dy, bool on_ground) {
+uint32_t spawn(Cpu* c, Spawner& s, Monster m, uint32_t link, float dist, bool behind, float dy, bool on_ground, uint32_t parent = 0) {
     static const bool seeded = (srand((unsigned)time(nullptr)), true);
     (void)seeded;
     static const uint32_t buf = mem::host_alloc(0x20);  // pos (cXyz) at +0, angle (csXyz) at +0x10
@@ -95,15 +96,28 @@ void spawn(Cpu* c, Spawner& s, Monster m, uint32_t link, float dist, bool behind
         // scene's draw buffers (a J3D draw list looped through the grass packet the first time it came into view)
         const uint32_t layer = guest_call(c, GC(0x025DED64));  // fpcLy_CurrentLayer
         guest_call(c, GC(0x025DEAB4), {ld32(link + 0x2C)});    // fpcLy_SetCurrentLayer
-        const uint32_t id = guest_call(c, GC(0x025D5834), {(uint32_t)m.proc, m.param, buf, (uint32_t)(int8_t)ld8(link + kRoom),
-                                                           buf + 0x10, 0, (uint32_t)(int32_t)m.subtype, 0});
+        const uint32_t room = (uint32_t)(int8_t)ld8(link + kRoom), subtype = (uint32_t)(int32_t)m.subtype;
+        // fopAcM_createChild's 9th argument, createFunc, is on the stack (caller's sp + 8; guest_call's frame is 0x40)
+        if (parent) st32(c->r[1] - 0x40 + 8, 0);
+        const uint32_t id = parent ? guest_call(c, GC(0x025D5A20), {(uint32_t)m.proc, parent, m.param, buf, room, buf + 0x10, 0, subtype})
+                                   : guest_call(c, GC(0x025D5834), {(uint32_t)m.proc, m.param, buf, room, buf + 0x10, 0, subtype, 0});
         guest_call(c, GC(0x025DEAB4), {layer});
         trace("extras: spawned proc %#x id %#x at %.0f %.0f %.0f (%zu out)", m.proc, id, x, ldf32(buf + 4), z, s.ids.size());
         if (id != 0xFFFFFFFF) s.ids.push_back(id);
-        return;
+        return id;
     }
     trace("extras: no ground for proc %#x near Link", m.proc);
+    return 0xFFFFFFFF;
 }
+
+// Gyorgs: the game makes them only once Link has the Boomerang (daGy_c::_create and daGy_Ctrl_c::_create check
+// dComIfGs_checkGetItem(dItemNo_BOOMERANG_e) and fail otherwise), and a Gyorg only as the child of a GyCtrl (proc 0xE5,
+// it counts its Gyorgs at +0x438). Haunted sea makes one quiet GyCtrl near Link (type 1, no Gyorgs of its own, waiting
+// for switch 0x7F, which nothing on the sea sets: with 0xFF it would go on to its own modes and, having no Gyorgs of
+// its own, delete itself; switch numbers from 0x80 halt the game, d_save.cpp "i_no < SWITCH_MAX") and its Gyorgs as that controller's children; the check passes for those processes only
+// (site hooks below, by process id, base_process_class +4).
+std::vector<uint32_t> g_gyorg_ids;  // the controller and Gyorgs made here
+uint32_t g_gyctrl = 0xFFFFFFFF;
 }  // namespace
 
 // ---- switches ----
@@ -126,7 +140,8 @@ const std::vector<Mod>& catalogue() {
          "Pairs well with Time of day: Night and Stormy weather.",
          {"Sometimes", "Often", "Relentless"}},
         {"haunted-sea", "Haunted sea", "Spooky",
-         "Out on the open sea (on the boat or swimming) Seahats and Kargarocs come for Link, day and night (more at night).",
+         "Out on the open sea (on the boat or swimming) Gyorgs, Seahats and Kargarocs come for Link, day and night (more at "
+         "night). Gyorgs come even before Link has the Boomerang.",
          {"Sometimes", "Often", "Relentless"}},
         {"storm", "Stormy weather", "Spooky", "Heavy rain (the game's own) at night, or all the time.", {"At night", "Always"}},
         {"fog", "Thick fog", "Spooky", "The world fades into fog a short way from Link, at night or all the time.", {"At night", "Always"}},
@@ -165,7 +180,7 @@ void step(Cpu* c) {
     std::string stage((const char*)mem::ptr(kStage), strnlen((const char*)mem::ptr(kStage), 8));
     if (!in_mem2(link) || stage.empty() || stage == "sea_T" || stage == "Name" || stage == "ENDumi") return;  // title, file select
     const uint32_t sv = save();
-    if (fresh) g_night = Spawner{}, g_sea = Spawner{};
+    if (fresh) g_night = Spawner{}, g_sea = Spawner{}, g_gyctrl = 0xFFFFFFFF, g_gyorg_ids.clear();
 
     const uint16_t max_life = ld16(sv), cur = ld16(sv + 2);
     if (on<kDamage>() && !fresh && cur < life) {  // also a hit that killed: None and x0.5 can save Link
@@ -231,13 +246,38 @@ void step(Cpu* c) {
         const int level = g_choice[kSea].load();
         g_sea.prune(c);
         if (now >= g_sea.next && g_sea.ids.size() < kMax[level] + (night ? 2 : 0)) {
-            // not Gyorgs or the Ghost Ship (Ayush) yet: spawned like this (Gyorgs also as their GyCtrl) they delete
-            // themselves at once, at least on this early file
-            static const Monster kSea[] = {kSeahat, kSeahat, kKargaroc};
-            const Monster m = kSea[rand() % 3];
-            spawn(c, g_sea, m, link, 900 + rand() % 600, false, 300, false);
+            // not the Ghost Ship (Ayush) yet: spawned like this it deletes itself at once, at least on this early file
+            const bool ctrl = g_gyctrl != 0xFFFFFFFF && guest_call(c, GC(0x025DE50C), {g_gyctrl});
+            if (!ctrl) {  // its controller first; Gyorgs once it exists
+                Spawner none;
+                g_gyctrl = spawn(c, none, kGyCtrl, link, 0, false, 0, false);
+                g_gyorg_ids.push_back(g_gyctrl);
+            } else if (rand() % 2) {
+                const uint32_t id = spawn(c, g_sea, kGyorg, link, 900 + rand() % 600, false, -40, false, g_gyctrl);
+                if (id != 0xFFFFFFFF) g_gyorg_ids.push_back(id);
+            } else {
+                spawn(c, g_sea, rand() % 3 ? kSeahat : kKargaroc, link, 900 + rand() % 600, false, 300, false);
+            }
             g_sea.next = now + kEvery[level] * (night ? 0.6 : 1) * (0.6 + rand() / (double)RAND_MAX * 0.8);
+        }
+        // the Gyorgs hunt Link: without their controller's path and battle state they would only dive and circle
+        // (daGy_c mode at +0x3CC: 0 dive, 1 circle, 6 circle with others), so those are turned into an attack on the
+        // player (modeAttackPlayerInit, 02169B48, mode 3); attacks, damage and deletion run as the game decides
+        for (uint32_t id : g_gyorg_ids) {
+            const uint32_t gy = id == g_gyctrl ? 0 : guest_call(c, GC(0x025DE50C), {id});
+            if (const uint32_t mode = gy ? ld32(gy + 0x3CC) : 9; mode == 0 || mode == 1 || mode == 6) guest_call(c, GC(0x02169B48), {gy});
         }
     }
 }
 }  // namespace mods::extras
+
+// the Boomerang check of daGy_c::_create (02167A64, r30 the Gyorg) and daGy_Ctrl_c::_create (0216BB70, r31 the
+// controller), just after dComIfGs_checkGetItem returned in r3: passed for the processes Haunted sea made
+static bool ours(uint32_t actor) {
+    return std::find(mods::extras::g_gyorg_ids.begin(), mods::extras::g_gyorg_ids.end(), ld32(actor + 4)) != mods::extras::g_gyorg_ids.end();
+}
+extern "C" void site_02167A64(Cpu* c) { if (!c->r[3] && ours(c->r[30])) c->r[3] = 1; }
+extern "C" void site_0216BB70(Cpu* c) {
+    if (!c->r[3] && ours(c->r[31])) c->r[3] = 1;
+}
+
