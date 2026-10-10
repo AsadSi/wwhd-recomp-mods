@@ -177,11 +177,12 @@ void step(Cpu* c) {
         const int level = g_choice[kNight].load();
         g_night.prune(c);
         // one kind a visit (a mix froze more often), never Poes (a Poe spawned this way halts the game: sead assert).
-        // Open, the freeze: with spawned monsters around, the grass packet (dGrass_packet_c) is sometimes entered into
-        // the frame's J3D draw buffer twice, so its next link (+0x10) leads back to it; the buffer's draw loop (027F10CC)
-        // then draws grass for ever, the frame never ends and gx2 logs "display list overflow" (4 MB list begun at
-        // 027C0768). Cutting that link after the grass draw ends the loop but the game then halts on its own
-        // J3DDrawBuffer.cpp:278 "entryPtr == 0": the fix is to keep the second entry from happening (update twice?).
+        // Open, the freeze: with spawned monsters around, a J3D draw buffer list sometimes loops (grass packet ->
+        // ordinary J3D packets, draw 027F16E8 -> back to the grass; next link +0x10), so the buffer's draw loop
+        // (027F10CC) never ends and gx2 logs "display list overflow" (4 MB list begun at 027C0768). Not a double
+        // entry (HD asserts on that, J3DDrawBuffer.cpp:243, and it did not fire); likely the packets of a spawned
+        // monster that deleted itself at once (Seahats on land do) still linked when their memory is reused. Cutting
+        // the loop after the grass draw only moves the failure to that assert.
         static Monster kind = kRedead;
         if (g_night.ids.empty() && g_night.next == 0) kind = rand() % 3 ? kRedead : kStalfos;
         if (now >= g_night.next && g_night.ids.size() < kMax[level]) {
