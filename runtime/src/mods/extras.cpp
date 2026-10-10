@@ -118,12 +118,13 @@ constexpr float kHitScale = 2.0f;
 // monster `on_ground` only where the game's ground check (dGrass's checkGroundY, 02549F4C) finds land within 250 of
 // Link's height and above the sea (y 0), never over water or off a cliff (6 tries, the last 3 all around him, else
 // not this time)
-// `side`: 0 anywhere around him, 1 behind (out of the camera's view), -1 ahead
-uint32_t spawn(Cpu* c, Spawner& s, Monster m, uint32_t link, float dist, int side, float dy, bool on_ground, uint32_t parent = 0) {
+// `side`: 0 anywhere around him, 1 behind (out of the camera's view), -1 ahead; `sea`: `dy` from the sea (y 0), not
+// from Link, who may be on the Big ship's deck or up its mast
+uint32_t spawn(Cpu* c, Spawner& s, Monster m, uint32_t link, float dist, int side, float dy, bool on_ground, uint32_t parent = 0, bool sea = false) {
     static const bool seeded = (srand((unsigned)time(nullptr)), true);
     (void)seeded;
     static const uint32_t buf = mem::host_alloc(0x20);  // pos (cXyz) at +0, angle (csXyz) at +0x10
-    const float ly = (float)ldf32(link + kPos + 4);
+    const float ly = sea ? 0.f : (float)ldf32(link + kPos + 4);
     for (int attempt = 0; attempt < 6; attempt++) {
         const double yaw = (int16_t)ld16(link + kAngleY) * M_PI / 32768;
         const double a = side && attempt < 3 ? yaw + (side > 0 ? M_PI : 0) + (rand() / (double)RAND_MAX - 0.5) * 1.6 : rand() / (double)RAND_MAX * 2 * M_PI;
@@ -809,15 +810,15 @@ void step(Cpu* c) {
                 g_gyctrl = spawn(c, none, kGyCtrl, link, 0, false, 0, false);
                 g_gyorg_ids.push_back(g_gyctrl);
             } else if (boat && rand() % 4 == 0) {  // a cannon boat ahead of a sailing Link, bombarding from its range (2500-6000)
-                spawn(c, g_sea, kOship, link, 3000 + rand() % 2500, false, 0, false);
+                spawn(c, g_sea, kOship, link, 3000 + rand() % 2500, false, 0, false, 0, true);
             } else if (rand() % (giants ? 4 : 2) == 0) {
-                const uint32_t id = spawn(c, g_sea, kGyorg, link, 900 + rand() % 600, false, -40, false, g_gyctrl);
+                const uint32_t id = spawn(c, g_sea, kGyorg, link, 900 + rand() % 600, false, -40, false, g_gyctrl, true);
                 if (id != 0xFFFFFFFF) g_gyorg_ids.push_back(id);
             } else {  // Seahats (one in three a giant), Kargarocs; at night also Poes drifting over the water
                 static const Monster kDay[] = {kSeahat, kSeahat, kKargaroc}, kNightSea[] = {kSeahat, kKargaroc, kPoe, kPoe};
                 const Monster m = giants ? kSeahat : night ? kNightSea[rand() % 4] : kDay[rand() % 3];
                 const bool poe = m.proc == kPoe.proc;
-                const uint32_t id = spawn(c, g_sea, m, link, poe ? 500 + rand() % 400 : 900 + rand() % 600, false, poe ? 120 : 300, false);
+                const uint32_t id = spawn(c, g_sea, m, link, poe ? 500 + rand() % 400 : 900 + rand() % 600, false, poe ? 120 : 300, false, 0, true);
                 if (m.proc == kSeahat.proc && (giants || rand() % 3 == 0) && id != 0xFFFFFFFF)
                     g_giant_ids.push_back({id, giants && rand() % 4 == 0 ? kColossus : kGiant});
             }
@@ -829,7 +830,7 @@ void step(Cpu* c) {
             Monster ghost = kAyush;
             ghost.param |= guest_call(c, GC(0x02560828)) & 0xFF;
             Spawner none;
-            g_ghost.id = spawn(c, none, ghost, link, 4500 + rand() % 2000, -1, 0, false);
+            g_ghost.id = spawn(c, none, ghost, link, 4500 + rand() % 2000, -1, 0, false, 0, true);
             g_ghost.next = now + 5;
         }
         for (uint32_t id : g_sea.ids)
@@ -909,7 +910,7 @@ void step(Cpu* c) {
             }
         } else if (g_leviathan.wanted(c, now)) {
             Spawner none;
-            g_leviathan.id = spawn(c, none, kGyorg, link, 2500, 1, -40, false, g_gyctrl);
+            g_leviathan.id = spawn(c, none, kGyorg, link, 2500, 1, -40, false, g_gyctrl, true);
             if (g_leviathan.id != 0xFFFFFFFF) g_gyorg_ids.push_back(g_leviathan.id);
             g_leviathan.next = now + 10;
         }
