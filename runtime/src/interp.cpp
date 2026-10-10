@@ -34,6 +34,7 @@
 #include <vector>
 
 #include "interp_pacing.h"
+#include "mods/extras.h"
 #include "guest_addr.h"
 #include "render_prof.h"
 #include "runtime.h"
@@ -355,6 +356,7 @@ static void cam_trace(uint32_t cam, const char* what) {
 extern "C" void hook_024FFC40(Cpu* c) {
     using namespace interp;
     uint32_t cam = c->r[3];
+    mods::extras::camera_draw(cam);  // the Big ship helm's far camera (mods/extras.cpp)
     Prev* p = prev_for(cam);
     if (g_blend_draw && !true60::runs_60(cam)) {  // blended between the step drawn last (S) and the new one (S+1)
         CamState cur = read_cam(cam);

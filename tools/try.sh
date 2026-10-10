@@ -36,7 +36,12 @@ Set sail (A) and sail full speed to get away; it now and then dives and bursts u
 Sail toward Outset (south-west): the ship drops anchor by itself before the island; take the boat in, then come back." ;;
   seahats-swim) ON=(HAUNTED_SEA); EVENT="sea@+20"; NOTE="Haunted sea at about 20 s: get out of the boat (B) and swim.
 The Seahats should now swoop at you while you swim instead of drifting off." ;;
-  *) echo "Usage: tools/try.sh <deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim>"; exit 2 ;;
+  all) ON=(BIG_SHIP HAUNTED_SEA GIANT_SEAHATS LEVIATHAN MOLGERA PHANTOM_GANON HORROR_AUDIO); EVENT="leviathan@+60;molgera@+260;phantom@+460;sea@+640"
+  NOTE="$SHIP
+Everything at once. The first minute is yours: get on the deck, try the helm and a cannon. Then, one after another:
+  at 1 min the Leviathan (48 health), at about 4.5 min Molgera (80 health), at about 8 min Phantom Ganon, at about
+  11 min Haunted sea. Each ends when you kill it, outrun it or after its time. Kills give rupees and a blue potion." ;;
+  *) echo "Usage: tools/try.sh <all|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim>"; exit 2 ;;
 esac
 for m in "${SPOOKY[@]}"; do export WWHD_MOD_$m=0; done
 for m in "${ON[@]}"; do export WWHD_MOD_$m=1; done

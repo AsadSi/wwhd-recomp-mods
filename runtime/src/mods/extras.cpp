@@ -1240,6 +1240,20 @@ void step(Cpu* c) {
     }
 }
 
+// camera_draw (024FFC40; the camera process: eye +0xDC, center +0xE8): at the Big ship's helm the camera stands far
+// back and high, so the whole ship is in view: the eye is put a fixed 3600 (WWHD_HELM_CAM_DIST) behind its look-at
+// point the way it already looks, and 40% of that above it (a fixed distance, so it is the same however often it runs)
+void camera_draw(uint32_t cam) {
+    if (!g_at_helm || !in_mem2(cam)) return;
+    static const float dist = [] { const char* e = getenv("WWHD_HELM_CAM_DIST"); return e ? (float)atof(e) : 3600.f; }();
+    const float dx = (float)ldf32(cam + 0xDC) - (float)ldf32(cam + 0xE8), dz = (float)ldf32(cam + 0xE4) - (float)ldf32(cam + 0xF0);
+    const float h = std::hypot(dx, dz);
+    if (h < 1) return;
+    st32(cam + 0xDC, u32_bits((float)ldf32(cam + 0xE8) + dx / h * dist));
+    st32(cam + 0xE0, u32_bits((float)ldf32(cam + 0xEC) + dist * 0.4f));
+    st32(cam + 0xE4, u32_bits((float)ldf32(cam + 0xF0) + dz / h * dist));
+}
+
 // each GamePad read (any thread)
 void filter_pad(input::PadState& s) {
     if (overlay::blocks_input()) return;      // the settings overlay has the pad
