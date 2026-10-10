@@ -8,11 +8,15 @@ pgrep -fl "wwhd " >/dev/null && { echo "The game is already running; close it fi
 [ -f "$ROOT/save/haunted.wwstate" ] || { echo "save/haunted.wwstate is missing."; exit 1; }
 SPOOKY=(NIGHT_DEAD HAUNTED_SEA STORM FOG GIANT_SEAHATS PHANTOM_GANON HORROR_AUDIO DEEP LEVIATHAN MOLGERA PHANTOM_STALKER BIG_SHIP)
 ON=(); EVENT=; NOTE=
-SHIP="Big ship: stop the boat beside the ship and press B (Get Out) to jump onto its deck. Walk it, climb its castles,
-  use your weapons. Back in the boat: stand at the rail by the boat and press A. Fall in the sea: swim to the hull's
-  side and press A to climb up. Sail off alone and it waits at anchor; sail up alongside it, slowly, to hitch it on.
-Deck cannons (bow and stern): stand still by one and press A to man it. Left stick aims, ZL locks on the nearest
-  monster (again to unlock), A fires (one bomb a shot), B leaves."
+SHIP="Big ship (keys: move WASD, A = K/Space, B = J, ZL = Left Shift, pause/items = Return):
+  Stop the boat beside the ship and press B (Get Out) to jump onto its deck. Walk it, climb its castles, use weapons.
+  Sail it: on the stern castle (the raised deck at the back), stand by the middle and press A to take the helm.
+  Stick up raises the sail, down lowers it, left/right steers (quicker the faster you go); B lets go and it drifts
+  to a stop. The Red Lion comes along tied to its side.
+  Back in the boat: stand at the rail by the boat and press A. Fall in the sea: swim to the hull's side and press A.
+  Sail off alone in the boat and the ship waits at anchor; sail up alongside it, slowly, to hitch it on again.
+Deck cannons (bow and stern): stand by one and press A (or your Bomb Bag's button) to man it. Stick aims, ZL locks on
+  the nearest monster (again to unlock), A fires (one bomb a shot), B leaves."
 case "${1:-}" in
   deck) ON=(BIG_SHIP); NOTE="$SHIP" ;;
   cannon|sea-deck) ON=(BIG_SHIP HAUNTED_SEA); EVENT="sea@+20"; NOTE="$SHIP
@@ -39,5 +43,6 @@ for m in "${ON[@]}"; do export WWHD_MOD_$m=1; done
 [ -n "$EVENT" ] && export WWHD_SPOOKY="$EVENT"
 echo "$NOTE"
 echo
-echo "Pick Quest Log 1. Trace: $ROOT/build/try-trace.txt"
-cd "$ROOT" && WWHD_PORTABLE_LOAD="$ROOT/save/haunted.wwstate" WWHD_MODS_TRACE="$ROOT/build/try-trace.txt" ./build/cmake/wwhd
+TRACE="$ROOT/build/try/${1}-$(date +%H%M%S).txt"; mkdir -p "$ROOT/build/try"
+echo "Pick Quest Log 1. Trace: $TRACE"
+cd "$ROOT" && WWHD_PORTABLE_LOAD="$ROOT/save/haunted.wwstate" WWHD_MODS_TRACE="$TRACE" ./build/cmake/wwhd

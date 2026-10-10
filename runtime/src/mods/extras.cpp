@@ -553,9 +553,10 @@ void horror_audio(Cpu* c, uint32_t link, double now, bool event, bool enabled) {
 // the cannon game's cannon (daCanon_c, proc 0x3D, its own Bomber archive; it only waits for its minigame's event, and
 // draws from current.pos and shape_angle each execute: y the way it points, x its barrel from straight up, 0x4000
 // level), its speak prompt (attention flags +0x39C) cleared, put on the deck where the ground check finds it each step.
-// The boat's controls: standing within 220 of one (its cylinder keeps him 110 off), the Bomb Bag's button mans it; the
-// stick then turns and raises it (Link faces where it points, the camera behind him), ZL locks it on the nearest of the
-// monsters out (and off again), the Bomb Bag's button fires and B leaves; the game gets none of these (filter_pad). A shot is the boat's own cannonball (daShip_c::procCannon): a Bomb (proc 0x126) made in state 4
+// The boat's controls: standing within 220 of one (its cylinder keeps him 110 off), the Bomb Bag's button (or A) mans
+// it; the stick then turns and raises it (Link faces where it points, the camera behind him), ZL locks it on the nearest
+// of the monsters out (and off again), the Bomb Bag's button (or A) fires and B leaves; the game gets none of these
+// (filter_pad). A shot is the boat's own cannonball (daShip_c::procCannon): a Bomb (proc 0x126) made in state 4
 // (0x80020004) by fopAcM_fastCreate (025D5928), no gravity for its first 8 steps (020CB89C), then speedF +0x370
 // 110 cos e, speed.y +0x340 110 sin e, gravity +0x374 -2.5; it bursts on what it hits. One bomb from the bag each
 // (dSv_player_c +0x6A), none when it is empty (the boat's dud sound 0x0883); the firing sound 0x2852.
@@ -614,7 +615,7 @@ void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, bool deck, 
     const uint32_t button = by >= 0 && (proc == 0x4 || proc == 0x6) ? bomb_button() : 0;
     g_cannon_btn = g_manned >= 0 ? bomb_button() : button;
     if (g_manned < 0) {
-        if (pressed & button) {
+        if (by >= 0 && (proc == 0x4 || proc == 0x6) && (pressed & (button | input::kA))) {
             g_manned = by, g_take_pad = true, locked = 0xFFFFFFFF, up = 0x0C00, stand = pos_of(link);
             yaw = (int16_t)(hull_yaw + (by == 0 ? 0 : 0x8000));  // out over the bow, or the stern
             fired = now;  // the press that manned it does not also fire
@@ -641,7 +642,7 @@ void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, bool deck, 
         up = (int16_t)std::clamp(up + (int)(g_pad_ly.load() * 0x100), 0, 0x2AAA);
     }
     st16(link + 0x322, (uint16_t)yaw), st16(link + kAngleY, (uint16_t)yaw);
-    if (!(pressed & g_cannon_btn.load()) || now < fired + 1) return;
+    if (!(pressed & (g_cannon_btn.load() | input::kA)) || now < fired + 1) return;
     fired = now;
     if (!ld8(sv + 0x6A)) { guest_call(c, GC(0x025E1988), {0x0883}); return; }
     st8(sv + 0x6A, ld8(sv + 0x6A) - 1);
@@ -1160,6 +1161,46 @@ void step(Cpu* c) {
                     trace("extras: Link climbs out of the water onto the deck");
                 }
             }
+            // The helm, on the stern castle: A there takes it (the stick, A and B are then the helm's, filter_pad). The
+            // stick up raises the sail, down lowers it (1.5 s from furled to full); full sail makes the boat's 40 a
+            // step, and it turns quicker the faster it goes (left and right). The hull is moved here, Link standing
+            // on it carried by the game's moving-BG rule, the King of Red Lions kept tied alongside (his place on its
+            // flank, his heading), and the camera kept behind Link facing the bow. B lets go: the ship slows to a stop
+            // and lies at anchor. Land under its outline stops it dead (it runs aground, the sail down).
+            static bool helm = false;
+            static double speed = 0, sail = 0;
+            static int helm_land = 0;
+            static uint32_t sailed = 0;  // the ship its speed is for
+            if (sailed != g_bigship.id) sailed = g_bigship.id, helm = false, speed = sail = 0;
+            constexpr V3 kHelm{0, 0, -800};
+            const V3 me = to_local(hull, link);
+            if (!helm && deck && g_manned < 0 && (proc == 0x4 || proc == 0x6) && (pressed & input::kA) && std::hypot(me.x - kHelm.x, me.z - kHelm.z) < 150) {
+                helm = true, g_take_pad = true, anchored = true, joining = 0;
+                trace("extras: Link takes the Big ship's helm");
+            } else if (helm && (!deck || !g_take_pad || (pressed & input::kB) || ld8(kPlay + 0x5292))) {
+                helm = false, g_take_pad = false, sail = 0;
+                trace("extras: Link lets go of the helm");
+            }
+            if (helm || speed > 0.2) {
+                if (helm) sail = std::clamp(sail + g_pad_ly.load() / 45.0, 0.0, 1.0);
+                speed += (sail * 40 - speed) * (helm ? 0.03 : 0.05);
+                int16_t a = (int16_t)ld16(hull + kAngleY);
+                if (helm) a = (int16_t)(a - g_pad_lx.load() * 0xC0 * std::min(1.0, 0.25 + speed / 40));
+                V3 p = pos_of(hull);
+                p.x += sin(a * M_PI / 32768) * speed, p.z += cos(a * M_PI / 32768) * speed;
+                if (++helm_land % 10 == 0 && land(p, a)) {
+                    speed = 0, sail = 0;
+                    trace("extras: the Big ship runs aground");
+                } else {
+                    put(hull, p, a);
+                    if (helm) st16(link + 0x322, (uint16_t)a), st16(link + kAngleY, (uint16_t)a);
+                    if (const V3 l = to_local(hull, korl); !riding && std::hypot(l.x - kLionX, l.z - kLionZ) < 600) {  // he comes along
+                        const V3 w = to_world(p, a, {kLionX, 0, kLionZ});
+                        st32(korl + kPos, u32_bits((float)w.x)), st32(korl + kPos + 8, u32_bits((float)w.z));
+                        st16(korl + 0x322, (uint16_t)a), st16(korl + kAngleY, (uint16_t)a), st32(korl + 0x370, 0);
+                    }
+                }
+            }
         }
     }
     if (fresh) anchored = false;
@@ -1192,9 +1233,9 @@ void filter_pad(input::PadState& s) {
     g_pad_hold = s.buttons;
     g_pad_seen |= s.buttons;
     g_pad_lx = s.lx, g_pad_ly = s.ly;
-    // manned: the stick, the Bomb Bag's button and B are the cannon's; ZL is held for the game, which keeps the
-    // camera behind Link (and so behind the barrel), and is the cannon's lock-on too
-    if (g_take_pad) s.lx = s.ly = 0, s.buttons = (s.buttons & ~(g_cannon_btn.load() | input::kB)) | input::kZL;
+    // a cannon manned or the helm taken: the stick, A, the Bomb Bag's button and B are theirs; ZL is held for the game,
+    // which keeps the camera behind Link (and so behind the barrel or over the bow), and is the cannon's lock-on too
+    if (g_take_pad) s.lx = s.ly = 0, s.buttons = (s.buttons & ~(g_cannon_btn.load() | input::kA | input::kB)) | input::kZL;
     else s.buttons &= ~g_cannon_btn.load();
 }
 }  // namespace mods::extras
