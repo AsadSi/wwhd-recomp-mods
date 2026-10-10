@@ -1187,6 +1187,7 @@ void step(Cpu* c) {
             }
             if (helm || speed > 0.2) {
                 if (helm) sail = std::clamp(sail + g_pad_ly.load() / 20.0, 0.0, 1.0);
+                if (static double t = 0; now - t >= 1) t = now, trace("extras: Big ship sails: helm %d, sail %.2f, speed %.1f, heading %d", helm, sail, speed, (int16_t)ld16(hull + kAngleY));
                 speed += (sail * 40 - speed) * 0.06;
                 int16_t a = (int16_t)ld16(hull + kAngleY);
                 if (helm) a = (int16_t)(a - g_pad_lx.load() * 0x100 * std::min(1.0, 0.5 + speed / 40));
