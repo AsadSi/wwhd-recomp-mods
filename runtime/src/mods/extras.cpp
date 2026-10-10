@@ -566,9 +566,12 @@ void horror_audio(Cpu* c, uint32_t link, double now, bool event, bool enabled) {
 // of the monsters out (and off again), the Bomb Bag's button (or A) fires and B leaves; the game gets none of these
 // (filter_pad). A shot is the boat's own cannonball (daShip_c::procCannon): a Bomb (proc 0x126) made in state 4
 // (0x80020004) by fopAcM_fastCreate (025D5928), no gravity for its first 8 steps (020CB89C), then speedF +0x370
-// 110 cos e, speed.y +0x340 110 sin e, gravity +0x374 -2.5; it bursts on what it hits. One bomb from the bag each
+// v cos e, speed.y +0x340 v sin e (v kShotSpeed), gravity +0x374 -2.5; it bursts on what it hits. One bomb from the bag each
 // (dSv_player_c +0x6A), none when it is empty (the boat's dud sound 0x0883); the firing sound 0x2852.
 constexpr V3 kCannon[2] = {{-130, 0, 950}, {0, 0, -1320}};  // beside the catapult; on the poop deck
+// the shot's speed: the boat's is 110 (about 4800 at most); a ship's gun carries twice as far (about 10000), so it
+// reaches a titanic Phantom Ganon
+constexpr double kShotSpeed = 160;
 Single g_cannon[2];
 int g_manned = -1;  // the cannon Link stands at
 std::vector<uint32_t> monsters_out() {
@@ -662,14 +665,14 @@ void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, bool deck, 
     }
     if (const uint32_t a = locked == 0xFFFFFFFF ? 0 : guest_call(c, GC(0x025DE50C), {locked})) {
         // at its eyes (eyePos +0x37C) where they will be when the shot gets there (led by how fast they moved since
-        // the last step), on the shot's low arc (speed v 110, gravity g 2.5): tan e = (v^2 - sqrt(v^4 - g (g x^2 +
+        // the last step), on the shot's low arc (speed v kShotSpeed, gravity g 2.5): tan e = (v^2 - sqrt(v^4 - g (g x^2 +
         // 2 y v^2))) / (g x), x the distance and y the height to it from the muzzle; out of reach, 45 degrees
         static V3 last{};
         static uint32_t last_id = 0xFFFFFFFF;
         const V3 eye{ldf32(a + 0x37C), ldf32(a + 0x37C + 4), ldf32(a + 0x37C + 8)};
         const V3 vel = last_id == locked ? V3{eye.x - last.x, eye.y - last.y, eye.z - last.z} : V3{};
         last = eye, last_id = locked;
-        constexpr double v = 110, v2 = v * v, g = 2.5;
+        constexpr double v = kShotSpeed, v2 = v * v, g = 2.5;
         double e = M_PI / 8, dx = 0, dz = 0;
         for (int pass = 0; pass < 3; pass++) {  // the flight time depends on the aim, the aim on where it will be
             const double t = std::hypot(eye.x - ldf32(link + kPos), eye.z - ldf32(link + kPos + 8)) / (v * cos(e));
@@ -707,9 +710,13 @@ void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, bool deck, 
     if (!in_mem2(ball)) return;
     g_balls.push_back({ld32(ball + 4), pos_of(ball)});
     guest_call(c, GC(0x020CB89C), {ball, 8});
-    st32(ball + 0x370, u32_bits((float)(110 * cos(e)))), st32(ball + 0x340, u32_bits((float)(110 * sin(e)))), st32(ball + 0x374, u32_bits(-2.5f));
+    st32(ball + 0x370, u32_bits((float)(kShotSpeed * cos(e)))), st32(ball + 0x340, u32_bits((float)(kShotSpeed * sin(e)))), st32(ball + 0x374, u32_bits(-2.5f));
     guest_call(c, GC(0x025E1988), {0x2852});
-    trace("extras: deck cannon fires (yaw %d, up %d, %u bombs left)", yaw, up, ld8(sv + 0x6A));
+    const uint32_t target = locked == 0xFFFFFFFF ? 0 : guest_call(c, GC(0x025DE50C), {locked});
+    trace("extras: deck cannon fires (yaw %d, up %d, %u bombs left)%s", yaw, up, ld8(sv + 0x6A), target ? "" : ", aimed by hand");
+    if (target)
+        trace("extras: at proc %#x %.0f off, %.0f up", ld16(target + 8),
+              std::hypot(ldf32(target + 0x37C) - ldf32(link + kPos), ldf32(target + 0x37C + 8) - ldf32(link + kPos + 8)), ldf32(target + 0x37C + 4) - ldf32(link + kPos + 4));
 }
 }  // namespace
 
