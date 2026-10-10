@@ -670,7 +670,8 @@ void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, bool deck, 
         // 2 y v^2))) / (g x), x the distance and y the height to it from the muzzle; out of reach, 45 degrees
         static V3 last{};
         static uint32_t last_id = 0xFFFFFFFF;
-        const V3 eye{ldf32(a + 0x37C), ldf32(a + 0x37C + 4), ldf32(a + 0x37C + 8)};
+        V3 eye{ldf32(a + 0x37C), ldf32(a + 0x37C + 4), ldf32(a + 0x37C + 8)};
+        if (const V3 p = pos_of(a); std::hypot(eye.x - p.x, eye.z - p.z) > 3000) eye = p;  // Molgera never sets its eyes
         const V3 vel = last_id == locked ? V3{eye.x - last.x, eye.y - last.y, eye.z - last.z} : V3{};
         last = eye, last_id = locked;
         constexpr double v = kShotSpeed, v2 = v * v, g = 2.5;
