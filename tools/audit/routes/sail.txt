@@ -1,0 +1,13 @@
+# title -> Quest Log 1 (A presses end before the portable state WWHD_PORTABLE_LOAD puts Link on the boat: A on the
+# boat would talk to the King of Red Lions); then paddle forward, set sail (A), sail on, steer right, straight
+3-3.2 A
+5-5.2 A
+7-7.2 A
+9-9.2 A
+11-11.2 A
+13-13.2 A
+24-30 STICK 0 1
+30-30.2 A
+32-38 STICK 0 1
+38-42 STICK 1 0.3
+42-50 STICK 0 1
