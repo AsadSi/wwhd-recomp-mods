@@ -18,6 +18,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstring>
+#include <ctime>
 #include <string>
 #include <vector>
 
@@ -57,22 +58,39 @@ struct Spawner {
 };
 Spawner g_night, g_sea;
 
-// spawns `m` at `dist` from Link, `behind` him (out of the camera's view) or anywhere around him
-void spawn(Cpu* c, Spawner& s, Monster m, uint32_t link, float dist, bool behind, float dy) {
+// spawns `m` at `dist` from Link, `behind` him (out of the camera's view) or anywhere around him, `dy` above him; a
+// monster `on_ground` only where the game's ground check (dGrass's checkGroundY, 02549F4C) finds land within 250 of
+// Link's height and above the sea (y 0), never over water or off a cliff (6 tries, the last 3 all around him, else
+// not this time)
+void spawn(Cpu* c, Spawner& s, Monster m, uint32_t link, float dist, bool behind, float dy, bool on_ground) {
+    static const bool seeded = (srand((unsigned)time(nullptr)), true);
+    (void)seeded;
     static const uint32_t buf = mem::host_alloc(0x20);  // pos (cXyz) at +0, angle (csXyz) at +0x10
-    const double yaw = (int16_t)ld16(link + kAngleY) * M_PI / 32768;
-    const double a = behind ? yaw + M_PI + (rand() / (double)RAND_MAX - 0.5) * 1.6 : rand() / (double)RAND_MAX * 2 * M_PI;
-    const float x = (float)ldf32(link + kPos) + (float)(sin(a) * dist), z = (float)ldf32(link + kPos + 8) + (float)(cos(a) * dist);
-    st32(buf, u32_bits(x));
-    st32(buf + 4, u32_bits((float)ldf32(link + kPos + 4) + dy));
-    st32(buf + 8, u32_bits(z));
-    st16(buf + 0x10, 0);
-    st16(buf + 0x12, (uint16_t)(int16_t)(atan2(-sin(a), -cos(a)) * 32768 / M_PI));  // facing Link
-    st16(buf + 0x14, 0);
-    const uint32_t id = guest_call(c, GC(0x025D5834), {(uint32_t)m.proc, m.param, buf, (uint32_t)(int8_t)ld8(link + kRoom), buf + 0x10, 0,
-                                                       (uint32_t)(int32_t)m.subtype, 0});
-    trace("extras: spawned proc %#x id %#x at %.0f %.0f %.0f (%zu out)", m.proc, id, x, ldf32(buf + 4), z, s.ids.size());
-    if (id != 0xFFFFFFFF) s.ids.push_back(id);
+    const float ly = (float)ldf32(link + kPos + 4);
+    for (int attempt = 0; attempt < 6; attempt++) {
+        const double yaw = (int16_t)ld16(link + kAngleY) * M_PI / 32768;
+        const double a = behind && attempt < 3 ? yaw + M_PI + (rand() / (double)RAND_MAX - 0.5) * 1.6 : rand() / (double)RAND_MAX * 2 * M_PI;
+        const float x = (float)ldf32(link + kPos) + (float)(sin(a) * dist), z = (float)ldf32(link + kPos + 8) + (float)(cos(a) * dist);
+        st32(buf, u32_bits(x));
+        st32(buf + 4, u32_bits(ly + dy));
+        st32(buf + 8, u32_bits(z));
+        if (on_ground) {
+            st32(buf + 4, u32_bits(ly + 250));  // look down from above Link's height
+            guest_call(c, GC(0x02549F4C), {buf});
+            const float ground = (float)c->f[1].ps0;
+            if (ground == ly + 250 || ground < 5 || std::fabs(ground - ly) > 250) continue;  // nothing, water or a drop
+            st32(buf + 4, u32_bits(ground + 5));
+        }
+        st16(buf + 0x10, 0);
+        st16(buf + 0x12, (uint16_t)(int16_t)(atan2(-sin(a), -cos(a)) * 32768 / M_PI));  // facing Link
+        st16(buf + 0x14, 0);
+        const uint32_t id = guest_call(c, GC(0x025D5834), {(uint32_t)m.proc, m.param, buf, (uint32_t)(int8_t)ld8(link + kRoom),
+                                                           buf + 0x10, 0, (uint32_t)(int32_t)m.subtype, 0});
+        trace("extras: spawned proc %#x id %#x at %.0f %.0f %.0f (%zu out)", m.proc, id, x, ldf32(buf + 4), z, s.ids.size());
+        if (id != 0xFFFFFFFF) s.ids.push_back(id);
+        return;
+    }
+    trace("extras: no ground for proc %#x near Link", m.proc);
 }
 }  // namespace
 
@@ -180,13 +198,14 @@ void step(Cpu* c) {
         // Open, the freeze: with spawned monsters around, a J3D draw buffer list sometimes loops (grass packet ->
         // ordinary J3D packets, draw 027F16E8 -> back to the grass; next link +0x10), so the buffer's draw loop
         // (027F10CC) never ends and gx2 logs "display list overflow" (4 MB list begun at 027C0768). Not a double
-        // entry (HD asserts on that, J3DDrawBuffer.cpp:243, and it did not fire); likely the packets of a spawned
-        // monster that deleted itself at once (Seahats on land do) still linked when their memory is reused. Cutting
-        // the loop after the grass draw only moves the failure to that assert.
+        // entry (HD asserts on that, J3DDrawBuffer.cpp:243, and it did not fire). It starts when a spawned monster
+        // first comes into view (the camera turned to a ReDead on the ground, 2 runs of 3; monsters kept behind Link
+        // never froze), so it is in how a spawned monster's packets join the frame's buffers. Cutting the loop after
+        // the grass draw only moves the failure to that assert.
         static Monster kind = kRedead;
         if (g_night.ids.empty() && g_night.next == 0) kind = rand() % 3 ? kRedead : kStalfos;
         if (now >= g_night.next && g_night.ids.size() < kMax[level]) {
-            spawn(c, g_night, kind, link, 450 + rand() % 350, true, 30);
+            spawn(c, g_night, kind, link, 450 + rand() % 350, true, 30, true);
             g_night.next = now + kEvery[level] * (0.6 + rand() / (double)RAND_MAX * 0.8);
         }
     }
@@ -197,7 +216,7 @@ void step(Cpu* c) {
         if (now >= g_sea.next && g_sea.ids.size() < kMax[level] + (night ? 2 : 0)) {
             // Kargarocs only for now: Gyorgs delete themselves at once without their GyCtrl, and Seahats trigger the grass
             // freeze below more often
-            spawn(c, g_sea, kKargaroc, link, 900 + rand() % 600, false, 300);
+            spawn(c, g_sea, kKargaroc, link, 900 + rand() % 600, false, 300, false);
             g_sea.next = now + kEvery[level] * (night ? 0.6 : 1) * (0.6 + rand() / (double)RAND_MAX * 0.8);
         }
     }
