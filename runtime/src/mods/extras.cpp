@@ -1410,10 +1410,16 @@ extern "C" void hook_02134B28(Cpu* c) {
     f_02134B28_orig(c);
     g_fx_size = 1;
 }
+// only his one-shot bursts: his trailing smoke (legs, arms) and the light arrows' glow at 12x fill the screen and
+// slow the game down. r5 the effect id: the smashed and broken energy ball 81F0 / 81EE-81EF, the exploding dark ball
+// 8242-8243, a hit's flash and sparks 0x10 / 0x0D (his energy and dark balls' own emitters are scaled in step())
+static bool titanic_effect(uint32_t id) {
+    return id == 0x81F0 || id == 0x81EE || id == 0x81EF || id == 0x8242 || id == 0x8243 || id == 0x10 || id == 0x0D;
+}
 extern "C" void f_025A847C_orig(Cpu* c);
 extern "C" void hook_025A847C(Cpu* c) {
     using namespace mods::extras;
-    if (g_fx_size > 1) {
+    if (g_fx_size > 1 && titanic_effect(c->r[5] & 0xFFFF)) {
         static const uint32_t buf = mem::host_alloc(0x10);
         const uint32_t s = c->r[8];
         for (int i = 0; i < 3; i++) st32(buf + 4 * i, u32_bits(g_fx_size * (s ? (float)ldf32(s + 4 * i) : 1.f)));
