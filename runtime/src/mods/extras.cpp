@@ -71,7 +71,7 @@ void spawn(Cpu* c, Spawner& s, Monster m, uint32_t link, float dist, bool behind
     st16(buf + 0x14, 0);
     const uint32_t id = guest_call(c, GC(0x025D5834), {(uint32_t)m.proc, m.param, buf, (uint32_t)(int8_t)ld8(link + kRoom), buf + 0x10, 0,
                                                        (uint32_t)(int32_t)m.subtype, 0});
-    trace("extras: spawned proc %#x id %#x at %.0f %.0f %.0f", m.proc, id, x, ldf32(buf + 4), z);
+    trace("extras: spawned proc %#x id %#x at %.0f %.0f %.0f (%zu out)", m.proc, id, x, ldf32(buf + 4), z, s.ids.size());
     if (id != 0xFFFFFFFF) s.ids.push_back(id);
 }
 }  // namespace
@@ -176,9 +176,12 @@ void step(Cpu* c) {
     if (on<kNight>() && night && !water && !fresh) {
         const int level = g_choice[kNight].load();
         g_night.prune(c);
-        // one kind a visit: ReDeads mixed with Stalfos overflowed the game's 4 MB per-frame command list (gx2 "display
-        // list overflow", begun at 027C0768; the picture stops). Open: it also happened once with ReDeads alone (1 run
-        // in 3), probably a spawn in the water. A Poe spawned this way halts the game (sead assert).
+        // one kind a visit (a mix froze more often), never Poes (a Poe spawned this way halts the game: sead assert).
+        // Open, the freeze: with spawned monsters around, the grass packet (dGrass_packet_c) is sometimes entered into
+        // the frame's J3D draw buffer twice, so its next link (+0x10) leads back to it; the buffer's draw loop (027F10CC)
+        // then draws grass for ever, the frame never ends and gx2 logs "display list overflow" (4 MB list begun at
+        // 027C0768). Cutting that link after the grass draw ends the loop but the game then halts on its own
+        // J3DDrawBuffer.cpp:278 "entryPtr == 0": the fix is to keep the second entry from happening (update twice?).
         static Monster kind = kRedead;
         if (g_night.ids.empty() && g_night.next == 0) kind = rand() % 3 ? kRedead : kStalfos;
         if (now >= g_night.next && g_night.ids.size() < kMax[level]) {
@@ -191,8 +194,8 @@ void step(Cpu* c) {
         const int level = g_choice[kSea].load();
         g_sea.prune(c);
         if (now >= g_sea.next && g_sea.ids.size() < kMax[level] + (night ? 2 : 0)) {
-            // Kargarocs only for now: a Gyorg or Seahat spawned this way (parameter 0 or 0xFFFFFFFF) makes a frame overflow
-            // the game's 4 MB command list (gx2 "display list overflow", begun at 027C0768) and the picture stops
+            // Kargarocs only for now: Gyorgs delete themselves at once without their GyCtrl, and Seahats trigger the grass
+            // freeze below more often
             spawn(c, g_sea, kKargaroc, link, 900 + rand() % 600, false, 300);
             g_sea.next = now + kEvery[level] * (night ? 0.6 : 1) * (0.6 + rand() / (double)RAND_MAX * 0.8);
         }
