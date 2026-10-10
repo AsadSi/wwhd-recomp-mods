@@ -9,8 +9,10 @@
 //   (200, 1000, 5000); status B's time of day, a float in degrees (15 an hour from midnight) at +0x24.
 // - fopAc_ac_c: current.pos +0x314, room +0x326, shape_angle.y +0x32A.
 // Not ported (tried, no effect in WWHD): TP's moon jump (current.pos.y +0x318, even +300 at once, and speed.y +0x340
-// are both put back the next step while Link stands; also after switching him to falling with procFall_init 023F6564
-// and a 60 lift, he is back at the ground height the next step: check true60.cpp's take-back of Link's preview next)
+// are both put back the next step while Link stands. Lifting every copy of his position (+0x2EC home, +0x300 old,
+// +0x314, +0x84C, +0x68B0, +0x7350) by 300 and switching him to falling (procFall_init 023F6564) or to the game's own
+// auto jump (procAutoJump_init 023F7958) with speed.y held at 20: his own execute still puts him on the ground below
+// the next step (proc 0x25, landing). The landing check inside his execute would have to be hooked.)
 // and Link's size (mpCLModel +0x448: +0x14 and its 1,1,1 at +0xBC).
 // - fopAcM_create (025D5834): procName, parameter, pos, room, angle, scale, subtype, createFunc -> process id;
 //   fpcEx_SearchByID (025DE50C): id -> the process while it exists. Process names and subtypes are the
