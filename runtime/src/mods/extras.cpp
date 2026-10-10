@@ -187,6 +187,10 @@ std::atomic<uint32_t> g_pad_hold{0}, g_pad_seen{0};
 std::atomic<float> g_pad_lx{0}, g_pad_ly{0};
 std::atomic<bool> g_take_pad{false};
 std::atomic<bool> g_at_helm{false};  // the pad is the helm's: ZL is left to the game (its camera is forced instead)
+// a manned deck cannon, for the camera (camera_draw): where it stands, which way it points (s16 yaw, elevation)
+std::atomic<bool> g_cannon_cam{false};
+std::atomic<float> g_cannon_x{0}, g_cannon_y{0}, g_cannon_z{0};
+std::atomic<int> g_cannon_yaw{0}, g_cannon_up{0};
 // the button the Bomb Bag is on (play +0x5BBB/C/D: the X, Y and R items; 0x31 the Bomb Bag) while Link stands by a deck
 // cannon, which then mans it instead of taking out a bomb, as on the boat
 std::atomic<uint32_t> g_cannon_btn{0};
@@ -558,7 +562,7 @@ void horror_audio(Cpu* c, uint32_t link, double now, bool event, bool enabled) {
 // draws from current.pos and shape_angle each execute: y the way it points, x its barrel from straight up, 0x4000
 // level), its speak prompt (attention flags +0x39C) cleared, put on the deck where the ground check finds it each step.
 // The boat's controls: standing within 220 of one (its cylinder keeps him 110 off), the Bomb Bag's button (or A) mans
-// it; the stick then turns and raises it (Link faces where it points, the camera behind him), ZL locks it on the nearest
+// it; the stick then turns and raises it (Link faces where it points, the camera behind it along its aim), ZL locks it on the nearest
 // of the monsters out (and off again), the Bomb Bag's button (or A) fires and B leaves; the game gets none of these
 // (filter_pad). A shot is the boat's own cannonball (daShip_c::procCannon): a Bomb (proc 0x126) made in state 4
 // (0x80020004) by fopAcM_fastCreate (025D5928), no gravity for its first 8 steps (020CB89C), then speedF +0x370
@@ -579,11 +583,11 @@ void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, bool deck, 
     static V3 stand;  // where he stood when he manned it: knocked off it (a hit, a fall), he lets go
     if (g_manned >= 0 && (!deck || !g_take_pad || ld8(kPlay + 0x5292) || (pressed & input::kB) ||
                           std::hypot(ldf32(link + kPos) - stand.x, ldf32(link + kPos + 8) - stand.z) > 80)) {
-        g_manned = -1, g_take_pad = false, g_cannon_btn = 0;
+        g_manned = -1, g_take_pad = false, g_cannon_btn = 0, g_cannon_cam = false;
         trace("extras: Link leaves the deck cannon");
         return;
     }
-    if (!hull) { g_manned = -1, g_take_pad = false, g_cannon_btn = 0; return; }
+    if (!hull) { g_manned = -1, g_take_pad = false, g_cannon_btn = 0, g_cannon_cam = false; return; }
     const int16_t hull_yaw = (int16_t)ld16(hull + kAngleY);
     static float floor_y[2];
     for (int i = 0; i < 2; i++) {
@@ -646,6 +650,8 @@ void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, bool deck, 
         up = (int16_t)std::clamp(up + (int)(g_pad_ly.load() * 0x100), 0, 0x2AAA);
     }
     st16(link + 0x322, (uint16_t)yaw), st16(link + kAngleY, (uint16_t)yaw);
+    g_cannon_x = (float)ldf32(link + kPos), g_cannon_y = (float)ldf32(link + kPos + 4) + 100, g_cannon_z = (float)ldf32(link + kPos + 8);
+    g_cannon_yaw = yaw, g_cannon_up = up, g_cannon_cam = true;
     if (!(pressed & (g_cannon_btn.load() | input::kA)) || now < fired + 1) return;
     fired = now;
     if (!ld8(sv + 0x6A)) { guest_call(c, GC(0x025E1988), {0x0883}); return; }
@@ -684,14 +690,14 @@ void step(Cpu* c) {
     last_link = link;
     std::string stage((const char*)mem::ptr(kStage), strnlen((const char*)mem::ptr(kStage), 8));
     if (!in_mem2(link) || stage.empty() || stage == "sea_T" || stage == "Name" || stage == "ENDumi") {  // title, file select
-        g_manned = -1, g_take_pad = false, g_cannon_btn = 0;
+        g_manned = -1, g_take_pad = false, g_cannon_btn = 0, g_cannon_cam = false;
         return;
     }
     const uint32_t sv = save();
     static double settle = 0;  // no spawning while a stage is still being entered (the spawns would land in the old one)
     if (fresh) {
         g_night = Spawner{}, g_sea = Spawner{}, g_gyctrl = 0xFFFFFFFF, g_ghost = g_bigship = g_phantom = g_leviathan = g_molgera = Single{};
-        g_cannon[0] = g_cannon[1] = Single{}, g_manned = -1, g_take_pad = false, g_cannon_btn = 0;
+        g_cannon[0] = g_cannon[1] = Single{}, g_manned = -1, g_take_pad = false, g_cannon_btn = 0, g_cannon_cam = false;
         g_gyorg_ids.clear(), g_giant_ids.clear(), g_big_hits.clear();
         settle = game_time() + 2;
         if (g_warn >= 0) wind(c, 0), g_warn = -1;  // a sea event does not outlive its stage
@@ -1256,11 +1262,20 @@ void step(Cpu* c) {
     }
 }
 
-// camera_draw (024FFC40; the camera process: eye +0xDC, center +0xE8): at the Big ship's helm the camera stands far
+// camera_draw (024FFC40; the camera process: eye +0xDC, center +0xE8): at a manned deck cannon the camera looks out over
+// it along its aim, from 1400 behind and 600 up, as the boat's cannon camera does; at the Big ship's helm it stands far
 // back and high, so the whole ship is in view: the eye is put a fixed 3600 (WWHD_HELM_CAM_DIST) behind its look-at
 // point the way it already looks, and 40% of that above it (a fixed distance, so it is the same however often it runs)
 void camera_draw(uint32_t cam) {
-    if (!g_at_helm || !in_mem2(cam)) return;
+    if (!in_mem2(cam)) return;
+    if (g_cannon_cam) {  // a manned deck cannon: as on the boat, from behind it out along its aim, far back
+        const double t = g_cannon_yaw.load() * M_PI / 32768, e = g_cannon_up.load() * M_PI / 32768;
+        const float x = g_cannon_x, y = g_cannon_y, z = g_cannon_z, fx = (float)sin(t), fz = (float)cos(t);
+        st32(cam + 0xDC, u32_bits(x - fx * 1400)), st32(cam + 0xE0, u32_bits(y + 600)), st32(cam + 0xE4, u32_bits(z - fz * 1400));
+        st32(cam + 0xE8, u32_bits(x + fx * 2500)), st32(cam + 0xEC, u32_bits(y + (float)(2500 * tan(e)))), st32(cam + 0xF0, u32_bits(z + fz * 2500));
+        return;
+    }
+    if (!g_at_helm) return;
     static const float dist = [] { const char* e = getenv("WWHD_HELM_CAM_DIST"); return e ? (float)atof(e) : 3600.f; }();
     const float dx = (float)ldf32(cam + 0xDC) - (float)ldf32(cam + 0xE8), dz = (float)ldf32(cam + 0xE4) - (float)ldf32(cam + 0xF0);
     const float h = std::hypot(dx, dz);
@@ -1277,10 +1292,8 @@ void filter_pad(input::PadState& s) {
     g_pad_hold = s.buttons;
     g_pad_seen |= s.buttons;
     g_pad_lx = s.lx, g_pad_ly = s.ly;
-    // a cannon manned or the helm taken: the stick, A, the Bomb Bag's button and B are theirs; ZL is held for the game,
-    // which keeps the camera behind Link (and so behind the barrel or over the bow), and is the cannon's lock-on too
-    if (g_take_pad)
-        s.lx = s.ly = 0, s.buttons = (s.buttons & ~(g_cannon_btn.load() | input::kA | input::kB)) | (g_at_helm ? 0 : input::kZL);
+    // a cannon manned or the helm taken: the stick, A, ZL (the cannon's lock-on), the Bomb Bag's button and B are theirs
+    if (g_take_pad) s.lx = s.ly = 0, s.buttons &= ~(g_cannon_btn.load() | input::kA | input::kB | input::kZL);
     else s.buttons &= ~g_cannon_btn.load();
 }
 }  // namespace mods::extras
