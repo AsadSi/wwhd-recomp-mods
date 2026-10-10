@@ -1059,21 +1059,23 @@ void step(Cpu* c) {
             st32(GD(kMolgeraScale), u32_bits(1.3f * 2.5f)), st32(GD(kMolgeraPush), 0), st32(GD(kMolgeraBite), u32_bits(1300.f));
             // It makes itself at the world's origin (its boss room's centre) and is put far off ahead of Link, then
             // hunts him as a Gyorg does, in its own flight through the sand, here the sea (state 10 "fly"), its head
-            // 80-300 above the sea so it shows: it circles him 3000 out for 6-10 s (nearer, its body sweeps the Big ship's deck) (substate 1, the FLY animation,
+            // 80-300 above the sea so it shows: it circles him 3000 out for 6-10 s (nearer, its body sweeps the Big ship's deck),
+            // now and then (one time in three) swinging wide, 6000 out (substate 1, the FLY animation,
             // steering at its target +0x1B38 that we set ahead of it on the circle; its timers +0x1B50/52 held so it
             // stays; held to 34 a step in hook_020FF80C, a little slower than a boat under full sail, 40), then charges
             // (substate 2 by its own timer: jaws open, steering at Link's eyes every step), lunges within 1200 and bites
             // (state 5: hook_020FF80C turns a bite that catches him into a miss, which sends it back to waiting, state
             // 1), and flies on to circle again; a charge that passes him (substate 3, its dive) goes back to circling.
-            // Left 4000 behind for 8 s, it gives up and flies off, and the event ends once he is 5000 away.
+            // Left 1000 further out than its circle for 8 s, it gives up and flies off, and the event ends once he is 5000 away.
             static uint32_t placed = 0;
             static double waited = 0, phase_at = 0, died = -1, blast = 0;
-            static bool closed = false, charging = false;  // closed: it has once come within 4000 of him
-            static int dir = 1;  // which way round it circles
+            static bool closed = false, charging = false;  // closed: it has once come within its circle of him
+            static int dir = 1;              // which way round it circles
+            static double ring = 3000;       // and how far out
             const double yaw = (int16_t)ld16(link + kAngleY) * M_PI / 32768;
             const double d = std::hypot(ldf32(a + kPos) - ldf32(link + kPos), ldf32(a + kPos + 8) - ldf32(link + kPos + 8));
             auto hunt = [a] { g_molgera_pitch = ld16(a + 0x320), st16(a + 0x1B32, 10), st16(a + 0x1B34, 0), st16(a + 0x1B52, 0); };
-            auto circle = [&] { charging = false, phase_at = now + 6 + rand() % 5, dir = rand() % 2 ? 1 : -1; };
+            auto circle = [&] { charging = false, phase_at = now + 6 + rand() % 5, dir = rand() % 2 ? 1 : -1, ring = chance(1 / 3.0) ? 6000 : 3000; };
             auto target = [a](double x, double y, double z) {
                 st32(a + 0x1B38, u32_bits((float)x)), st32(a + 0x1B3C, u32_bits((float)y)), st32(a + 0x1B40, u32_bits((float)z));
             };
@@ -1114,14 +1116,14 @@ void step(Cpu* c) {
                         target(ldf32(a + kPos) + sin(heading) * 5000, 150, ldf32(a + kPos + 8) + cos(heading) * 5000);
                     } else {  // on the circle about him, ahead of where it is
                         const double b = atan2(ldf32(a + kPos) - ldf32(link + kPos), ldf32(a + kPos + 8) - ldf32(link + kPos + 8)) + dir * 1.0;
-                        target(ldf32(link + kPos) + sin(b) * 3000, 150, ldf32(link + kPos + 8) + cos(b) * 3000);
+                        target(ldf32(link + kPos) + sin(b) * ring, 150, ldf32(link + kPos + 8) + cos(b) * ring);
                         if (now >= phase_at) charging = true, st16(a + 0x1B52, 0), trace("extras: Molgera charges");
                     }
                 }
                 if (sub == 3) hunt(), circle();  // its charge passed him: round again
-                if (d < 4000) closed = true;
-                static double behind_since = 0;  // left behind only after 8 s more than 4000 off: it keeps on after him
-                if (d <= 4000 || !closed || g_molgera_gave_up) behind_since = now;
+                if (d < ring + 1000) closed = true;
+                static double behind_since = 0;  // left behind only after 8 s further off: it keeps on after him
+                if (d <= ring + 1000 || !closed || g_molgera_gave_up) behind_since = now;
                 if (now - behind_since > 8) {
                     g_molgera_gave_up = true, charging = false;
                     trace("extras: Molgera gives up the hunt");
