@@ -915,11 +915,13 @@ void step(Cpu* c) {
         static uint32_t counted = 0;  // the Leviathan its health was set for
         if (g_leviathan_actor && counted != g_leviathan.id)
             counted = g_leviathan.id, g_leviathan_pool = kLeviathanHealth, g_leviathan_slain = false, st8(g_leviathan_actor + 0x3A1, 100);
-        if (g_leviathan_slain) {  // its own death (a burst, then gone) runs; the event ends with it
-            g_leviathan_slain = false, g_leviathan.next = 1e18;
-            loot(c, 200);
-            g_until[kLeviathan] = now + 4;
+        if (g_leviathan_slain) {  // the game's death burst and cry have played: it goes at once (sinking away it could
+            g_leviathan_slain = false;  // still be hit, each hit its death again), and the event ends with it
             trace("extras: the Leviathan is slain");
+            loot(c, 200);
+            finish(c, kLeviathan, now, "the Leviathan is slain");
+            g_leviathan.next = now + 600;  // not again at once (Always)
+            g_leviathan_actor = 0;
         }
         if (const uint32_t gy = g_leviathan_actor) {
             constexpr float kLeviathanSize = 8;
