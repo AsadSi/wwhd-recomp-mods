@@ -149,6 +149,42 @@ uint32_t spawn(Cpu* c, Spawner& s, Monster m, uint32_t link, float dist, int sid
 // (site hooks below, by process id, base_process_class +4).
 std::vector<uint32_t> g_gyorg_ids;  // the controller and Gyorgs made here
 uint32_t g_gyctrl = 0xFFFFFFFF;
+
+// Phantom Ganon's effects (energy and dark balls, dark shots, smoke, light-arrow hits) live in Ganon's Tower's scene
+// particle bank, Pscene080 (all 22 he uses). The sea's rooms load their own scene bank into JPAEmitterManager slot 1
+// (dPa_control_c::createRoomScene 025A7C30), which lacks them, so Pscene080 goes into slot 2 (the manager has 8, the game
+// uses 0 and 1) the way createRoomScene makes a bank: a solid heap from the game heap, a JPAResourceManager on it (02827000)
+// over the bank, an embedded file of Particle.bfres (getArchiveFile 026124B0; its embedded-file dictionary at +0x4C,
+// looked up by 027DFA24). Scene-bank effects slot 1 lacks are made from slot 2 (createSimpleEmitterID hook,
+// true60_link.cpp); dPa_control_c::removeScene (hook below) frees it with the stage.
+uint32_t g_pscene_heap = 0;
+uint32_t emitter_manager() { return ld32(GD(0x1047B2D4)); }  // its resource banks at +0x30
+void load_phantom_particles(Cpu* c) {
+    const uint32_t mgr = emitter_manager(), control = ld32(kPlay + 0x5AB0);  // dPa_control_c
+    if (g_pscene_heap || !in_mem2(mgr) || !in_mem2(control) || ld32(mgr + 0x38)) return;
+    // the archive's and the file's names as the game passes them (const string objects: the text, then the class's
+    // vtable, 100534B4), and the bank's name
+    static const uint32_t buf = [] {
+        const uint32_t b = mem::host_alloc(0x40);
+        memcpy(mem::ptr(b), "Particle\0\0\0\0\0\0\0\0Particle.bfres\0\0Pscene080.jpc", 0x2E);
+        st32(b + 0x30, b), st32(b + 0x34, GD(0x100534B4));
+        st32(b + 0x38, b + 0x10), st32(b + 0x3C, GD(0x100534B4));
+        return b;
+    }();
+    const uint32_t bfres = guest_call(c, GC(0x026124B0), {ld32(GD(0x101F4F7C)), buf + 0x30, buf + 0x38, 0});
+    if (!bfres || !ld32(bfres + 0x4C)) return;
+    const uint32_t file = guest_call(c, GC(0x027DFA24), {bfres + 0x4C + ld32(bfres + 0x4C), buf + 0x20});
+    if (!file || !ld32(file)) return;
+    const uint32_t heap = guest_call(c, GC(0x025E3528), {0, 0});  // mDoExt_createSolidHeapFromGame: all that is free
+    if (!heap) return;
+    const uint32_t res = guest_call(c, GC(0x0273B050), {0xC, heap, 4});  // operator new on that heap
+    if (res) guest_call(c, GC(0x02827000), {res, file + ld32(file), heap, ld32(control + 0x415C)});
+    guest_call(c, GC(0x025E3678), {heap});  // mDoExt_adjustSolidHeap: back down to what the bank took
+    if (!res) { guest_call(c, GC(0x025E3868), {heap}); return; }
+    st32(mgr + 0x38, res);
+    g_pscene_heap = heap;
+    trace("extras: Pscene080 (Phantom Ganon's effects) loaded into particle bank 2");
+}
 }  // namespace
 
 // ---- switches ----
@@ -296,11 +332,8 @@ void step(Cpu* c) {
         const int level = g_choice[kSea].load();
         g_sea.prune(c);
         if (now >= g_sea.next && g_sea.ids.size() < kMax[level] + (night ? 2 : 0)) {
-            // not the Ghost Ship (Ayush, proc 0xB2) or cannon boats (Oship, 0xB3) yet: the Ghost Ship shows only at night
-            // when its parameter's moon phase is tonight's (dKy_moon_type_chk) and fades as Link comes close; a cannon
-            // boat (params 0xFFFFFFFF, spawn angle.x 0x00FF for "no switch B") appears but sits still and is gone in
-            // seconds without its path. Both hunt a sailing Link, and this early test file has no boat to sail. Phantom
-            // Ganon (Fganon, 0xF1) spawned out here crashes in his own update (a null read: he needs his fight).
+            // the Gyorgs' controller first, then by chance a cannon boat (a sailing Link only), Gyorgs, or Seahats,
+            // Kargarocs and at night Poes; the Ghost Ship is made below, Phantom Ganon by his own mod
             const bool ctrl = g_gyctrl != 0xFFFFFFFF && guest_call(c, GC(0x025DE50C), {g_gyctrl});
             if (!ctrl) {  // its controller first; Gyorgs once it exists
                 Spawner none;
@@ -352,6 +385,7 @@ void step(Cpu* c) {
     // Phantom Ganon: one near a sailing Link, a giant: his own execute eases the actor's scale (+0x330) to 1, so it is
     // set after it every step; his colliders' centres follow the model and their sizes are scaled by the hooks below
     if (on<kPhantom>() && sea && boat && settled) {
+        load_phantom_particles(c);
         if (g_phantom.wanted(c, now)) {
             Spawner none;
             g_phantom.id = spawn(c, none, kFganon, link, 1500 + rand() % 500, 1, 0, false);
@@ -428,10 +462,26 @@ extern "C" void f_02018428_orig(Cpu* c);
 extern "C" void hook_02018428(Cpu* c) { big_hit(c); f_02018428_orig(c); }
 
 // JPABaseEmitter::setGlobalRTMatrix (028249B0; r4, r5 inside the emitter): Phantom Ganon's energy ball calls it on the
-// emitters of its hit effect without checking them, and on the sea, whose particle banks lack those effects,
-// dComIfGp_particle_set returns none (daFgmahou_Execute 0213E098): nothing to set then
+// emitters of its hit effect without checking them (daFgmahou_Execute 0213E098). With Pscene080 in bank 2 they are
+// made; this guard is for when they are not (the bank failed to load or went with the stage): nothing to set then
 extern "C" void f_028249B0_orig(Cpu* c);
 extern "C" void hook_028249B0(Cpu* c) {
     if (c->r[4] < 0x1000) return;
     f_028249B0_orig(c);
+}
+
+// dPa_control_c::removeScene (025A809C), as the play scene ends: Phantom Ganon's bank goes with the stage's own
+// (JPAEmitterManager::clearResourceManager 028221EC deletes its emitters and empties the slot)
+extern "C" void f_025A809C_orig(Cpu* c);
+extern "C" void hook_025A809C(Cpu* c) {
+    using namespace mods::extras;
+    if (g_pscene_heap) {
+        const uint32_t control = c->r[3];
+        guest_call(c, GC(0x028221EC), {emitter_manager(), 2});
+        guest_call(c, GC(0x025E3868), {g_pscene_heap});
+        g_pscene_heap = 0;
+        mods::trace("extras: particle bank 2 freed with the stage");
+        c->r[3] = control;
+    }
+    f_025A809C_orig(c);
 }
