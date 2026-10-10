@@ -737,9 +737,11 @@ void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, bool deck, 
     guest_call(c, GC(0x025E1988), {0x2852});
     const uint32_t target = locked == 0xFFFFFFFF ? 0 : guest_call(c, GC(0x025DE50C), {locked});
     trace("extras: deck cannon fires (yaw %d, up %d, %u bombs left)%s", yaw, up, ld8(sv + 0x6A), target ? "" : ", aimed by hand");
-    if (target)
-        trace("extras: at proc %#x %.0f off, %.0f up", ld16(target + 8),
-              std::hypot(ldf32(target + 0x37C) - ldf32(link + kPos), ldf32(target + 0x37C + 8) - ldf32(link + kPos + 8)), ldf32(target + 0x37C + 4) - ldf32(link + kPos + 4));
+    if (target) {
+        V3 at{ldf32(target + 0x37C), ldf32(target + 0x37C + 4), ldf32(target + 0x37C + 8)};
+        if (const V3 p = pos_of(target); std::hypot(at.x - p.x, at.z - p.z) > 3000) at = p;  // as aimed (Molgera's eyes)
+        trace("extras: at proc %#x %.0f off, %.0f up", ld16(target + 8), std::hypot(at.x - ldf32(link + kPos), at.z - ldf32(link + kPos + 8)), at.y - ldf32(link + kPos + 4));
+    }
 }
 }  // namespace
 
