@@ -246,7 +246,10 @@ void step(Cpu* c) {
         const int level = g_choice[kSea].load();
         g_sea.prune(c);
         if (now >= g_sea.next && g_sea.ids.size() < kMax[level] + (night ? 2 : 0)) {
-            // not the Ghost Ship (Ayush) yet: spawned like this it deletes itself at once, at least on this early file
+            // not the Ghost Ship (Ayush, proc 0xB2) or cannon boats (Oship, 0xB3) yet: the Ghost Ship shows only at night
+            // when its parameter's moon phase is tonight's (dKy_moon_type_chk) and fades as Link comes close; a cannon
+            // boat (params 0xFFFFFFFF, spawn angle.x 0x00FF for "no switch B") appears but sits still and is gone in
+            // seconds without its path. Both hunt a sailing Link, and this early test file has no boat to sail.
             const bool ctrl = g_gyctrl != 0xFFFFFFFF && guest_call(c, GC(0x025DE50C), {g_gyctrl});
             if (!ctrl) {  // its controller first; Gyorgs once it exists
                 Spawner none;
