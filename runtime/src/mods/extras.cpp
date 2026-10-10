@@ -183,6 +183,7 @@ bool on_deck(uint32_t hull, uint32_t link) {  // anywhere on board: the main dec
 std::atomic<uint32_t> g_pad_hold{0}, g_pad_seen{0};
 std::atomic<float> g_pad_lx{0}, g_pad_ly{0};
 std::atomic<bool> g_take_pad{false};
+std::atomic<bool> g_at_helm{false};  // the pad is the helm's: ZL is left to the game (its camera is forced instead)
 // the button the Bomb Bag is on (play +0x5BBB/C/D: the X, Y and R items; 0x31 the Bomb Bag) while Link stands by a deck
 // cannon, which then mans it instead of taking out a bomb, as on the boat
 std::atomic<uint32_t> g_cannon_btn{0};
@@ -1162,30 +1163,40 @@ void step(Cpu* c) {
                 }
             }
             // The helm, on the stern castle: A there takes it (the stick, A and B are then the helm's, filter_pad). The
-            // stick up raises the sail, down lowers it (1.5 s from furled to full); full sail makes the boat's 40 a
+            // stick up raises the sail, down lowers it (0.7 s from furled to full); full sail makes the boat's 40 a
             // step, and it turns quicker the faster it goes (left and right). The hull is moved here, Link standing
             // on it carried by the game's moving-BG rule, the King of Red Lions kept tied alongside (his place on its
-            // flank, his heading), and the camera kept behind Link facing the bow. B lets go: the ship slows to a stop
-            // and lies at anchor. Land under its outline stops it dead (it runs aground, the sail down).
+            // flank, his heading), and the camera is the boat's own (dCamera_c::SetTypeForce 02514EE4 by name, every
+            // step, on dCam_getBody 024F8044; WWHD_HELM_CAM=<camera type> tries another). B lets go: the ship slows
+            // to a stop and lies at anchor. Land under its outline stops it dead (it runs aground, the sail down).
             static bool helm = false;
             static double speed = 0, sail = 0;
             static int helm_land = 0;
             static uint32_t sailed = 0;  // the ship its speed is for
-            if (sailed != g_bigship.id) sailed = g_bigship.id, helm = false, speed = sail = 0;
+            if (sailed != g_bigship.id) sailed = g_bigship.id, helm = false, g_at_helm = false, speed = sail = 0;
             constexpr V3 kHelm{0, 0, -800};
             const V3 me = to_local(hull, link);
             if (!helm && deck && g_manned < 0 && (proc == 0x4 || proc == 0x6) && (pressed & input::kA) && std::hypot(me.x - kHelm.x, me.z - kHelm.z) < 150) {
-                helm = true, g_take_pad = true, anchored = true, joining = 0;
+                helm = true, g_take_pad = true, g_at_helm = true, anchored = true, joining = 0;
                 trace("extras: Link takes the Big ship's helm");
             } else if (helm && (!deck || !g_take_pad || (pressed & input::kB) || ld8(kPlay + 0x5292))) {
-                helm = false, g_take_pad = false, sail = 0;
+                helm = false, g_take_pad = false, g_at_helm = false, sail = 0;
                 trace("extras: Link lets go of the helm");
             }
             if (helm || speed > 0.2) {
-                if (helm) sail = std::clamp(sail + g_pad_ly.load() / 45.0, 0.0, 1.0);
-                speed += (sail * 40 - speed) * (helm ? 0.03 : 0.05);
+                if (helm) sail = std::clamp(sail + g_pad_ly.load() / 20.0, 0.0, 1.0);
+                speed += (sail * 40 - speed) * 0.06;
                 int16_t a = (int16_t)ld16(hull + kAngleY);
-                if (helm) a = (int16_t)(a - g_pad_lx.load() * 0xC0 * std::min(1.0, 0.25 + speed / 40));
+                if (helm) a = (int16_t)(a - g_pad_lx.load() * 0x100 * std::min(1.0, 0.5 + speed / 40));
+                if (helm) {
+                    static const uint32_t cam_name = [] {
+                        const uint32_t b = mem::host_alloc(0x20);
+                        const char* e = getenv("WWHD_HELM_CAM");
+                        snprintf((char*)mem::ptr(b), 0x20, "%s", e ? e : "Boat");
+                        return b;
+                    }();
+                    if (const uint32_t cam = guest_call(c, GC(0x024F8044)); in_mem2(cam)) guest_call(c, GC(0x02514EE4), {cam, cam_name, 0});
+                }
                 V3 p = pos_of(hull);
                 p.x += sin(a * M_PI / 32768) * speed, p.z += cos(a * M_PI / 32768) * speed;
                 if (++helm_land % 10 == 0 && land(p, a)) {
@@ -1235,7 +1246,8 @@ void filter_pad(input::PadState& s) {
     g_pad_lx = s.lx, g_pad_ly = s.ly;
     // a cannon manned or the helm taken: the stick, A, the Bomb Bag's button and B are theirs; ZL is held for the game,
     // which keeps the camera behind Link (and so behind the barrel or over the bow), and is the cannon's lock-on too
-    if (g_take_pad) s.lx = s.ly = 0, s.buttons = (s.buttons & ~(g_cannon_btn.load() | input::kA | input::kB)) | input::kZL;
+    if (g_take_pad)
+        s.lx = s.ly = 0, s.buttons = (s.buttons & ~(g_cannon_btn.load() | input::kA | input::kB)) | (g_at_helm ? 0 : input::kZL);
     else s.buttons &= ~g_cannon_btn.load();
 }
 }  // namespace mods::extras
