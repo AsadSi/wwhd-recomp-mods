@@ -948,9 +948,15 @@ void step(Cpu* c) {
             static double waiting = 0;
             if (ld16(pg + 0x5BA) != 6 || ld16(pg + 0x5BC) != 3) waiting = now;
             else if (now - waiting > 8) st8(pg + 0x63C, 35), waiting = now;
-            // he flies and fights around his home point (fopAc_ac_c::home.pos, +0x2EC): Link, wherever he goes
-            st32(pg + 0x2EC, ld32(link + kPos));
-            st32(pg + 0x2F4, ld32(link + kPos + 8));
+            // he flies and fights around his home point (fopAc_ac_c::home.pos, +0x2EC): Link, wherever he goes; a titanic
+            // one keeps his distance, as big as he is: 3000 out from Link the way he already is from him
+            double hx = ldf32(link + kPos), hz = ldf32(link + kPos + 8);
+            if (size > 1) {
+                const double dx = ldf32(pg + kPos) - hx, dz = ldf32(pg + kPos + 8) - hz, d = std::hypot(dx, dz);
+                if (d > 1) hx += dx / d * 3000, hz += dz / d * 3000;
+            }
+            st32(pg + 0x2EC, u32_bits((float)hx));
+            st32(pg + 0x2F4, u32_bits((float)hz));
         }
     }
     // Leviathan: one Gyorg (made as the others are, a child of the Haunted sea's GyCtrl, which is made here too if
