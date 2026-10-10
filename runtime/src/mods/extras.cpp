@@ -1127,6 +1127,7 @@ void step(Cpu* c) {
                 guest_call(c, GC(0x0251621C), {sph});
             }
             static double last_hit = -1;  // one hit per 0.3 s: a bomb's burst, a sword's swing last a few steps
+            if (damage && now - last_hit >= 0.3) trace("extras: Molgera is hit for %d (%d of %d left)", damage, g_molgera_pool - damage, kMolgeraHealth);
             if (damage && now - last_hit >= 0.3 && (last_hit = now, g_molgera_pool -= damage) <= 0) {
                 trace("extras: Molgera is slain");
                 loot(c, 300);
