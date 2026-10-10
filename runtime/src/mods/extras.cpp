@@ -1,5 +1,5 @@
 // More built-in mods (Gameplay menu, all off by default), several ported from the Twilight Princess HD
-// recomp: damage and rupee multipliers, time of day, a turbo key, and two that spawn
+// recomp: damage and rupee multipliers, time of day, a turbo key; stormy weather and thick fog; and two that spawn
 // the game's own monsters around Link: Night of the dead (ReDeads, Stalfos and Poes on land at night) and
 // Haunted sea (Seahats and Kargarocs around Link on the open sea).
 //
@@ -32,7 +32,7 @@
 
 namespace mods::extras {
 namespace {
-enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kCount };  // the catalogue's order
+enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kCount };  // the catalogue's order
 std::atomic<bool> g_on[kCount];
 std::atomic<int> g_choice[kCount];
 
@@ -105,8 +105,8 @@ void spawn(Cpu* c, Spawner& s, Monster m, uint32_t link, float dist, bool behind
 // ---- switches ----
 template <int I> bool on() { return g_on[I].load(std::memory_order_relaxed); }
 template <int I> void set(bool v) { g_on[I] = v; }
-bool (*const kOn[kCount])() = {on<0>, on<1>, on<2>, on<3>, on<4>, on<5>, on<6>};
-void (*const kSet[kCount])(bool) = {set<0>, set<1>, set<2>, set<3>, set<4>, set<5>, set<6>};
+bool (*const kOn[kCount])() = {on<0>, on<1>, on<2>, on<3>, on<4>, on<5>, on<6>, on<7>};
+void (*const kSet[kCount])(bool) = {set<0>, set<1>, set<2>, set<3>, set<4>, set<5>, set<6>, set<7>};
 
 const std::vector<Mod>& catalogue() {
     static const std::vector<Mod> mods = {
@@ -125,6 +125,7 @@ const std::vector<Mod>& catalogue() {
          "Out on the open sea (on the boat or swimming) Seahats and Kargarocs come for Link, day and night (more at night).",
          {"Sometimes", "Often", "Relentless"}},
         {"storm", "Stormy weather", "Spooky", "Heavy rain (the game's own) at night, or all the time.", {"At night", "Always"}},
+        {"fog", "Thick fog", "Spooky", "The world fades into fog a short way from Link, at night or all the time.", {"At night", "Always"}},
     };
     return mods;
 }
@@ -204,6 +205,12 @@ void step(Cpu* c) {
     if (const bool rain = on<kStorm>() && (night || g_choice[kStorm].load() == 1); rain || raining) {
         guest_call(c, GC(0x0257E7C0), {rain ? 250u : 0u});
         raining = rain;
+    }
+    // thick fog: dKy_fog_startendz_set (0255671C; start, end, ratio in f1..f3), which actors call for their own fog,
+    // every step: the world fades out from 100 to 2500 units around the camera
+    if (on<kFog>() && (night || g_choice[kFog].load() == 1)) {
+        c->f[1].ps0 = 100, c->f[2].ps0 = 2500, c->f[3].ps0 = 1;
+        guest_call(c, GC(0x0255671C));
     }
     // Night of the dead: on land at night (the sea stage's islands count)
     if (on<kNight>() && night && !water && !fresh) {
