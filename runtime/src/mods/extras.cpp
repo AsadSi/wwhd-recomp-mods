@@ -213,7 +213,8 @@ void step(Cpu* c) {
         const int level = g_choice[kSea].load();
         g_sea.prune(c);
         if (now >= g_sea.next && g_sea.ids.size() < kMax[level] + (night ? 2 : 0)) {
-            // not Gyorgs yet: spawned alone (or as their GyCtrl) they delete themselves at once, at least on this early file
+            // not Gyorgs or the Ghost Ship (Ayush) yet: spawned like this (Gyorgs also as their GyCtrl) they delete
+            // themselves at once, at least on this early file
             static const Monster kSea[] = {kSeahat, kSeahat, kKargaroc};
             const Monster m = kSea[rand() % 3];
             spawn(c, g_sea, m, link, 900 + rand() % 600, false, 300, false);
