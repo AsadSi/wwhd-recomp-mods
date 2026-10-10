@@ -834,6 +834,11 @@ void step(Cpu* c) {
                 for (const auto& [gid, gs] : g_giant_ids) if (gid == id && gs > kGiant) scale = gs;
                 g_big_hits.push_back({a, a + (ld16(a + 8) == kGyorg.proc ? 0x1000u : 0x1600u), scale});
             }
+        // Seahats keep to the anchor they were made at (+0x448/+0x450, their leash) and only attack a Link with the
+        // ship-ride status (site hooks below): theirs is wherever he is now
+        for (uint32_t id : g_sea.ids)
+            if (const uint32_t a = guest_call(c, GC(0x025DE50C), {id}); a && ld16(a + 8) == kSeahat.proc)
+                st32(a + 0x448, ld32(link + kPos)), st32(a + 0x450, ld32(link + kPos + 8));
         for (const auto& [id, scale] : g_giant_ids)
             if (const uint32_t ph = guest_call(c, GC(0x025DE50C), {id}))
                 for (uint32_t off : {0x12C4u, 0x12CCu})
@@ -1317,3 +1322,14 @@ extern "C" void hook_025A847C(Cpu* c) {
     }
     f_025A847C_orig(c);
 }
+
+// Seahats (ph_class Execute 023CC070, r30 the Seahat) swoop only while Link has the ship-ride status (play +0x5CD8
+// bit 0x10000: its three tests, just after each is loaded): the Haunted sea's come for him swimming or on the Big ship's
+// deck too. A process of ours, by id (base_process_class +4)
+static void seahat_rides(Cpu* c, int reg) {
+    const auto& ids = mods::extras::g_sea.ids;
+    if (std::find(ids.begin(), ids.end(), ld32(c->r[30] + 4)) != ids.end()) c->r[reg] |= 0x10000;
+}
+extern "C" void site_023CC7F0(Cpu* c) { seahat_rides(c, 5); }
+extern "C" void site_023CC984(Cpu* c) { seahat_rides(c, 4); }
+extern "C" void site_023CCC88(Cpu* c) { seahat_rides(c, 9); }

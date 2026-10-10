@@ -25,3 +25,6 @@
 020FF80C  # bwd_move: Molgera of the deep never swallows Link (extras.cpp)
 02134B28  # daFganon_Execute: Phantom Ganon's effects as big as he is (extras.cpp)
 025A847C  # dPa_control_c::set: the same, while his execute runs
+@023CC7F0 # ph_class Execute: the Haunted sea's Seahats attack a Link who does not ride the boat too (extras.cpp)
+@023CC984 # the same
+@023CCC88 # the same
