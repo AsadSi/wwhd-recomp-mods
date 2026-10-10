@@ -1,14 +1,15 @@
 // More built-in mods (Gameplay menu, all off by default), several ported from the Twilight Princess HD
 // recomp: damage and rupee multipliers, time of day, a turbo key, and two that spawn
 // the game's own monsters around Link: Night of the dead (ReDeads, Stalfos and Poes on land at night) and
-// Haunted sea (Gyorgs, Seahats and Kargarocs around Link on the open sea).
+// Haunted sea (Seahats and Kargarocs around Link on the open sea).
 //
 // They run once per full logic step, after the actors' execute (interp.cpp hook_025DE788), and act on what
 // changed in that step, so the game's own rules (maxima, wallet, death) still apply. Offsets (WWHD):
 // - save data dSv_player_c (cheats.cpp): max life +0, life +2 (quarter hearts), rupees +4, wallet +0x12
 //   (200, 1000, 5000); status B's time of day, a float in degrees (15 an hour from midnight) at +0x24.
 // - fopAc_ac_c: current.pos +0x314, room +0x326, shape_angle.y +0x32A.
-// Not ported (tried, no effect in WWHD): TP's moon jump (pos.y/speed.y) and Link's size (J3DModel base scale +0x14).
+// Not ported (tried, no effect in WWHD): TP's moon jump (current.pos.y +0x318, even +300 at once, and speed.y +0x340
+// are both put back the next step while Link stands) and Link's size (mpCLModel +0x448: +0x14 and its 1,1,1 at +0xBC).
 // - fopAcM_create (025D5834): procName, parameter, pos, room, angle, scale, subtype, createFunc -> process id;
 //   fpcEx_SearchByID (025DE50C): id -> the process while it exists. Process names and subtypes are the
 //   game's own object name table (101EBFDC: name[8], s16 proc, s8 subtype, u8 gba).
@@ -47,7 +48,7 @@ uint32_t u32_bits(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
 // a monster from the object name table, and the parameter it is created with (0xFFFFFFFF: the defaults)
 struct Monster { int16_t proc; int8_t subtype; uint32_t param; };
 constexpr Monster kRedead{0xE0, 0, 0xFFFFFFFF}, kStalfos{0xBE, -1, 0xFFFFFFFF}, kPoe{0xD4, -1, 0xFFFFFFFF},
-                  kGyorg{0xE4, -1, 0xFFFFFFFF}, kSeahat{0xD1, -1, 0xFFFFFFFF}, kKargaroc{0xB5, -1, 0};
+                  kSeahat{0xD1, -1, 0xFFFFFFFF}, kKargaroc{0xB5, -1, 0};
 
 // the monsters a spawner has out, by process id; forgotten when they die or the stage changes
 struct Spawner {
@@ -121,7 +122,7 @@ const std::vector<Mod>& catalogue() {
          "Pairs well with Time of day: Night. Experimental: the picture can stop after a spawn (the game keeps running).",
          {"Sometimes", "Often", "Relentless"}},
         {"haunted-sea", "Haunted sea (experimental)", "Spooky",
-         "Out on the open sea (on the boat or swimming) Gyorgs, Seahats and Kargarocs come for Link, day and night (more at night). "
+         "Out on the open sea (on the boat or swimming) Seahats and Kargarocs come for Link, day and night (more at night). "
          "Experimental: the picture can stop after a spawn (the game keeps running).",
          {"Sometimes", "Often", "Relentless"}},
     };
@@ -212,9 +213,10 @@ void step(Cpu* c) {
         const int level = g_choice[kSea].load();
         g_sea.prune(c);
         if (now >= g_sea.next && g_sea.ids.size() < kMax[level] + (night ? 2 : 0)) {
-            static const Monster kSea[] = {kGyorg, kGyorg, kSeahat, kKargaroc};
-            const Monster m = kSea[rand() % 4];
-            spawn(c, g_sea, m, link, 900 + rand() % 600, false, m.proc == kGyorg.proc ? -40 : 300, false);
+            // not Gyorgs yet: spawned alone (or as their GyCtrl) they delete themselves at once, at least on this early file
+            static const Monster kSea[] = {kSeahat, kSeahat, kKargaroc};
+            const Monster m = kSea[rand() % 3];
+            spawn(c, g_sea, m, link, 900 + rand() % 600, false, 300, false);
             g_sea.next = now + kEvery[level] * (night ? 0.6 : 1) * (0.6 + rand() / (double)RAND_MAX * 0.8);
         }
     }
