@@ -2,14 +2,16 @@
 #include "packages.h"
 #include "mods.h"
 #include "climb.h"
+#include "extras.h"
 #include "../overlay/hostui.h"
 #include <cstdlib>
 #include <cmath>
 #include <string>
+#include <vector>
 
 namespace mods::manager {
 namespace {
-const Entry catalogue[] = {
+const Entry builtin[] = {
     {"direct-camera", "Direct right-stick camera", "Camera",
      "Turn the camera immediately with the right stick, without the original easing.",
      "WWHD_MOD_DIRECT_CAMERA", direct_camera, set_direct_camera},
@@ -32,6 +34,17 @@ const Entry catalogue[] = {
      "Speed up fades and scene transitions while keeping ordinary gameplay at normal speed.",
      "WWHD_MOD_FAST_SCENES", fast_scenes, set_fast_scenes},
 };
+// the built-in list plus extras.cpp's mods (WWHD_MOD_<ID>=1 / WWHD_MOD_<ID>_CHOICE=n set them at startup)
+const std::vector<Entry> catalogue = [] {
+    std::vector<Entry> v(std::begin(builtin), std::end(builtin));
+    for (const auto& m : extras::catalogue()) {
+        v.push_back({m.id.c_str(), m.name.c_str(), m.category.c_str(), m.description.c_str(), m.env.c_str(),
+                     extras::enabled_fn(m.id), extras::apply_fn(m.id)});
+        if (const char* e = std::getenv(m.env.c_str())) v.back().apply(std::atoi(e) != 0);
+        if (const char* e = std::getenv((m.env + "_CHOICE").c_str())) extras::set_choice(m.id, std::atoi(e));
+    }
+    return v;
+}();
 std::string key(const Entry& entry) { return std::string("mod.")+entry.id+".enabled"; }
 bool player_preferences() { return !std::getenv("WWHD_NO_HOST_INPUT"); }
 }
@@ -68,6 +81,11 @@ void load_saved() {
         if (end != button.c_str() && *end == '\0' && value <= UINT32_MAX) set_move_speed_button(uint32_t(value));
     }
     number("mod.mouse-camera.sensitivity", "WWHD_MOD_MOUSE_SENS", .08f, .3f, set_mouse_sensitivity);
+    for (const auto& m : extras::catalogue()) {
+        std::string value;
+        if (!m.choices.empty() && !std::getenv((m.env + "_CHOICE").c_str()) && hostui::get(("mod." + m.id + ".choice").c_str(), value))
+            extras::set_choice(m.id, std::atoi(value.c_str()));
+    }
 }
 bool set_enabled(std::string_view id, bool on) {
     const auto* entry = find(id);

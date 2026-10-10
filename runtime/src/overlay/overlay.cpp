@@ -41,6 +41,7 @@ namespace gfxvk { bool buffer_cache_enabled(); }  // gfx/vulkan/buffer_cache.h
 #include "../input.h"
 #include "../input_map.h"
 #include "../mods/climb.h"
+#include "../mods/extras.h"
 #include "../mods/mods.h"
 #include "../mods/manager.h"
 #include "../mods/packages.h"
@@ -1103,6 +1104,12 @@ void tab_mods() {
                 float sensitivity = mods::mouse_sensitivity();
                 if (ImGui::SliderFloat("Sensitivity", &sensitivity, .08f, .3f, "%.3f"))
                     hostui::post([sensitivity] { mods::set_mouse_sensitivity(sensitivity); hostui::set("mod.mouse-camera.sensitivity", std::to_string(sensitivity)); mods::packages::remember_option("mouse-camera.sensitivity", sensitivity); });
+            } else if (const auto* x = mods::extras::find(selected)) {
+                for (int i = 0; i < (int)x->choices.size(); ++i) {
+                    if (i) ImGui::SameLine();
+                    if (radio(x->choices[i].c_str(), mods::extras::choice(x->id) == i))
+                        hostui::post([id = x->id, i] { mods::extras::set_choice(id, i); hostui::set(("mod." + id + ".choice").c_str(), std::to_string(i)); });
+                }
             }
         }
         ImGui::EndTable();

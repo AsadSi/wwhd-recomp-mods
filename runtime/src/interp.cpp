@@ -1058,6 +1058,7 @@ static bool skip(int bit) {
 }
 static bool g_in_execute = false;  // inside fpcEx_Handler (actor Execute): logic, not drawing
 namespace mods { void after_execute(Cpu* c, uint32_t execute_fn); }  // mods/turbo.cpp
+namespace mods::extras { void step(Cpu* c); }  // mods/extras.cpp
 extern "C" void hook_025DE788(Cpu* c) {
     if (skip(1) && !true60::enabled()) return;  // true 60: the per-process gate decides (true60.cpp)
     interp::record_executed_step();
@@ -1065,7 +1066,13 @@ extern "C" void hook_025DE788(Cpu* c) {
     uint32_t execute_fn = c->r[3];
     f_025DE788_orig(c);
     mods::after_execute(c, execute_fn);  // quick doors / fast scene changes: extra steps (full passes only)
-    if (!interp::g_hold_frame) {guestmods::frame(interp::g_logic_steps);mods::packages::frame(interp::g_logic_steps);}
+    if (!interp::g_hold_frame) {
+        guestmods::frame(interp::g_logic_steps);
+        mods::packages::frame(interp::g_logic_steps);
+        const uint32_t r3 = c->r[3];  // fpcEx_Handler's result: the extras call into the game (spawns)
+        mods::extras::step(c);
+        c->r[3] = r3;
+    }
     g_in_execute = false;
 }
 extern "C" void hook_025DE024(Cpu* c) { if (!skip(2)) f_025DE024_orig(c); }

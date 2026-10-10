@@ -48,6 +48,8 @@ static void cycle_res() {
 
 namespace gx2 { uint64_t flips_presented(); bool uncapped(); }
 #include "../mods/mods.h"
+#include "../mods/extras.h"
+#include "../mods/manager.h"
 #include "../overlay/overlay.h"
 namespace ax { void start_sound_trace(const char* path, double seconds); }
 namespace gfx { bool menu_hotkey(uint16_t code); NSMenuItem* controls_menu_item(); /* controls_ui.mm */ void install_overlay_input(); }
@@ -496,6 +498,15 @@ void install_menu(NSWindow* tv) {
            @"Door events (walk-in, opening, closing) run at 4x speed");
     toggle(gp, @"Fast scene changes", ^BOOL { return mods::fast_scenes(); }, ^(BOOL on) { mods::set_fast_scenes(on); },
            @"Fades and loading between areas run at 4x speed; the scenes themselves are not sped up");
+    for (const auto& m : mods::extras::catalogue()) {  // extras.cpp: a switch each, and its choices under it
+        const std::string id = m.id;
+        toggle(gp, [NSString stringWithFormat:@"%s%s", m.category == "Spooky" ? "Spooky: " : "", m.name.c_str()],
+               ^BOOL { return mods::manager::find(id)->enabled(); }, ^(BOOL on) { mods::manager::set_enabled(id, on); },
+               [NSString stringWithUTF8String:m.description.c_str()]);
+        for (int i = 0; i < (int)m.choices.size(); i++)
+            toggle(gp, [NSString stringWithFormat:@"        %s", m.choices[i].c_str()], ^BOOL { return mods::extras::choice(id) == i; },
+                   ^(BOOL) { mods::extras::set_choice(id, i); hostui::set(("mod." + id + ".choice").c_str(), std::to_string(i)); });
+    }
     [gp addItem:[NSMenuItem separatorItem]];
     [gp addItemWithTitle:@"Cheats (save in game to keep them)" action:nil keyEquivalent:@""].enabled = NO;
     toggle(gp, @"    Give all items", ^BOOL { return NO; }, ^(BOOL) { mods::request_cheat(mods::kCheatItems); },
