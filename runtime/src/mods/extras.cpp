@@ -1186,14 +1186,15 @@ void step(Cpu* c) {
             static uint32_t placed = 0;
             static int land_check = 0;
             if (placed != g_bigship.id) placed = g_bigship.id, put(hull, to, yaw), anchored = false, joining = 0;
-            const bool checking = ++land_check % 15 == 0, slot_land = checking && land(to, yaw);
+            const bool checking = ++land_check % 15 == 0, slot_land = checking && !anchored && land(to, yaw);
             if (!anchored && (!riding || isle(to) < 4000 || slot_land)) {
                 anchored = true;
                 trace("extras: Big ship anchors (%s)", !riding ? "Link is out of the boat" : slot_land ? "land" : "near an island");
             } else if (anchored && riding && !joining && checking) {  // he alongside, heading its way, slow
                 const V3 l = to_local(hull, korl);
                 if (std::hypot(l.x - kLionX, l.z - kLionZ) < 450 && std::abs((int16_t)(yaw - (int16_t)ld16(hull + kAngleY))) < 0x1800 &&
-                    std::fabs(ldf32(korl + 0x370)) < 20 && isle(to) >= 4000 && !slot_land)
+                    std::fabs(ldf32(korl + 0x370)) < 20 && isle(to) >= 4000)  // (no land check: it is floating there, and
+                                                                                // the check would find its own deck)
                     anchored = false, joining = 20, trace("extras: Big ship hitched on again");
             }
             if (!anchored) {
