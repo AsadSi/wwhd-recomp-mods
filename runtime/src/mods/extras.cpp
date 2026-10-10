@@ -572,6 +572,8 @@ constexpr V3 kCannon[2] = {{-130, 0, 950}, {0, 0, -1320}};  // beside the catapu
 // the shot's speed: the boat's is 110 (about 4800 at most); a ship's gun carries twice as far (about 10000), so it
 // reaches a titanic Phantom Ganon
 constexpr double kShotSpeed = 160;
+// it points from 40 degrees down (from the high deck, at a monster close by in the water) to 60 up
+constexpr int kDown = 0x1C71;
 Single g_cannon[2];
 int g_manned = -1;  // the cannon Link stands at
 std::vector<uint32_t> monsters_out() {
@@ -654,7 +656,7 @@ void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, bool deck, 
         }
         return;
     }
-    // aiming: the stick (3/4 of a turn a second at full tilt, up to 60 degrees up), or the locked monster
+    // aiming: the stick (3/4 of a turn a second at full tilt, 40 degrees down to 60 up), or the locked monster
     if (pressed & input::kZL) {
         locked = 0xFFFFFFFF;
         double best = 9000;
@@ -681,11 +683,11 @@ void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, bool deck, 
             e = root < 0 ? M_PI / 4 : atan((v2 - std::sqrt(root)) / (g * x));
         }
         yaw = (int16_t)(atan2(dx, dz) * 32768 / M_PI);
-        up = (int16_t)std::clamp(e * 32768 / M_PI, 0.0, (double)0x2AAA);
+        up = (int16_t)std::clamp(e * 32768 / M_PI, (double)-kDown, (double)0x2AAA);
     } else {
         locked = 0xFFFFFFFF;
         yaw = (int16_t)(yaw - g_pad_lx.load() * 0x2A0);
-        up = (int16_t)std::clamp(up + (int)(g_pad_ly.load() * 0x100), 0, 0x2AAA);
+        up = (int16_t)std::clamp(up + (int)(g_pad_ly.load() * 0x100), -kDown, 0x2AAA);
     }
     st16(link + 0x322, (uint16_t)yaw), st16(link + kAngleY, (uint16_t)yaw);
     // held at the gun: put back on his spot (position and old position) if a hit knocked him off it
@@ -1025,13 +1027,14 @@ void step(Cpu* c) {
             // at Link's eyes every step, the FLY animation, its body drawn), held a little slower than a boat under
             // full sail (speedF +0x370 34; the boat makes about 40 a step), its head 80-300 above the sea so it shows. Within 1200 it
             // lunges and bites (state 5: hook_020FF80C turns a bite that catches him into a miss, which sends it back
-            // to waiting, state 1), and goes back to the hunt. Every 20-40 s it dives instead (the fly state's own
+            // to waiting, state 1), then dives off and comes in again from 3000 away, so he has time to shoot it. Every 20-40 s it dives instead (the fly state's own
             // dive, substate 3, by its timer +0x1B50) and bursts up 2000 ahead of him, in his way (waiting, state 1,
             // timers +0x1B50/+0x1B54 cleared: it rises and bites at once). Left 3000 behind, it comes up ahead one
             // time in two (twice at most), else it gives up and the event ends once he is 4000 away ("behind": 8 s more than 3000 off).
             static uint32_t placed = 0;
             static double next_dive = 0, waited = 0;
             static bool diving = false, closed = false;  // closed: it has once come within 3000 of him
+            static bool bit = false, retreat = false;     // it has bitten (and dives off to come in again from afar)
             const double yaw = (int16_t)ld16(link + kAngleY) * M_PI / 32768;
             const double d = std::hypot(ldf32(a + kPos) - ldf32(link + kPos), ldf32(a + kPos + 8) - ldf32(link + kPos + 8));
             // its head and the ring of positions and angles its body follows (+0x674, 256 x 12; +0x1274, 256 x 6), all
@@ -1046,13 +1049,14 @@ void step(Cpu* c) {
             auto hunt = [a] { st16(a + 0x1B32, 10), st16(a + 0x1B34, 0), st16(a + 0x1B52, 0); };
             auto ahead = [&](double dist, double y) { put(ldf32(link + kPos) + sin(yaw) * dist, y, ldf32(link + kPos + 8) + cos(yaw) * dist); };
             if (placed != g_molgera.id) {
-                placed = g_molgera.id, diving = false, closed = false, next_dive = now + 20 + rand() % 20;
+                placed = g_molgera.id, diving = false, closed = false, bit = retreat = false, next_dive = now + 20 + rand() % 20;
                 g_molgera_gave_up = false;
                 ahead(5000, -60), hunt();
                 trace("extras: Molgera surfaces far off and hunts Link");
             }
             const int state = ld16(a + 0x1B32) == 13 ? 10 : ld16(a + 0x1B32), sub = ld16(a + 0x1B34);
             if (state != 1) waited = now;
+            if (state == 5) bit = true;
             if (state == 10 && !diving) {
                 if (sub == 1 || sub == 2) {
                     st16(a + 0x1B34, 2), st16(a + 0x1B50, 150), st32(a + 0x370, u32_bits(34.f));
@@ -1073,13 +1077,23 @@ void step(Cpu* c) {
                 } else if (d < 1200 && !g_molgera_gave_up) {
                     st16(a + 0x1B32, 5), st16(a + 0x1B34, 0), st32(a + 0x370, 0);
                 }
+            } else if (state == 1 && diving && retreat) {  // dived off after a bite: it comes in again from 3000 away
+                diving = retreat = false;
+                const double r = rand() / (double)RAND_MAX * 2 * M_PI;
+                put(ldf32(link + kPos) + sin(r) * 3000, -60, ldf32(link + kPos + 8) + cos(r) * 3000);
+                hunt();
+                trace("extras: Molgera comes in again from afar");
             } else if (state == 1 && diving) {  // its dive done (substate 3 ends in waiting): up in his way
                 diving = false;
                 ahead(2000, -700);
                 st16(a + 0x1B50, 0), st16(a + 0x1B54, 0);
                 trace("extras: Molgera bursts up ahead of Link");
+            } else if (state == 1 && bit && !g_molgera_gave_up) {  // after a bite it dives off, to come in again
+                bit = false, diving = retreat = true;
+                st16(a + 0x1B32, 10), st16(a + 0x1B34, 3), st16(a + 0x1B50, 45);
+                trace("extras: Molgera dives off after its bite");
             } else if (state == 1 && now - waited > 4 && !g_molgera_gave_up) {
-                hunt();  // after a bite or an ambush, back to the hunt
+                hunt();  // after an ambush, back to the hunt
             }
             // at its size its head's spheres reach the boat every few seconds for 4 hearts: a hit costs at most one
             // heart, and none in the 4 s after one (unless the Damage multiplier says otherwise)
