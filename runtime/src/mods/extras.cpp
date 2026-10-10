@@ -1,7 +1,7 @@
 // More built-in mods (Gameplay menu, all off by default), several ported from the Twilight Princess HD
 // recomp: damage and rupee multipliers, time of day, a turbo key, and two that spawn
-// the game's own monsters around Link: Night of the dead (ReDeads or Stalfos on land at night) and
-// Haunted sea (Kargarocs around Link on the open sea).
+// the game's own monsters around Link: Night of the dead (ReDeads, Stalfos and Poes on land at night) and
+// Haunted sea (Gyorgs, Seahats and Kargarocs around Link on the open sea).
 //
 // They run once per full logic step, after the actors' execute (interp.cpp hook_025DE788), and act on what
 // changed in that step, so the game's own rules (maxima, wallet, death) still apply. Offsets (WWHD):
@@ -46,7 +46,8 @@ uint32_t u32_bits(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
 
 // a monster from the object name table, and the parameter it is created with (0xFFFFFFFF: the defaults)
 struct Monster { int16_t proc; int8_t subtype; uint32_t param; };
-constexpr Monster kRedead{0xE0, 0, 0xFFFFFFFF}, kStalfos{0xBE, -1, 0xFFFFFFFF}, kKargaroc{0xB5, -1, 0};
+constexpr Monster kRedead{0xE0, 0, 0xFFFFFFFF}, kStalfos{0xBE, -1, 0xFFFFFFFF}, kPoe{0xD4, -1, 0xFFFFFFFF},
+                  kGyorg{0xE4, -1, 0xFFFFFFFF}, kSeahat{0xD1, -1, 0xFFFFFFFF}, kKargaroc{0xB5, -1, 0};
 
 // the monsters a spawner has out, by process id; forgotten when they die or the stage changes
 struct Spawner {
@@ -84,8 +85,14 @@ void spawn(Cpu* c, Spawner& s, Monster m, uint32_t link, float dist, bool behind
         st16(buf + 0x10, 0);
         st16(buf + 0x12, (uint16_t)(int16_t)(atan2(-sin(a), -cos(a)) * 32768 / M_PI));  // facing Link
         st16(buf + 0x14, 0);
+        // created in Link's process layer (base_process_class::mLyTg.mpLayer, +0x2C), as an actor's own spawns are: here,
+        // after the executor, the current layer is the root one, and an actor made there was drawn outside the play
+        // scene's draw buffers (a J3D draw list looped through the grass packet the first time it came into view)
+        const uint32_t layer = guest_call(c, GC(0x025DED64));  // fpcLy_CurrentLayer
+        guest_call(c, GC(0x025DEAB4), {ld32(link + 0x2C)});    // fpcLy_SetCurrentLayer
         const uint32_t id = guest_call(c, GC(0x025D5834), {(uint32_t)m.proc, m.param, buf, (uint32_t)(int8_t)ld8(link + kRoom),
                                                            buf + 0x10, 0, (uint32_t)(int32_t)m.subtype, 0});
+        guest_call(c, GC(0x025DEAB4), {layer});
         trace("extras: spawned proc %#x id %#x at %.0f %.0f %.0f (%zu out)", m.proc, id, x, ldf32(buf + 4), z, s.ids.size());
         if (id != 0xFFFFFFFF) s.ids.push_back(id);
         return;
@@ -110,11 +117,11 @@ const std::vector<Mod>& catalogue() {
          {"Stopped", "Morning (7:00)", "Noon", "Evening (18:30)", "Night (23:00)"}},
         {"turbo", "Turbo key", "Gameplay", "Hold T on the keyboard to run the game as fast as this Mac can (sailing, text, cutscenes).", {}},
         {"night-dead", "Night of the dead (experimental)", "Spooky",
-         "After dark the dead rise on land: ReDeads or Stalfos close in from behind Link, a few at a time. "
+         "After dark the dead rise on land: ReDeads, Stalfos and Poes close in from behind Link, a few at a time. "
          "Pairs well with Time of day: Night. Experimental: the picture can stop after a spawn (the game keeps running).",
          {"Sometimes", "Often", "Relentless"}},
         {"haunted-sea", "Haunted sea (experimental)", "Spooky",
-         "Out on the open sea (on the boat or swimming) Kargarocs come for Link, day and night (more at night). "
+         "Out on the open sea (on the boat or swimming) Gyorgs, Seahats and Kargarocs come for Link, day and night (more at night). "
          "Experimental: the picture can stop after a spawn (the game keeps running).",
          {"Sometimes", "Often", "Relentless"}},
     };
@@ -194,18 +201,9 @@ void step(Cpu* c) {
     if (on<kNight>() && night && !water && !fresh) {
         const int level = g_choice[kNight].load();
         g_night.prune(c);
-        // one kind a visit (a mix froze more often), never Poes (a Poe spawned this way halts the game: sead assert).
-        // Open, the freeze: with spawned monsters around, a J3D draw buffer list sometimes loops (grass packet ->
-        // ordinary J3D packets, draw 027F16E8 -> back to the grass; next link +0x10), so the buffer's draw loop
-        // (027F10CC) never ends and gx2 logs "display list overflow" (4 MB list begun at 027C0768). Not a double
-        // entry (HD asserts on that, J3DDrawBuffer.cpp:243, and it did not fire). It starts when a spawned monster
-        // first comes into view (the camera turned to a ReDead on the ground, 2 runs of 3; monsters kept behind Link
-        // never froze), so it is in how a spawned monster's packets join the frame's buffers. Cutting the loop after
-        // the grass draw only moves the failure to that assert.
-        static Monster kind = kRedead;
-        if (g_night.ids.empty() && g_night.next == 0) kind = rand() % 3 ? kRedead : kStalfos;
+        static const Monster kDead[] = {kRedead, kRedead, kStalfos, kPoe};
         if (now >= g_night.next && g_night.ids.size() < kMax[level]) {
-            spawn(c, g_night, kind, link, 450 + rand() % 350, true, 30, true);
+            spawn(c, g_night, kDead[rand() % 4], link, 450 + rand() % 350, true, 30, true);
             g_night.next = now + kEvery[level] * (0.6 + rand() / (double)RAND_MAX * 0.8);
         }
     }
@@ -214,9 +212,9 @@ void step(Cpu* c) {
         const int level = g_choice[kSea].load();
         g_sea.prune(c);
         if (now >= g_sea.next && g_sea.ids.size() < kMax[level] + (night ? 2 : 0)) {
-            // Kargarocs only for now: Gyorgs delete themselves at once without their GyCtrl, and Seahats trigger the grass
-            // freeze below more often
-            spawn(c, g_sea, kKargaroc, link, 900 + rand() % 600, false, 300, false);
+            static const Monster kSea[] = {kGyorg, kGyorg, kSeahat, kKargaroc};
+            const Monster m = kSea[rand() % 4];
+            spawn(c, g_sea, m, link, 900 + rand() % 600, false, m.proc == kGyorg.proc ? -40 : 300, false);
             g_sea.next = now + kEvery[level] * (night ? 0.6 : 1) * (0.6 + rand() / (double)RAND_MAX * 0.8);
         }
     }
