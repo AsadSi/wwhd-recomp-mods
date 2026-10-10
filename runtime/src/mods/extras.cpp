@@ -640,14 +640,25 @@ void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, bool deck, 
                 if (const double d = std::hypot(ldf32(a + kPos) - ldf32(link + kPos), ldf32(a + kPos + 8) - ldf32(link + kPos + 8)); d < best) best = d, locked = id;
     }
     if (const uint32_t a = locked == 0xFFFFFFFF ? 0 : guest_call(c, GC(0x025DE50C), {locked})) {
-        // at its eyes (eyePos +0x37C), on the shot's low arc (speed v 110, gravity g 2.5): tan e = (v^2 - sqrt(v^4 -
-        // g (g x^2 + 2 y v^2))) / (g x), x the distance and y the height to it from the muzzle; out of reach, 45 degrees
-        const double dx = ldf32(a + 0x37C) - ldf32(link + kPos), dz = ldf32(a + 0x37C + 8) - ldf32(link + kPos + 8);
-        const double x = std::max(1.0, std::hypot(dx, dz)), y = ldf32(a + 0x37C + 4) - ldf32(link + kPos + 4) - 100;
-        constexpr double v2 = 110.0 * 110, g = 2.5;
-        const double root = v2 * v2 - g * (g * x * x + 2 * y * v2);
+        // at its eyes (eyePos +0x37C) where they will be when the shot gets there (led by how fast they moved since
+        // the last step), on the shot's low arc (speed v 110, gravity g 2.5): tan e = (v^2 - sqrt(v^4 - g (g x^2 +
+        // 2 y v^2))) / (g x), x the distance and y the height to it from the muzzle; out of reach, 45 degrees
+        static V3 last{};
+        static uint32_t last_id = 0xFFFFFFFF;
+        const V3 eye{ldf32(a + 0x37C), ldf32(a + 0x37C + 4), ldf32(a + 0x37C + 8)};
+        const V3 vel = last_id == locked ? V3{eye.x - last.x, eye.y - last.y, eye.z - last.z} : V3{};
+        last = eye, last_id = locked;
+        constexpr double v = 110, v2 = v * v, g = 2.5;
+        double e = M_PI / 8, dx = 0, dz = 0;
+        for (int pass = 0; pass < 3; pass++) {  // the flight time depends on the aim, the aim on where it will be
+            const double t = std::hypot(eye.x - ldf32(link + kPos), eye.z - ldf32(link + kPos + 8)) / (v * cos(e));
+            dx = eye.x + vel.x * t - ldf32(link + kPos), dz = eye.z + vel.z * t - ldf32(link + kPos + 8);
+            const double x = std::max(1.0, std::hypot(dx, dz)), y = eye.y + vel.y * t - ldf32(link + kPos + 4) - 100;
+            const double root = v2 * v2 - g * (g * x * x + 2 * y * v2);
+            e = root < 0 ? M_PI / 4 : atan((v2 - std::sqrt(root)) / (g * x));
+        }
         yaw = (int16_t)(atan2(dx, dz) * 32768 / M_PI);
-        up = (int16_t)std::clamp(root < 0 ? 0x2000 : atan((v2 - std::sqrt(root)) / (g * x)) * 32768 / M_PI, 0.0, (double)0x2AAA);
+        up = (int16_t)std::clamp(e * 32768 / M_PI, 0.0, (double)0x2AAA);
     } else {
         locked = 0xFFFFFFFF;
         yaw = (int16_t)(yaw - g_pad_lx.load() * 0x2A0);
@@ -1182,7 +1193,7 @@ void step(Cpu* c) {
                     trace("extras: Link climbs out of the water onto the deck");
                 }
             }
-            // The helm, behind the ship's wheel (Kaji, at z -858) on the stern castle: A there takes it (the stick, A and B are then the helm's, filter_pad). The
+            // The helm, the ship's wheel (Kaji, at z -858) on the stern castle: A by it takes it (the stick, A and B are then the helm's, filter_pad). The
             // stick up raises the sail, down lowers it (0.7 s from furled to full); full sail makes the boat's 40 a
             // step, and it turns quicker the faster it goes (left and right). The hull is moved here, Link standing
             // on it carried by the game's moving-BG rule, the King of Red Lions kept tied alongside (his place on its
@@ -1194,9 +1205,9 @@ void step(Cpu* c) {
             static int helm_land = 0;
             static uint32_t sailed = 0;  // the ship its speed is for
             if (sailed != g_bigship.id) sailed = g_bigship.id, helm = false, g_at_helm = false, speed = sail = 0;
-            constexpr V3 kHelm{0, 0, -960};
+            constexpr V3 kHelm{0, 0, -880};  // the wheel, from either side of it
             const V3 me = to_local(hull, link);
-            if (!helm && deck && g_manned < 0 && (proc == 0x4 || proc == 0x6) && (pressed & input::kA) && std::hypot(me.x - kHelm.x, me.z - kHelm.z) < 120) {
+            if (!helm && deck && g_manned < 0 && (proc == 0x4 || proc == 0x6) && (pressed & input::kA) && std::hypot(me.x - kHelm.x, me.z - kHelm.z) < 200) {
                 helm = true, g_take_pad = true, g_at_helm = true, anchored = true, joining = 0;
                 trace("extras: Link takes the Big ship's helm");
             } else if (helm && (!deck || !g_take_pad || (pressed & input::kB) || ld8(kPlay + 0x5292))) {
