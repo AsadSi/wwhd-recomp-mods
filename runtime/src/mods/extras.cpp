@@ -604,9 +604,8 @@ void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, bool deck, 
     static uint32_t locked = 0xFFFFFFFF;
     static double fired = 0;
     cannon_hits(c, now);
-    static V3 stand;  // where he stood when he manned it: knocked off it (a hit, a fall), he lets go
-    if (g_manned >= 0 && (!deck || !g_take_pad || ld8(kPlay + 0x5292) || (pressed & input::kB) ||
-                          std::hypot(ldf32(link + kPos) - stand.x, ldf32(link + kPos + 8) - stand.z) > 80)) {
+    static V3 stand;  // where he stood when he manned it, in the hull's frame: a hit's knockback does not carry him off
+    if (g_manned >= 0 && (!deck || !g_take_pad || ld8(kPlay + 0x5292) || (pressed & input::kB))) {
         g_manned = -1, g_take_pad = false, g_cannon_btn = 0, g_cannon_cam = false;
         trace("extras: Link leaves the deck cannon");
         return;
@@ -648,7 +647,7 @@ void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, bool deck, 
     g_cannon_btn = g_manned >= 0 ? bomb_button() : button;
     if (g_manned < 0) {
         if (by >= 0 && (proc == 0x4 || proc == 0x6) && (pressed & (button | input::kA))) {
-            g_manned = by, g_take_pad = true, locked = 0xFFFFFFFF, up = 0x0C00, stand = pos_of(link);
+            g_manned = by, g_take_pad = true, locked = 0xFFFFFFFF, up = 0x0C00, stand = to_local(hull, link);
             yaw = (int16_t)(hull_yaw + (by == 0 ? 0 : 0x8000));  // out over the bow, or the stern
             fired = now;  // the press that manned it does not also fire
             trace("extras: Link mans the %s cannon", by == 0 ? "bow" : "stern");
@@ -689,6 +688,13 @@ void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, bool deck, 
         up = (int16_t)std::clamp(up + (int)(g_pad_ly.load() * 0x100), 0, 0x2AAA);
     }
     st16(link + 0x322, (uint16_t)yaw), st16(link + kAngleY, (uint16_t)yaw);
+    // held at the gun: put back on his spot (position and old position) if a hit knocked him off it
+    if (const V3 l = to_local(hull, link); std::hypot(l.x - stand.x, l.z - stand.z) > 20) {
+        const V3 w = to_world(pos_of(hull), hull_yaw, stand);
+        for (uint32_t base : {(uint32_t)kPos, 0x300u})
+            st32(link + base, u32_bits((float)w.x)), st32(link + base + 4, u32_bits((float)w.y)), st32(link + base + 8, u32_bits((float)w.z));
+        st32(link + 0x340, 0);
+    }
     g_cannon_x = (float)ldf32(link + kPos), g_cannon_y = (float)ldf32(link + kPos + 4) + 100, g_cannon_z = (float)ldf32(link + kPos + 8);
     g_cannon_yaw = yaw, g_cannon_up = up, g_cannon_cam = true;
     if (!(pressed & (g_cannon_btn.load() | input::kA)) || now < fired + 1) return;
