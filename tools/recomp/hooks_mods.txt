@@ -23,3 +23,5 @@
 @02168488 # daGy_c::checkTgHit death test: the Leviathan's hits are counted into its own health (extras.cpp)
 @021685B0 # daGy_c::checkTgHit ice/light arrow test, where a sword hit ends: the same
 020FF80C  # bwd_move: Molgera of the deep never swallows Link (extras.cpp)
+02134B28  # daFganon_Execute: Phantom Ganon's effects as big as he is (extras.cpp)
+025A847C  # dPa_control_c::set: the same, while his execute runs

@@ -91,6 +91,8 @@ struct Single {
 };
 Single g_ghost, g_bigship, g_phantom, g_leviathan, g_molgera;
 uint32_t g_leviathan_actor = 0, g_molgera_actor = 0;  // for the hooks below, which must not call into the game
+uint32_t g_phantom_actor = 0;                          // Phantom Ganon, and his size, for the same
+float g_phantom_size = 1, g_fx_size = 1;               // g_fx_size: his size while his execute runs (particle hook)
 // the Leviathan and Molgera can be killed, by any weapon (a cannonball or bomb 4, an arrow 2, the sword its power):
 // what is left of their health, and the Leviathan's death as its hit test saw it (loot and the event's end follow)
 constexpr int kLeviathanHealth = 48, kMolgeraHealth = 80;
@@ -693,6 +695,7 @@ void step(Cpu* c) {
     }
     const bool settled = !fresh && game_time() >= settle;
     g_big_hits.clear();  // refilled below by the mods whose monsters hit bigger
+    g_phantom_actor = 0;
 
     const uint16_t max_life = ld16(sv), cur = ld16(sv + 2);
     if (!fresh && cur < life) trace("extras: Link is hit: life %u -> %u (quarter hearts)", life, cur);
@@ -859,7 +862,8 @@ void step(Cpu* c) {
             static const float kSize[] = {1.f, 12.f};
             const float size = stalked ? 1.f : kSize[g_choice[kPhantom].load()];
             for (int i = 0; i < 3; i++) st32(pg + 0x330 + 4 * i, u32_bits(size));
-            g_big_hits.push_back({pg, pg + 0x1000, size});  // his sword and body colliders as big as he is
+            g_big_hits.push_back({pg, pg + 0x1000, size});  // his sword and body colliders as big as he is, and his energy
+            g_phantom_actor = pg, g_phantom_size = size;    // ball's (SetR, below); his effects too (hook_025A847C)
             // his energy sphere (the model at +0x8A8 that tama_draw shows) and its emitters (dark ball and throw effects,
             // +0x600..+0x60C; JPABaseEmitter scale +0x220 and particle scale +0x238, xyz each) as big as he is
             if (size > 1) {
@@ -1289,4 +1293,27 @@ extern "C" void hook_020FF80C(Cpu* c) {
         st16(a + 0x3E96, 0), st16(a + 0x1B32, 1), st16(a + 0x1B34, 0), st16(a + 0x1B50, 0x7A), st16(a + 0x1B54, 100);
     st32(a + 0x1878, 1);
     if (ld16(a + 0x1B32) == 10) st16(a + 0x1B32, 13);
+}
+
+// daFganon_Execute (02134B28; r3 the actor): everything Phantom Ganon makes (his energy and dark balls, their bursts,
+// the sparks of a hit on him) is made from inside it, through dPa_control_c::set (025A847C; r6 pos, r7 angle, r8 cXyz*
+// scale or 0), which copies the scale into the emitter: while he executes it is his size times what was asked. His
+// short-lived copies are other fganon actors, normal size
+extern "C" void f_02134B28_orig(Cpu* c);
+extern "C" void hook_02134B28(Cpu* c) {
+    using namespace mods::extras;
+    g_fx_size = g_phantom_actor && c->r[3] == g_phantom_actor ? g_phantom_size : 1;
+    f_02134B28_orig(c);
+    g_fx_size = 1;
+}
+extern "C" void f_025A847C_orig(Cpu* c);
+extern "C" void hook_025A847C(Cpu* c) {
+    using namespace mods::extras;
+    if (g_fx_size > 1) {
+        static const uint32_t buf = mem::host_alloc(0x10);
+        const uint32_t s = c->r[8];
+        for (int i = 0; i < 3; i++) st32(buf + 4 * i, u32_bits(g_fx_size * (s ? (float)ldf32(s + 4 * i) : 1.f)));
+        c->r[8] = buf;
+    }
+    f_025A847C_orig(c);
 }
