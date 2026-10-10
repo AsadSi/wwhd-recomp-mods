@@ -64,8 +64,10 @@ constexpr Monster kRedead{0xE0, 0, 0xFFFFFFFF}, kStalfos{0xBE, -1, 0xFFFFFFFF}, 
                   kOship{0xB3, -1, 0x00FFFF00, 0x00FF},
                   // the Ghost Ship (daGhostship): no path; its moon phase (low byte) is tonight's when spawned (see below)
                   kAyush{0xB2, -1, 0x00FF0000},
-                  // Tetra's pirate ship (daObjPirateship): type 3 (no pirates, no scene), no path; a moving BG with a walkable deck
-                  kPirates{0x39, -1, 0x03FFFF00},
+                  // Tetra's pirate ship (daObjPirateship): type 5 (no pirates, no scene, but its wheel Kaji and catapult
+                  // Touseki, which type 3 leaves out though their collision is in the hull), no path; a moving BG with a
+                  // walkable deck. Its sail (Psail), flag, wheel and catapult follow its model by themselves
+                  kPirates{0x39, -1, 0x05FFFF00},
                   // Phantom Ganon (daFganon): type 3 (the Ganon's Tower fight) with no switch; he waits 10000 above, unseen,
                   // until Link comes within byte 1 x 10 of where he was made (2550), then descends and fights (flies, fires,
                   // spin attacks, and makes his own short-lived copies). HD fganon_class: mAction +0x5BA, mMode +0x5BC,
@@ -550,7 +552,7 @@ void horror_audio(Cpu* c, uint32_t link, double now, bool event, bool enabled) {
         next_beat = now + (nearest < 400 ? 0.45 : 0.8);
     }
 }
-// Deck cannons, at the Big ship's bow (on the forecastle, beside the catapult's frame) and stern (on the stern castle):
+// Deck cannons, at the Big ship's bow (on the forecastle, beside the catapult) and stern (on the poop deck behind the wheel):
 // the cannon game's cannon (daCanon_c, proc 0x3D, its own Bomber archive; it only waits for its minigame's event, and
 // draws from current.pos and shape_angle each execute: y the way it points, x its barrel from straight up, 0x4000
 // level), its speak prompt (attention flags +0x39C) cleared, put on the deck where the ground check finds it each step.
@@ -561,7 +563,7 @@ void horror_audio(Cpu* c, uint32_t link, double now, bool event, bool enabled) {
 // (0x80020004) by fopAcM_fastCreate (025D5928), no gravity for its first 8 steps (020CB89C), then speedF +0x370
 // 110 cos e, speed.y +0x340 110 sin e, gravity +0x374 -2.5; it bursts on what it hits. One bomb from the bag each
 // (dSv_player_c +0x6A), none when it is empty (the boat's dud sound 0x0883); the firing sound 0x2852.
-constexpr V3 kCannon[2] = {{-130, 0, 950}, {0, 0, -1150}};
+constexpr V3 kCannon[2] = {{-130, 0, 950}, {0, 0, -1320}};  // beside the catapult; on the poop deck
 Single g_cannon[2];
 int g_manned = -1;  // the cannon Link stands at
 std::vector<uint32_t> monsters_out() {
@@ -1169,7 +1171,7 @@ void step(Cpu* c) {
                     trace("extras: Link climbs out of the water onto the deck");
                 }
             }
-            // The helm, on the stern castle: A there takes it (the stick, A and B are then the helm's, filter_pad). The
+            // The helm, behind the ship's wheel (Kaji, at z -858) on the stern castle: A there takes it (the stick, A and B are then the helm's, filter_pad). The
             // stick up raises the sail, down lowers it (0.7 s from furled to full); full sail makes the boat's 40 a
             // step, and it turns quicker the faster it goes (left and right). The hull is moved here, Link standing
             // on it carried by the game's moving-BG rule, the King of Red Lions kept tied alongside (his place on its
@@ -1181,9 +1183,9 @@ void step(Cpu* c) {
             static int helm_land = 0;
             static uint32_t sailed = 0;  // the ship its speed is for
             if (sailed != g_bigship.id) sailed = g_bigship.id, helm = false, g_at_helm = false, speed = sail = 0;
-            constexpr V3 kHelm{0, 0, -800};
+            constexpr V3 kHelm{0, 0, -960};
             const V3 me = to_local(hull, link);
-            if (!helm && deck && g_manned < 0 && (proc == 0x4 || proc == 0x6) && (pressed & input::kA) && std::hypot(me.x - kHelm.x, me.z - kHelm.z) < 150) {
+            if (!helm && deck && g_manned < 0 && (proc == 0x4 || proc == 0x6) && (pressed & input::kA) && std::hypot(me.x - kHelm.x, me.z - kHelm.z) < 120) {
                 helm = true, g_take_pad = true, g_at_helm = true, anchored = true, joining = 0;
                 trace("extras: Link takes the Big ship's helm");
             } else if (helm && (!deck || !g_take_pad || (pressed & input::kB) || ld8(kPlay + 0x5292))) {
@@ -1220,6 +1222,14 @@ void step(Cpu* c) {
                     }
                 }
             }
+            // its sail is shown set or furled: daSail's l_HIO byte (1046D78E, 1 eases it full, 0 furls it) is read every
+            // step by every sail; set while it sails at more than a crawl (at the helm, or beside the boat under way),
+            // with the ship's sailing sound (its m2CE, +0x3E6)
+            static bool sail_set = false;
+            const double going = helm || speed > 0.2 ? speed : anchored ? 0 : std::fabs(ldf32(korl + 0x370));
+            if (going > 12) sail_set = true;
+            else if (going < 6) sail_set = false;
+            st8(GD(0x1046D78E), sail_set), st8(hull + 0x3E6, sail_set);
         }
     }
     if (fresh) anchored = false;
