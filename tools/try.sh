@@ -30,7 +30,8 @@ Molgera comes at about 30 s: get onto the deck first. 80 health (a cannonball 4)
 Phantom Ganon (normal size) comes at about 30 s: fight him from the deck." ;;
   bosses) ON=(BIG_SHIP MOLGERA PHANTOM_GANON); EVENT="molgera@+30;phantom@+210"; export WWHD_MOD_PHANTOM_GANON_CHOICE=1; NOTE="$SHIP
 Molgera at about 30 s (80 health: 20 cannon hits; 300 rupees and a blue potion), then Titanic Phantom Ganon at about
-3.5 min (18 cannon hits drive him off). Get onto the deck first; sail the ship or man a cannon." ;;
+3.5 min (18 cannon hits drive him off). Get onto the deck first; sail the ship or man a cannon. Your Bomb Bag
+is filled up as each one comes; the fog is thinner while they are out." ;;
   titanic-deck) ON=(BIG_SHIP PHANTOM_GANON); EVENT="phantom@+30"; export WWHD_MOD_PHANTOM_GANON_CHOICE=1; NOTE="$SHIP
 Titanic (12x) Phantom Ganon comes at about 30 s: get onto the deck first, then fight him from it (cannons, bow,
 sword). His dark balls, their bursts and his hit sparks are his size." ;;

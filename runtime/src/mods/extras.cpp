@@ -404,6 +404,8 @@ void begin(int k, double now) {
     if (k == kLeviathan) g_leviathan = Single{};
     if (k == kMolgera) g_molgera = Single{};
     if (k == kSea) g_giant_spell = giant_spell();
+    // a boss at sea: the Bomb Bag filled up (its count +0x6A to what it holds +0x70), for the deck cannons
+    if (const uint32_t sv = save(); k == kPhantom || k == kLeviathan || k == kMolgera) st8(sv + 0x6A, ld8(sv + 0x70));
     trace("extras: event %s begins (%.0f s)%s", kEventName[k], g_until[k] - now, k == kSea && g_giant_spell ? ", giants" : "");
 }
 void finish(Cpu* c, int k, double now, const char* why) {
@@ -839,7 +841,12 @@ void step(Cpu* c) {
     fog = to > fog ? std::min(to, fog + 1 / 600.f) : std::max(to, fog - 1 / 600.f);
     if (fog > 0 || deep > 0 || fogged) {  // the thicker of the two, and once more at 0 to hand the game its fog back
         const bool thick = fog >= deep * 0.9f;
-        c->f[1].ps0 = thick ? 100 : 300, c->f[2].ps0 = thick ? 2500 : 6000, c->f[3].ps0 = thick ? fog : deep * 0.9f;
+        // with a boss out (and no Haunted sea or Thick fog) thinner, from 1500 to 9000: the deck cannon's and the
+        // helm's cameras stand far back, and a titanic Phantom is 3000 off and 3500 up
+        const bool boss = g_until[kSea] <= now && !live(kFog, now) &&
+                          (g_until[kPhantom] > now || g_until[kLeviathan] > now || g_until[kMolgera] > now);
+        c->f[1].ps0 = !thick ? 300 : boss ? 1500 : 100, c->f[2].ps0 = !thick ? 6000 : boss ? 9000 : 2500;
+        c->f[3].ps0 = thick ? fog : deep * 0.9f;
         guest_call(c, GC(0x0255671C));
         fogged = fog > 0 || deep > 0;
     }
@@ -949,10 +956,13 @@ void step(Cpu* c) {
             if (ld16(pg + 0x5BA) != 6 || ld16(pg + 0x5BC) != 3) waiting = now;
             else if (now - waiting > 8) st8(pg + 0x63C, 35), waiting = now;
             // he flies and fights around his home point (fopAc_ac_c::home.pos, +0x2EC): Link, wherever he goes; a titanic
-            // one keeps his distance, as big as he is: 3000 out from Link the way he already is from him
+            // one keeps his distance, as big as he is: his home 3000 out from Link the way he already is from him, and
+            // never nearer than that (his dives at Link would bring him overhead)
             double hx = ldf32(link + kPos), hz = ldf32(link + kPos + 8);
             if (size > 1) {
                 const double dx = ldf32(pg + kPos) - hx, dz = ldf32(pg + kPos + 8) - hz, d = std::hypot(dx, dz);
+                if (d > 1 && d < 3000)
+                    st32(pg + kPos, u32_bits((float)(hx + dx / d * 3000))), st32(pg + kPos + 8, u32_bits((float)(hz + dz / d * 3000)));
                 if (d > 1) hx += dx / d * 3000, hz += dz / d * 3000;
             }
             st32(pg + 0x2EC, u32_bits((float)hx));
