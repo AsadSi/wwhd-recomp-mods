@@ -35,6 +35,7 @@
 #include "mods.h"
 #include "../gx2/gx2.h"
 #include "../input.h"
+#include "../overlay/overlay.h"
 #include "../platform/keycodes.h"
 #include "runtime.h"
 
@@ -148,6 +149,39 @@ uint32_t spawn(Cpu* c, Spawner& s, Monster m, uint32_t link, float dist, int sid
     return 0xFFFFFFFF;
 }
 
+// Big ship: Tetra's ship (daObjPirateship type 3: its deck a moving BG, Kaizokusen room1b.dzb, re-made from current.pos
+// and shape_angle.y each execute, which carries Link standing on it) sails beside the King of Red Lions. Its frame
+// (cMtx_YrotS): local +x is (cos a, -sin a) in the world, +z (forward) (sin a, cos a); the main deck at local y 400
+// (x +-350, z -700..650), the gunwale top 126 above it (x 350..500), the hull's side out to x 700 at the waterline
+struct V3 { double x, y, z; };
+V3 to_local(uint32_t hull, uint32_t a) {
+    const double t = (int16_t)ld16(hull + kAngleY) * M_PI / 32768;
+    const double dx = ldf32(a + kPos) - ldf32(hull + kPos), dz = ldf32(a + kPos + 8) - ldf32(hull + kPos + 8);
+    return {dx * cos(t) - dz * sin(t), ldf32(a + kPos + 4) - ldf32(hull + kPos + 4), dx * sin(t) + dz * cos(t)};
+}
+V3 to_world(V3 o, int16_t yaw, V3 l) {
+    const double t = yaw * M_PI / 32768;
+    return {o.x + l.x * cos(t) + l.z * sin(t), o.y + l.y, o.z - l.x * sin(t) + l.z * cos(t)};
+}
+V3 pos_of(uint32_t a) { return {ldf32(a + kPos), ldf32(a + kPos + 4), ldf32(a + kPos + 8)}; }
+constexpr double kDeckY = 400;
+bool on_deck(uint32_t hull, uint32_t link) {  // anywhere on board: the main deck, the castles, the crow's nest
+    const V3 l = to_local(hull, link);
+    return std::fabs(l.x) < 720 && l.z > -1800 && l.z < 2250 && l.y > kDeckY - 30 && l.y < 2500;
+}
+// the GamePad as the game reads it (filter_pad, below): what was held at the last read and everything pressed since
+// the last step; while a deck cannon is manned its stick, A, B and ZL are the cannon's, not the game's
+std::atomic<uint32_t> g_pad_hold{0}, g_pad_seen{0};
+std::atomic<float> g_pad_lx{0}, g_pad_ly{0};
+std::atomic<bool> g_take_pad{false};
+// the button the Bomb Bag is on (play +0x5BBB/C/D: the X, Y and R items; 0x31 the Bomb Bag) while Link stands by a deck
+// cannon, which then mans it instead of taking out a bomb, as on the boat
+std::atomic<uint32_t> g_cannon_btn{0};
+uint32_t bomb_button() {
+    const uint32_t play = GD(0x1046F0B0);
+    return ld8(play + 0x5BBB) == 0x31 ? input::kX : ld8(play + 0x5BBC) == 0x31 ? input::kY : ld8(play + 0x5BBD) == 0x31 ? input::kR : 0;
+}
+
 // Gyorgs: the game makes them only once Link has the Boomerang (daGy_c::_create and daGy_Ctrl_c::_create check
 // dComIfGs_checkGetItem(dItemNo_BOOMERANG_e) and fail otherwise), and a Gyorg only as the child of a GyCtrl (proc 0xE5,
 // it counts its Gyorgs at +0x438). Haunted sea makes one quiet GyCtrl near Link (type 1, no Gyorgs of its own, waiting
@@ -236,8 +270,10 @@ const std::vector<Mod>& catalogue() {
          "to fight around the boat as he does in Ganon's Tower, until he is beaten, Link reaches land or he fades back "
          "into the fog.",
          {"Normal size", "Titanic (12x)"}, true},
-        {"big-ship", "Big ship (look-test)", "Experimental",
-         "A pirate ship hull follows the King of Red Lions wherever he sails. A first step towards a walkable ship.", {}},
+        {"big-ship", "Big ship", "Experimental",
+         "Tetra's ship sails beside the King of Red Lions. Stop and get out to jump onto its deck, walk it, fight from it "
+         "and man its cannons; it waits at anchor while you take the boat in to an island, and follows again once you "
+         "sail up alongside it.", {}},
         {"horror-audio", "Horror audio", "Spooky",
          "While a spooky event's monsters are about, the music sinks low, and a heartbeat sounds that quickens as "
          "one of them comes close.", {}},
@@ -290,7 +326,8 @@ void set_often(const std::string& id, int o) {
 // land, near an island or after its time, the fog rolling out. Night of the dead is a roll at nightfall for that night;
 // Stormy weather and Thick fog are spells of a few minutes. Rain and fog fade in and out: the rain count
 // (dKyw_rain_set) is ramped, and our fog is blended with the game's by dKy_fog_startendz_set's ratio.
-// Test aid: WWHD_SPOOKY=<sea|giants|phantom|dead|storm|fog|deep|leviathan|molgera|stalker>@<game seconds>[;...] starts that event at that time.
+// Test aid: WWHD_SPOOKY=<sea|giants|phantom|dead|storm|fog|deep|leviathan|molgera|stalker>@<game seconds>[;...] starts that event at that time
+// (@+<seconds>: that long after Link is first in play).
 namespace {
 constexpr int kAlways = 3;
 constexpr double kScale[] = {0.4, 1, 3};       // the chances: Rare, Now and then, Often
@@ -352,7 +389,7 @@ void finish(Cpu* c, int k, double now, const char* why) {
         if (g_ghost.actor(c)) guest_call(c, GC(0x025D57E4), {g_ghost.id});
     }
 }
-struct Forced { int k; double at; };
+struct Forced { int k; double at; bool after_play; };  // after_play: seconds after Link is first in play (@+s)
 std::vector<Forced> forced_events() {
     std::vector<Forced> v;
     const char* e = getenv("WWHD_SPOOKY");
@@ -363,7 +400,8 @@ std::vector<Forced> forced_events() {
         rest = item.size() < rest.size() ? rest.substr(item.size() + 1) : "";
         const size_t at = item.find('@');
         for (const auto& [name, k] : kNames)
-            if (at != std::string::npos && item.compare(0, at, name) == 0) v.push_back({k, atof(item.c_str() + at + 1)});
+            if (at != std::string::npos && item.compare(0, at, name) == 0)
+                v.push_back({k, atof(item.c_str() + at + 1 + (item[at + 1] == '+')), item[at + 1] == '+'});
     }
     return v;
 }
@@ -383,12 +421,15 @@ void direct(Cpu* c, uint32_t sv, uint32_t link, double now, bool night, bool wat
     if (ashore) g_out_since = now;
 
     static auto forced = forced_events();
-    for (auto& f : forced)
+    static const double in_play = now;  // the first step Link is in play
+    for (auto& f : forced) {
+        if (f.after_play) f.at += in_play, f.after_play = false;
         if (f.at >= 0 && now >= f.at) {
             f.at = -1;
             if (f.k == kGiants) g_until[kSea] = 0, begin(kSea, now), g_giant_spell = true;
             else begin(f.k, now);
         }
+    }
     // the sea events end on land, near an island, after their time, or (Phantom Ganon) once he is gone
     for (int k : {kSea, kPhantom, kLeviathan, kMolgera, kStalker})  // set to Always or switched off mid-event
         if (g_until[k] > 0 && (always(k) || !g_on[k].load())) finish(c, k, now, "its setting changed");
@@ -482,6 +523,120 @@ void horror_audio(Cpu* c, uint32_t link, double now, bool event, bool enabled) {
         next_beat = now + (nearest < 400 ? 0.45 : 0.8);
     }
 }
+// Deck cannons, at the Big ship's bow (on the forecastle, beside the catapult's frame) and stern (on the stern castle):
+// the cannon game's cannon (daCanon_c, proc 0x3D, its own Bomber archive; it only waits for its minigame's event, and
+// draws from current.pos and shape_angle each execute: y the way it points, x its barrel from straight up, 0x4000
+// level), its speak prompt (attention flags +0x39C) cleared, put on the deck where the ground check finds it each step.
+// The boat's controls: standing within 220 of one (its cylinder keeps him 110 off), the Bomb Bag's button mans it; the
+// stick then turns and raises it (Link faces where it points, the camera behind him), ZL locks it on the nearest of the
+// monsters out (and off again), the Bomb Bag's button fires and B leaves; the game gets none of these (filter_pad). A shot is the boat's own cannonball (daShip_c::procCannon): a Bomb (proc 0x126) made in state 4
+// (0x80020004) by fopAcM_fastCreate (025D5928), no gravity for its first 8 steps (020CB89C), then speedF +0x370
+// 110 cos e, speed.y +0x340 110 sin e, gravity +0x374 -2.5; it bursts on what it hits. One bomb from the bag each
+// (dSv_player_c +0x6A), none when it is empty (the boat's dud sound 0x0883); the firing sound 0x2852.
+constexpr V3 kCannon[2] = {{-130, 0, 950}, {0, 0, -1150}};
+Single g_cannon[2];
+int g_manned = -1;  // the cannon Link stands at
+std::vector<uint32_t> monsters_out() {
+    std::vector<uint32_t> v = g_sea.ids;
+    for (uint32_t id : {g_leviathan.id, g_molgera.id, g_phantom.id}) if (id != 0xFFFFFFFF) v.push_back(id);
+    return v;
+}
+void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, bool deck, int proc, uint32_t pressed, double now) {
+    static int16_t yaw = 0, up = 0x0C00;
+    static uint32_t locked = 0xFFFFFFFF;
+    static double fired = 0;
+    static V3 stand;  // where he stood when he manned it: knocked off it (a hit, a fall), he lets go
+    if (g_manned >= 0 && (!deck || !g_take_pad || ld8(kPlay + 0x5292) || (pressed & input::kB) ||
+                          std::hypot(ldf32(link + kPos) - stand.x, ldf32(link + kPos + 8) - stand.z) > 80)) {
+        g_manned = -1, g_take_pad = false, g_cannon_btn = 0;
+        trace("extras: Link leaves the deck cannon");
+        return;
+    }
+    if (!hull) { g_manned = -1, g_take_pad = false, g_cannon_btn = 0; return; }
+    const int16_t hull_yaw = (int16_t)ld16(hull + kAngleY);
+    static float floor_y[2];
+    for (int i = 0; i < 2; i++) {
+        const uint32_t a = g_cannon[i].actor(c);
+        if (!a) {
+            if (g_cannon[i].wanted(c, now)) {
+                Spawner none;
+                g_cannon[i].id = spawn(c, none, Monster{0x3D, -1, 0xFFFFFFFF}, hull, 0, false, 0, false);
+                g_cannon[i].next = now + 5;
+                floor_y[i] = (float)kDeckY;
+            }
+            continue;
+        }
+        // the deck under it (the hull's own collision, once it is where it is put), from above its castles
+        if (static int every = 0; ++every % 15 == 0) {
+            static const uint32_t buf = mem::host_alloc(0x10);
+            const V3 w = to_world(pos_of(hull), hull_yaw, {kCannon[i].x, kDeckY + 800, kCannon[i].z});
+            st32(buf, u32_bits((float)w.x)), st32(buf + 4, u32_bits((float)w.y)), st32(buf + 8, u32_bits((float)w.z));
+            guest_call(c, GC(0x02549F4C), {buf});
+            if ((float)c->f[1].ps0 != (float)w.y) floor_y[i] = (float)(c->f[1].ps0 - ldf32(hull + kPos + 4));
+        }
+        const V3 w = to_world(pos_of(hull), hull_yaw, {kCannon[i].x, floor_y[i], kCannon[i].z});
+        st32(a + kPos, u32_bits((float)w.x)), st32(a + kPos + 4, u32_bits((float)w.y)), st32(a + kPos + 8, u32_bits((float)w.z));
+        const bool mine = g_manned == i;
+        st16(a + kAngleY, (uint16_t)(mine ? yaw : (int16_t)(hull_yaw + (i == 0 ? 0 : 0x8000))));
+        st16(a + 0x328, (uint16_t)(mine ? 0x4000 - up : 0x3400));
+        st32(a + 0x39C, 0);
+    }
+    if (!deck) { g_cannon_btn = 0; return; }
+    const V3 me = to_local(hull, link);
+    int by = -1;  // the cannon he stands by
+    for (int i = 0; i < 2; i++) if (std::hypot(me.x - kCannon[i].x, me.z - kCannon[i].z) < 220) by = i;
+    const uint32_t button = by >= 0 && (proc == 0x4 || proc == 0x6) ? bomb_button() : 0;
+    g_cannon_btn = g_manned >= 0 ? bomb_button() : button;
+    if (g_manned < 0) {
+        if (pressed & button) {
+            g_manned = by, g_take_pad = true, locked = 0xFFFFFFFF, up = 0x0C00, stand = pos_of(link);
+            yaw = (int16_t)(hull_yaw + (by == 0 ? 0 : 0x8000));  // out over the bow, or the stern
+            fired = now;  // the press that manned it does not also fire
+            trace("extras: Link mans the %s cannon", by == 0 ? "bow" : "stern");
+        }
+        return;
+    }
+    // aiming: the stick (3/4 of a turn a second at full tilt, up to 60 degrees up), or the locked monster
+    if (pressed & input::kZL) {
+        locked = 0xFFFFFFFF;
+        double best = 9000;
+        for (uint32_t id : monsters_out())
+            if (const uint32_t a = guest_call(c, GC(0x025DE50C), {id}))
+                if (const double d = std::hypot(ldf32(a + kPos) - ldf32(link + kPos), ldf32(a + kPos + 8) - ldf32(link + kPos + 8)); d < best) best = d, locked = id;
+    }
+    if (const uint32_t a = locked == 0xFFFFFFFF ? 0 : guest_call(c, GC(0x025DE50C), {locked})) {
+        // at its eyes (eyePos +0x37C); the shot's range r = 4840 sin 2e (speed 110, gravity 2.5) after its ~800 straight
+        const double dx = ldf32(a + 0x37C) - ldf32(link + kPos), dz = ldf32(a + 0x37C + 8) - ldf32(link + kPos + 8);
+        yaw = (int16_t)(atan2(dx, dz) * 32768 / M_PI);
+        up = (int16_t)(0.5 * asin(std::clamp((std::hypot(dx, dz) - 800) / 4840, 0.0, 1.0)) * 32768 / M_PI);
+    } else {
+        locked = 0xFFFFFFFF;
+        yaw = (int16_t)(yaw - g_pad_lx.load() * 0x2A0);
+        up = (int16_t)std::clamp(up + (int)(g_pad_ly.load() * 0x100), 0, 0x2AAA);
+    }
+    st16(link + 0x322, (uint16_t)yaw), st16(link + kAngleY, (uint16_t)yaw);
+    if (!(pressed & g_cannon_btn.load()) || now < fired + 1) return;
+    fired = now;
+    if (!ld8(sv + 0x6A)) { guest_call(c, GC(0x025E1988), {0x0883}); return; }
+    st8(sv + 0x6A, ld8(sv + 0x6A) - 1);
+    const double e = up * M_PI / 32768, t = yaw * M_PI / 32768;
+    static const uint32_t buf = mem::host_alloc(0x20);  // pos at +0, angle at +0x10
+    // from over the barrel, clear of Link and of the cannon's own cylinder (a shot bursts on anything it touches)
+    st32(buf, u32_bits((float)(ldf32(link + kPos) + sin(t) * cos(e) * 230)));
+    st32(buf + 4, u32_bits((float)(ldf32(link + kPos + 4) + 100 + sin(e) * 230)));
+    st32(buf + 8, u32_bits((float)(ldf32(link + kPos + 8) + cos(t) * cos(e) * 230)));
+    st16(buf + 0x10, (uint16_t)(int16_t)-up), st16(buf + 0x12, (uint16_t)yaw), st16(buf + 0x14, 0);
+    const uint32_t layer = guest_call(c, GC(0x025DED64));
+    guest_call(c, GC(0x025DEAB4), {ld32(link + 0x2C)});
+    st32(c->r[1] - 0x40 + 8, 0);  // the 9th argument, on the stack
+    const uint32_t ball = guest_call(c, GC(0x025D5928), {0x126, 0x80020004, buf, (uint32_t)(int8_t)ld8(link + kRoom), buf + 0x10, 0, 0xFFFFFFFF, 0});
+    guest_call(c, GC(0x025DEAB4), {layer});
+    if (!in_mem2(ball)) return;
+    guest_call(c, GC(0x020CB89C), {ball, 8});
+    st32(ball + 0x370, u32_bits((float)(110 * cos(e)))), st32(ball + 0x340, u32_bits((float)(110 * sin(e)))), st32(ball + 0x374, u32_bits(-2.5f));
+    guest_call(c, GC(0x025E1988), {0x2852});
+    trace("extras: deck cannon fires (yaw %d, up %d, %u bombs left)", yaw, up, ld8(sv + 0x6A));
+}
 }  // namespace
 
 // ---- the game thread, once per full logic step ----
@@ -497,11 +652,15 @@ void step(Cpu* c) {
     const bool fresh = link != last_link;  // a file loaded, a stage entered: start over
     last_link = link;
     std::string stage((const char*)mem::ptr(kStage), strnlen((const char*)mem::ptr(kStage), 8));
-    if (!in_mem2(link) || stage.empty() || stage == "sea_T" || stage == "Name" || stage == "ENDumi") return;  // title, file select
+    if (!in_mem2(link) || stage.empty() || stage == "sea_T" || stage == "Name" || stage == "ENDumi") {  // title, file select
+        g_manned = -1, g_take_pad = false, g_cannon_btn = 0;
+        return;
+    }
     const uint32_t sv = save();
     static double settle = 0;  // no spawning while a stage is still being entered (the spawns would land in the old one)
     if (fresh) {
         g_night = Spawner{}, g_sea = Spawner{}, g_gyctrl = 0xFFFFFFFF, g_ghost = g_bigship = g_phantom = g_leviathan = g_molgera = Single{};
+        g_cannon[0] = g_cannon[1] = Single{}, g_manned = -1, g_take_pad = false, g_cannon_btn = 0;
         g_gyorg_ids.clear(), g_giant_ids.clear(), g_big_hits.clear();
         settle = game_time() + 2;
         if (g_warn >= 0) wind(c, 0), g_warn = -1;  // a sea event does not outlive its stage
@@ -512,6 +671,7 @@ void step(Cpu* c) {
     g_big_hits.clear();  // refilled below by the mods whose monsters hit bigger
 
     const uint16_t max_life = ld16(sv), cur = ld16(sv + 2);
+    if (!fresh && cur < life) trace("extras: Link is hit: life %u -> %u (quarter hearts)", life, cur);
     if (on<kDamage>() && !fresh && cur < life) {  // also a hit that killed: None and x0.5 can save Link
         static const double kRate[] = {2, 4, 1e9, 0.5, 0};
         const double rate = kRate[g_choice[kDamage].load()];
@@ -540,11 +700,15 @@ void step(Cpu* c) {
     }
 
     const double now = game_time(), hour = ldf32(sv + 0x24) / 15;
-    // on the water: riding the boat (daPy_lk_c::mCurProc +0x65F0, SHIP_READY..SHIP_RESTART but not SHIP_GET_OFF) or
-    // swimming (mModeFlg +0x6A70, ModeFlg_SWIM); the sea stage also holds the islands
+    // on the water: riding the boat (daPy_lk_c::mCurProc +0x65F0, SHIP_READY..SHIP_RESTART but not SHIP_GET_OFF),
+    // swimming (mModeFlg +0x6A70, ModeFlg_SWIM) or on the Big ship's deck, which is the sea for every mod; the sea
+    // stage also holds the islands
     const int proc = (int)ld32(link + 0x65F0);
-    const bool water = (proc >= 0x86 && proc <= 0x91 && proc != 0x90) || (ld32(link + 0x6A70) & 0x40000);
-    const bool night = hour >= 19 || hour < 5, sea = stage == "sea" && water, boat = proc >= 0x86 && proc <= 0x91 && proc != 0x90;
+    const bool riding = proc >= 0x86 && proc <= 0x91 && proc != 0x90, swimming = ld32(link + 0x6A70) & 0x40000;
+    const uint32_t hull = on<kBigShip>() && stage == "sea" ? g_bigship.actor(c) : 0;
+    const bool deck = hull && !riding && !swimming && on_deck(hull, link);
+    const bool water = riding || swimming || deck;
+    const bool night = hour >= 19 || hour < 5, sea = stage == "sea" && water, boat = riding || deck;
     static const double kEvery[] = {25, 12, 5};  // seconds between spawns: Sometimes, Often, Relentless
     static const size_t kMax[] = {2, 4, 7};      // monsters out at once
     direct(c, sv, link, now, night, water, boat, settled, stage);
@@ -783,25 +947,121 @@ void step(Cpu* c) {
         }
     }
     horror_audio(c, link, now, sea_event || (g_until[kNight] > now && !always(kNight) && night), on<kAudio>());
-    // Big ship: a pirate ship hull made once the King of Red Lions (dComIfGp_getShipActor, play +0x5B3C) is in the sea
-    // stage, then put at his position and heading every step (current.pos, current.angle.y +0x322, shape_angle.y)
+    // the GamePad since the last step
+    static uint32_t pad_prev = 0;
+    const uint32_t pad_hold = g_pad_hold.load(), pressed = g_pad_seen.exchange(0) & ~pad_prev;
+    pad_prev = pad_hold;
+    // Big ship: Tetra's ship sails beside the King of Red Lions (dComIfGp_getShipActor, play +0x5B3C), he on its +x
+    // flank (he stays the boat that sails; the hull is put beside him every step). Getting out of the boat (SHIP_GET_OFF)
+    // leaves it at anchor where it is; the get-off jump is made a vault over its gunwale onto its deck. Back in the boat, sailing up alongside it again (his place
+    // on its flank within 450, slow) hitches it on. It anchors by itself within 4000 of an island's centre or where
+    // land rises under its bow, stern or flanks, so it never sails into an island. It is made afresh beside him after a
+    // stage change, once he rides out at sea (never at a pier).
+    // Its deck sits 35 above his seat (SHIP_GET_OFF's ledge, l_ship_ledge.y): the hull rides low, deck near the sea.
+    static bool anchored = false;
+    static int joining = 0;  // steps left of easing back into its place beside him
     if (const uint32_t korl = ld32(kPlay + 0x5B3C); on<kBigShip>() && stage == "sea" && in_mem2(korl) && settled) {
-        const uint32_t hull = g_bigship.actor(c);
+        // his place in the hull's frame, by the main deck on its +x flank, where his get-off jump (toward his own -x)
+        // goes into the hull (its side, out to x 700 at the waterline, keeps him about 900 out: measured)
+        constexpr double kLionX = 900, kLionZ = 250, kDeckAbove = 35;
+        const int16_t yaw = (int16_t)ld16(korl + kAngleY);
+        V3 to = to_world(pos_of(korl), yaw, {-kLionX, 0, -kLionZ});
+        to.y = ldf32(korl + kPos + 4) + kDeckAbove - kDeckY;
+        auto put = [](uint32_t h, V3 p, int16_t a) {
+            st32(h + kPos, u32_bits((float)p.x)), st32(h + kPos + 4, u32_bits((float)p.y)), st32(h + kPos + 8, u32_bits((float)p.z));
+            st16(h + 0x322, (uint16_t)a), st16(h + kAngleY, (uint16_t)a);
+        };
+        // land under its outline, there (ground check from 900 up, under its own sail and crow's nest, which the
+        // check would find: 02549F4C returns the start height when it finds nothing, below 5 over water)
+        auto land = [c](V3 o, int16_t a) {
+            static const uint32_t buf = mem::host_alloc(0x10);
+            // clear of its own deck and of the boat (whose own collision the check finds)
+            for (V3 l : {V3{0, 0, 2700}, V3{0, 0, -2200}, V3{1000, 0, 250}, V3{-1200, 0, 250}}) {
+                const V3 w = to_world(o, a, l);
+                st32(buf, u32_bits((float)w.x)), st32(buf + 4, u32_bits(900.f)), st32(buf + 8, u32_bits((float)w.z));
+                guest_call(c, GC(0x02549F4C), {buf});
+                if (const float g = (float)c->f[1].ps0; g != 900.f && g >= 5) {
+                    trace("extras: Big ship: land %.0f at local %.0f %.0f", g, l.x, l.z);
+                    return true;
+                }
+            }
+            return false;
+        };
+        auto isle = [](V3 p) { return std::hypot(p.x - std::round(p.x / 1e5) * 1e5, p.z - std::round(p.z / 1e5) * 1e5); };
         if (!hull) {
-            if (g_bigship.wanted(c, now)) {
+            if (riding && isle(to) >= 4000 && g_bigship.wanted(c, now) && !land(to, yaw)) {  // not at a pier: out at sea
                 Spawner none;
                 g_bigship.id = spawn(c, none, kPirates, korl, 0, false, 0, false);
                 g_bigship.next = now + 5;
+                anchored = false, joining = 0;
             }
         } else {
-            // the hull's centre 1300 ahead of him, so he rides at its stern
-            const double yaw = (int16_t)ld16(korl + kAngleY) * M_PI / 32768;
-            st32(hull + 0x314, u32_bits((float)(ldf32(korl + 0x314) + sin(yaw) * 1300)));
-            st32(hull + 0x318, ld32(korl + 0x318));
-            st32(hull + 0x31C, u32_bits((float)(ldf32(korl + 0x31C) + cos(yaw) * 1300)));
-            st16(hull + 0x322, ld16(korl + kAngleY));
-            st16(hull + kAngleY, ld16(korl + kAngleY));
+            static uint32_t placed = 0;
+            static int land_check = 0;
+            if (placed != g_bigship.id) placed = g_bigship.id, put(hull, to, yaw), anchored = false, joining = 0;
+            const bool checking = ++land_check % 15 == 0, slot_land = checking && land(to, yaw);
+            if (!anchored && (!riding || isle(to) < 4000 || slot_land)) {
+                anchored = true;
+                trace("extras: Big ship anchors (%s)", !riding ? "Link is out of the boat" : slot_land ? "land" : "near an island");
+            } else if (anchored && riding && !joining && checking) {  // he alongside, heading its way, slow
+                const V3 l = to_local(hull, korl);
+                if (std::hypot(l.x - kLionX, l.z - kLionZ) < 450 && std::abs((int16_t)(yaw - (int16_t)ld16(hull + kAngleY))) < 0x1800 &&
+                    std::fabs(ldf32(korl + 0x370)) < 20 && isle(to) >= 4000 && !slot_land)
+                    anchored = false, joining = 20, trace("extras: Big ship hitched on again");
+            }
+            if (!anchored) {
+                if (joining > 0) {  // eased into its place over 20 steps (2/3 s)
+                    const V3 at = pos_of(hull);
+                    const double k = 1.0 / joining--;
+                    const int16_t a = (int16_t)ld16(hull + kAngleY);
+                    put(hull, {at.x + (to.x - at.x) * k, at.y + (to.y - at.y) * k, at.z + (to.z - at.z) * k}, (int16_t)(a + (int16_t)(yaw - a) * k));
+                } else {
+                    put(hull, to, yaw);
+                }
+            }
+            // out of the boat beside it: the get-off jump (SHIP_GET_OFF, its jump phase link +0x69C0 1: speed.y +0x340,
+            // mNormalSpeed +0x6A14 8, gravity +0x374) is made a vault over the gunwale (126 above the deck, its outer
+            // lip 167): up at 36, and as fast as lands him at x 300 when he is back at deck height
+            static bool vaulted = false;
+            constexpr double kVault = 36;
+            if (proc != 0x90) vaulted = false;
+            else if (!vaulted && ld32(link + 0x69C0) == 1) {
+                vaulted = true;
+                if (const V3 l = to_local(hull, korl); std::hypot(l.x - kLionX, l.z - kLionZ) < 300) {
+                    const double g = std::min(-0.5, (double)ldf32(link + 0x374)), air = 2 * kVault / -g;
+                    const double run = std::clamp((to_local(hull, link).x - 300) / air, 4.0, 30.0);
+                    st32(link + 0x340, u32_bits((float)kVault)), st32(link + 0x6A14, u32_bits((float)run));
+                    trace("extras: Link vaults onto the Big ship's deck (gravity %.2f, run %.1f)", g, run);
+                }
+            }
+            // back into the boat from the deck: A at the gunwale by him, standing or walking (procShipReady_init
+            // 023ECA94, the game's own boarding: a hop onto his ledge)
+            if (deck && (proc == 0x4 || proc == 0x6) && (pressed & input::kA) && std::hypot(ldf32(link + kPos) - ldf32(korl + kPos), ldf32(link + kPos + 8) - ldf32(korl + kPos + 8)) < 700) {
+                guest_call(c, GC(0x023ECA94), {link});
+                trace("extras: Link gets back in the boat from the deck");
+            }
+            // out of the water onto the deck: A while swimming by its side puts Link just inside the gunwale, falling
+            // (procFall_init 023F6564 (1, 0): no speed): position, old position (+0x300) and the fall's start (+0x6A48/C)
+            if (swimming && (pressed & input::kA)) {
+                const V3 l = to_local(hull, link);
+                if (std::fabs(l.x) > 380 && std::fabs(l.x) < 900 && l.z > -1100 && l.z < 950) {
+                    const V3 w = to_world(pos_of(hull), (int16_t)ld16(hull + kAngleY), {l.x > 0 ? 300.0 : -300.0, kDeckY + 40, l.z});
+                    for (uint32_t base : {(uint32_t)kPos, 0x300u})
+                        st32(link + base, u32_bits((float)w.x)), st32(link + base + 4, u32_bits((float)w.y)), st32(link + base + 8, u32_bits((float)w.z));
+                    st32(link + 0x340, 0), st32(link + 0x6A48, u32_bits((float)w.y)), st32(link + 0x6A4C, u32_bits((float)w.y));
+                    c->f[1].ps0 = 0;
+                    guest_call(c, GC(0x023F6564), {link, 1});
+                    trace("extras: Link climbs out of the water onto the deck");
+                }
+            }
         }
+    }
+    if (fresh) anchored = false;
+    deck_cannons(c, sv, link, hull, deck, proc, pressed, now);
+    if (static double t = 0; hull && now - t >= 1) {  // where Link is about the Big ship, once a second (the trace)
+        t = now;
+        const V3 l = to_local(hull, link);
+        trace("extras: Big ship: Link proc %#x deck %d swim %d at %.0f %.0f %.0f, anchored %d, cannon %d, bombs %u", proc, deck, swimming, l.x, l.y, l.z, anchored, g_manned, ld8(sv + 0x6A));
     }
     // test aid: WWHD_EXTRAS_SPAWN=proc:param:dist:dy[:anglex] (hex) spawns that once, 3 s after Link appears
     static const char* test_spawn = getenv("WWHD_EXTRAS_SPAWN");
@@ -817,6 +1077,19 @@ void step(Cpu* c) {
             }
         }
     }
+}
+
+// each GamePad read (any thread)
+void filter_pad(input::PadState& s) {
+    if (overlay::blocks_input()) return;      // the settings overlay has the pad
+    if (s.buttons & input::kPlus) g_take_pad = false;  // the pause menu: the cannon lets go (deck_cannons sees it)
+    g_pad_hold = s.buttons;
+    g_pad_seen |= s.buttons;
+    g_pad_lx = s.lx, g_pad_ly = s.ly;
+    // manned: the stick, the Bomb Bag's button and B are the cannon's; ZL is held for the game, which keeps the
+    // camera behind Link (and so behind the barrel), and is the cannon's lock-on too
+    if (g_take_pad) s.lx = s.ly = 0, s.buttons = (s.buttons & ~(g_cannon_btn.load() | input::kB)) | input::kZL;
+    else s.buttons &= ~g_cannon_btn.load();
 }
 }  // namespace mods::extras
 

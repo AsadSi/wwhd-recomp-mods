@@ -1,0 +1,16 @@
+# title -> Quest Log 1 (A presses end before the portable state puts Link on the boat), then with Big ship on: get out
+# beside it (B: onto its deck), walk a little each way, A at the gunwale to get back in, paddle and set sail away from it
+3-3.2 A
+5-5.2 A
+7-7.2 A
+9-9.2 A
+11-11.2 A
+13-13.2 A
+22-22.2 B
+26-27.5 STICK 0 1
+29-30.5 STICK 0 -1
+32-33 STICK 1 0
+34-34.2 A
+38-42 STICK 0 1
+42-42.2 A
+44-52 STICK 0 1

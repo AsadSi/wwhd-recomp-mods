@@ -4,6 +4,7 @@
 #include <vector>
 
 struct Cpu;
+namespace input { struct PadState; }
 
 namespace mods::extras {
 struct Mod {
@@ -25,4 +26,5 @@ extern const std::vector<std::string> kOften;  // Rare, Now and then (the defaul
 int often(const std::string& id);
 void set_often(const std::string& id, int often);
 void step(Cpu* c);  // game thread, once per full logic step (interp.cpp)
+void filter_pad(input::PadState& s);  // each GamePad read (camera.cpp's filter_pad): the deck cannon's controls
 }  // namespace mods::extras

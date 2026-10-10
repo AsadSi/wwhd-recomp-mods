@@ -42,6 +42,7 @@
 #include <mutex>
 #include <vector>
 
+#include "extras.h"
 #include "input.h"
 #include "mods.h"
 #include "../motion/motion.h"
@@ -185,6 +186,7 @@ void mouse_button(int button, bool down) {
 
 // end of input::read(): synthetic right stick for the mouse, R3 pulses for the wheel, left click
 void filter_pad(input::PadState& s) {
+    extras::filter_pad(s);
     inject_test_mouse();
     test_goto(s);
     uint64_t now = step();

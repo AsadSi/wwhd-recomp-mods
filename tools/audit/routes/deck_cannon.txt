@@ -1,0 +1,19 @@
+# title -> Quest Log 1, then with Big ship on and Haunted sea forced: get out onto its deck (B), walk to the stern
+# cannon (he stands still by it at about 38 s), man it (A), turn and raise it, fire (A), lock on (ZL) and fire
+# twice, leave (B)
+3-3.2 A
+5-5.2 A
+7-7.2 A
+9-9.2 A
+11-11.2 A
+13-13.2 A
+22-22.2 B
+26-26.9 STICK 0 1
+28-29 STICK -1 0
+39-39.2 A
+40.5-41.1 STICK 1 0.5
+42-42.2 A
+44-44.2 ZL
+45-45.2 A
+47-47.2 A
+50-50.2 B
