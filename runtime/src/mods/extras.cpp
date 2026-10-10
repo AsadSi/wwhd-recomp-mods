@@ -90,6 +90,7 @@ struct Single {
 };
 Single g_ghost, g_bigship, g_phantom, g_leviathan, g_molgera;
 uint32_t g_leviathan_actor = 0, g_molgera_actor = 0;  // for the hooks below, which must not call into the game
+int g_molgera_dives = 0;  // times Molgera has dived and come up ahead of the boat again this event
 // ph_class is the Peahat and the Seahat: the parameter's low byte picks it (0 or 0xFF a Peahat, else a Seahat, which
 // loads its own archive). Giant Seahats: the class ignores the actor's scale; its two J3DModels (body +0x12C4,
 // propeller +0x12CC) are drawn at their base scale (J3DModel +0xBC in HD), which nothing else sets, so it is set there
@@ -323,7 +324,7 @@ void remove_molgera(Cpu* c) {
         if (st32(found, 0); guest_call(c, GC(0x025D5578), {0xDB, found}) && ld32(found)) guest_call(c, GC(0x025D57E0), {ld32(found)});
         guest_call(c, GC(0x025D57E4), {g_molgera.id});
     }
-    g_molgera = Single{}, g_molgera_actor = 0;
+    g_molgera = Single{}, g_molgera_actor = 0, g_molgera_dives = 0;
     st32(GD(kMolgeraScale), u32_bits(1.3f)), st32(GD(kMolgeraPush), u32_bits(6.f)), st32(GD(kMolgeraBite), u32_bits(700.f));
 }
 void wind(Cpu* c, float power) { c->f[1].ps0 = power; guest_call(c, GC(0x0257E594)); }
@@ -396,7 +397,7 @@ void direct(Cpu* c, uint32_t sv, uint32_t link, double now, bool night, bool wat
             if (ashore || isle < 3500) finish(c, k, now, ashore ? "Link is off the water" : "near an island");
             else if (now >= g_until[k]) finish(c, k, now, "time");
             else if (k == kPhantom && g_phantom.id != 0xFFFFFFFF && now >= g_phantom.next && !g_phantom.actor(c)) finish(c, k, now, "he is gone");
-            else if (const uint32_t m = k == kMolgera ? g_molgera.actor(c) : 0; m && ld16(m + 0x1B32) && std::hypot(ldf32(m + kPos) - x, ldf32(m + kPos + 8) - z) > 4000)
+            else if (const uint32_t m = k == kMolgera && g_molgera_dives >= 3 ? g_molgera.actor(c) : 0; m && ld16(m + 0x1B32) && std::hypot(ldf32(m + kPos) - x, ldf32(m + kPos + 8) - z) > 4000)
                 finish(c, k, now, "outrun");
         }
     // the Phantom stalker ends as Link boards the boat or leaves the sea stage, after its time, or once he is gone
@@ -750,16 +751,23 @@ void step(Cpu* c) {
             st8(a + 0x1B5C, 1), st32(a + 0x3EC8, 0);
             if (ld16(a + 0x1B32) == 0) st16(a + 0x1B32, 1), st16(a + 0x1B34, 0), st32(a + kPos + 4, u32_bits(-2500.f));
             st32(GD(kMolgeraScale), u32_bits(1.3f * 2.5f)), st32(GD(kMolgeraPush), 0), st32(GD(kMolgeraBite), u32_bits(1300.f));
-            // it makes itself at the world's origin (its boss room's centre): it is put straight ahead of Link once, then
-            // follows at up to 25 a step, slower than the boat under sail (outrun by 4000, the event ends)
+            // it makes itself at the world's origin (its boss room's centre): it is put straight ahead of Link, then
+            // chases at up to 40 a step, about a boat under full sail; left 3000 behind it dives and bursts out ahead
+            // again, three times, and then lets him go (outrun by 4000, the event ends)
             const double yaw = (int16_t)ld16(link + kAngleY) * M_PI / 32768;
             const float tx = (float)(ldf32(link + kPos) + sin(yaw) * 1100), tz = (float)(ldf32(link + kPos + 8) + cos(yaw) * 1100);
             static uint32_t placed = 0;
+            if (placed == g_molgera.id && g_molgera_dives < 3 && ld16(a + 0x1B32) &&
+                std::hypot(ldf32(a + kPos) - ldf32(link + kPos), ldf32(a + kPos + 8) - ldf32(link + kPos + 8)) > 3000) {
+                placed = 0, g_molgera_dives++;
+                st16(a + 0x1B32, 1), st16(a + 0x1B34, 0), st32(a + kPos + 4, u32_bits(-2500.f));
+                trace("extras: Molgera dives and comes up ahead again (%d)", g_molgera_dives);
+            }
             const bool snap = placed != g_molgera.id;
             placed = g_molgera.id;
             for (auto [o, to] : {std::pair{kPos, tx}, std::pair{kPos + 8, tz}}) {
                 const float at = (float)ldf32(a + o);
-                st32(a + o, u32_bits(snap ? to : at + std::clamp(to - at, -25.f, 25.f)));
+                st32(a + o, u32_bits(snap ? to : at + std::clamp(to - at, -40.f, 40.f)));
             }
             // at its size its head's spheres reach the boat every few seconds for 4 hearts: a hit costs at most one
             // heart, and none in the 4 s after one (unless the Damage multiplier says otherwise)
