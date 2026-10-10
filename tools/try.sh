@@ -39,7 +39,7 @@ hits; 300 rupees and a blue potion), Phantom 18 cannon hits drive him off. Your 
 Titanic (12x) Phantom Ganon comes at about 30 s: get onto the deck first, then fight him from it (cannons, bow,
 sword). His dark balls, their bursts and his hit sparks are his size." ;;
   molgera-chase) ON=(MOLGERA); EVENT="molgera@+20"; NOTE="Molgera comes at about 20 s, far off, and hunts you.
-Set sail (A) and sail full speed to get away; it sweeps in to bite and turns to come again. Or turn and fight it." ;;
+Set sail (A) and sail full speed to get away; it circles you like a Gyorg, charges in to bite, then circles again. Or turn and fight it." ;;
   phantom-titanic) ON=(PHANTOM_GANON); EVENT="phantom@+20"; export WWHD_MOD_PHANTOM_GANON_CHOICE=1
   NOTE="Titanic (12x) Phantom Ganon at about 20 s: his dark balls, their bursts and the sparks of hits are his size now." ;;
   anchor-island) ON=(BIG_SHIP); NOTE="$SHIP

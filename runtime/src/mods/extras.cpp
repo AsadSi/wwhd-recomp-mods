@@ -101,7 +101,9 @@ constexpr int kLeviathanHealth = 48, kMolgeraHealth = 80;
 int g_leviathan_pool = kLeviathanHealth, g_molgera_pool = kMolgeraHealth;
 bool g_leviathan_slain = false;
 double g_step_time = 0;  // game time at the last step, for the hooks
-bool g_molgera_gave_up = false;  // it has stopped hunting him (the event ends once he is 4000 away)
+bool g_molgera_dying = false;     // slain, diving under (hook_020FF80C lets it dive at its own speed)
+int32_t g_molgera_pitch = -1;     // its pitch before a return to its flight's start, which points it straight up: put back
+bool g_molgera_gave_up = false;  // it has stopped hunting him (the event ends once he is 5000 away)
 // ph_class is the Peahat and the Seahat: the parameter's low byte picks it (0 or 0xFF a Peahat, else a Seahat, which
 // loads its own archive). Giant Seahats: the class ignores the actor's scale; its two J3DModels (body +0x12C4,
 // propeller +0x12CC) are drawn at their base scale (J3DModel +0xBC in HD), which nothing else sets, so it is set there
@@ -302,7 +304,8 @@ const std::vector<Mod>& catalogue() {
          "it loses interest, or kill it (it takes a lot of hitting) for 200 rupees and a blue potion.", {}, true},
         {"molgera", "Molgera of the deep", "Spooky",
          "Very rarely, far out at sea, the wind dies, fog rolls in and Molgera, the Wind Temple's sand worm and bigger "
-         "than in its lair, comes for Link over the water from far off, sweeping in to bite and turning to come again. "
+         "than in its lair, comes for Link over the water from far off, circling him as a Gyorg does and charging in to bite, "
+         "then round again; when it dies it bursts apart as it dives under. "
          "It is a little slower than the boat under full sail: sail well and leave it behind, or "
          "fight it (it takes a lot of hitting) for 300 rupees and a blue potion.", {}, true},
         {"phantom-stalker", "Phantom stalker", "Spooky",
@@ -387,6 +390,16 @@ void loot(Cpu* c, int rupees) {
             break;
         }
 }
+// an effect (dPa_control_c::set 025A847C on play +0x5AB0: group 0, id, pos, angle, scale, alpha 0xFF, no callback;
+// on the stack the room -1 and no colours)
+void effect(Cpu* c, uint16_t id, V3 at, float scale) {
+    static const uint32_t buf = mem::host_alloc(0x20);  // pos +0, angle +0xC, scale +0x14
+    st32(buf, u32_bits((float)at.x)), st32(buf + 4, u32_bits((float)at.y)), st32(buf + 8, u32_bits((float)at.z));
+    st16(buf + 0xC, (uint16_t)rand()), st16(buf + 0xE, (uint16_t)rand()), st16(buf + 0x10, 0);
+    for (int i = 0; i < 3; i++) st32(buf + 0x14 + 4 * i, u32_bits(scale));
+    st32(c->r[1] - 0x40 + 8, 0xFFFFFFFF), st32(c->r[1] - 0x40 + 0xC, 0), st32(c->r[1] - 0x40 + 0x10, 0), st32(c->r[1] - 0x40 + 0x14, 0);
+    guest_call(c, GC(0x025A847C), {ld32(kPlay + 0x5AB0), 0, id, buf, buf + 0xC, buf + 0x14, 0xFF, 0});
+}
 void remove_molgera(Cpu* c) {
     if (const uint32_t a = g_molgera.actor(c)) {
         guest_call(c, GC(0x025D57E4), {ld32(a + 0x1E38)});
@@ -394,7 +407,7 @@ void remove_molgera(Cpu* c) {
         if (st32(found, 0); guest_call(c, GC(0x025D5578), {0xDB, found}) && ld32(found)) guest_call(c, GC(0x025D57E0), {ld32(found)});
         guest_call(c, GC(0x025D57E4), {g_molgera.id});
     }
-    g_molgera = Single{}, g_molgera_actor = 0, g_molgera_gave_up = false;
+    g_molgera = Single{}, g_molgera_actor = 0, g_molgera_gave_up = false, g_molgera_dying = false;
     st32(GD(kMolgeraScale), u32_bits(1.3f)), st32(GD(kMolgeraPush), u32_bits(6.f)), st32(GD(kMolgeraBite), u32_bits(700.f));
 }
 void wind(Cpu* c, float power) { c->f[1].ps0 = power; guest_call(c, GC(0x0257E594)); }
@@ -473,7 +486,7 @@ void direct(Cpu* c, uint32_t sv, uint32_t link, double now, bool night, bool wat
             if (ashore || isle < 3500) finish(c, k, now, ashore ? "Link is off the water" : "near an island");
             else if (now >= g_until[k]) finish(c, k, now, "time");
             else if (k == kPhantom && g_phantom.id != 0xFFFFFFFF && now >= g_phantom.next && !g_phantom.actor(c)) finish(c, k, now, "he is gone");
-            else if (const uint32_t m = k == kMolgera && g_molgera_gave_up ? g_molgera.actor(c) : 0; m && std::hypot(ldf32(m + kPos) - x, ldf32(m + kPos + 8) - z) > 4000)
+            else if (const uint32_t m = k == kMolgera && g_molgera_gave_up ? g_molgera.actor(c) : 0; m && std::hypot(ldf32(m + kPos) - x, ldf32(m + kPos + 8) - z) > 5000)
                 finish(c, k, now, "outrun");
         }
     // the Phantom stalker ends as Link boards the boat or leaves the sea stage, after its time, or once he is gone
@@ -993,10 +1006,16 @@ void step(Cpu* c) {
         static uint32_t counted = 0;  // the Leviathan its health was set for
         if (g_leviathan_actor && counted != g_leviathan.id)
             counted = g_leviathan.id, g_leviathan_pool = kLeviathanHealth, g_leviathan_slain = false, st8(g_leviathan_actor + 0x3A1, 100);
-        if (g_leviathan_slain) {  // the game's death burst and cry have played: it goes at once (sinking away it could
-            g_leviathan_slain = false;  // still be hit, each hit its death again), and the event ends with it
+        // slain: the game's own death (its burst and cry, and it sinks) plays for 4 s at its size, then it goes and
+        // the event ends with it
+        static double died = -1;
+        if (counted == g_leviathan.id && g_leviathan_slain && died < 0) {
+            died = now;
             trace("extras: the Leviathan is slain");
             loot(c, 200);
+        }
+        if (died >= 0 && (now - died > 4 || !g_leviathan_actor)) {
+            died = -1, g_leviathan_slain = false;
             finish(c, kLeviathan, now, "the Leviathan is slain");
             g_leviathan.next = now + 600;  // not again at once (Always)
             g_leviathan_actor = 0;
@@ -1039,20 +1058,27 @@ void step(Cpu* c) {
             st8(a + 0x1B5C, 1), st32(a + 0x3EC8, 0);
             st32(GD(kMolgeraScale), u32_bits(1.3f * 2.5f)), st32(GD(kMolgeraPush), 0), st32(GD(kMolgeraBite), u32_bits(1300.f));
             // It makes itself at the world's origin (its boss room's centre) and is put far off ahead of Link, then
-            // hunts him in one motion in its own flight through the sand, here the sea (state 10 "fly", substate 2:
-            // fly_pos_move steers at Link's eyes every step, the FLY animation, its body drawn), held a little slower
-            // than a boat under full sail (speedF +0x370 34; the boat makes about 40 a step), its head 80-300 above the
-            // sea so it shows. Within 1200 it lunges and bites (state 5: hook_020FF80C turns a bite that catches him
-            // into a miss, which sends it back to waiting, state 1); it flies on at once, and does not lunge again for
-            // 6 s, so it sweeps past and turns. Left 3000 behind for 8 s, it gives up and the event ends once he is 4000 away.
+            // hunts him as a Gyorg does, in its own flight through the sand, here the sea (state 10 "fly"), its head
+            // 80-300 above the sea so it shows: it circles him 3000 out for 6-10 s (nearer, its body sweeps the Big ship's deck) (substate 1, the FLY animation,
+            // steering at its target +0x1B38 that we set ahead of it on the circle; its timers +0x1B50/52 held so it
+            // stays; held to 34 a step in hook_020FF80C, a little slower than a boat under full sail, 40), then charges
+            // (substate 2 by its own timer: jaws open, steering at Link's eyes every step), lunges within 1200 and bites
+            // (state 5: hook_020FF80C turns a bite that catches him into a miss, which sends it back to waiting, state
+            // 1), and flies on to circle again; a charge that passes him (substate 3, its dive) goes back to circling.
+            // Left 4000 behind for 8 s, it gives up and flies off, and the event ends once he is 5000 away.
             static uint32_t placed = 0;
-            static double waited = 0, calm_until = 0;
-            static bool closed = false;  // closed: it has once come within 3000 of him
+            static double waited = 0, phase_at = 0, died = -1, blast = 0;
+            static bool closed = false, charging = false;  // closed: it has once come within 4000 of him
+            static int dir = 1;  // which way round it circles
             const double yaw = (int16_t)ld16(link + kAngleY) * M_PI / 32768;
             const double d = std::hypot(ldf32(a + kPos) - ldf32(link + kPos), ldf32(a + kPos + 8) - ldf32(link + kPos + 8));
-            auto hunt = [a] { st16(a + 0x1B32, 10), st16(a + 0x1B34, 0), st16(a + 0x1B52, 0); };
+            auto hunt = [a] { g_molgera_pitch = ld16(a + 0x320), st16(a + 0x1B32, 10), st16(a + 0x1B34, 0), st16(a + 0x1B52, 0); };
+            auto circle = [&] { charging = false, phase_at = now + 6 + rand() % 5, dir = rand() % 2 ? 1 : -1; };
+            auto target = [a](double x, double y, double z) {
+                st32(a + 0x1B38, u32_bits((float)x)), st32(a + 0x1B3C, u32_bits((float)y)), st32(a + 0x1B40, u32_bits((float)z));
+            };
             if (placed != g_molgera.id) {
-                placed = g_molgera.id, closed = false, g_molgera_gave_up = false;
+                placed = g_molgera.id, closed = false, g_molgera_gave_up = false, died = -1, g_molgera_dying = false;
                 // its head and the ring of positions and angles its body follows (+0x674, 256 x 12; +0x1274, 256 x 6),
                 // all at one point, so the body is not strung out back to where it was
                 st32(a + kPos, u32_bits((float)(ldf32(link + kPos) + sin(yaw) * 5000))), st32(a + kPos + 4, u32_bits(-60.f));
@@ -1061,27 +1087,49 @@ void step(Cpu* c) {
                     for (uint32_t k = 0; k < 12; k += 4) st32(a + 0x674 + 12 * i + k, ld32(a + kPos + k));
                     for (uint32_t k = 0; k < 6; k += 2) st16(a + 0x1274 + 6 * i + k, ld16(a + 0x320 + k));
                 }
-                hunt();
+                hunt(), circle();
                 trace("extras: Molgera surfaces far off and hunts Link");
             }
             const int state = ld16(a + 0x1B32) == 13 ? 10 : ld16(a + 0x1B32), sub = ld16(a + 0x1B34);
+            const double heading = (int16_t)ld16(a + 0x322) * M_PI / 32768;
             if (state != 1) waited = now;
-            if (state == 10) {
-                if (sub == 1 || sub == 2 || sub == 3) {  // never its dive (3) into the sand
-                    st16(a + 0x1B34, 2), st16(a + 0x1B50, 150), st32(a + 0x370, u32_bits(34.f));
+            if (died >= 0) {  // slain: it dives under, bursting along its way (its own death's blasts and sound)
+                if (state != 10 || sub != 1) hunt();
+                st16(a + 0x1B50, 100), st16(a + 0x1B52, 200);
+                target(ldf32(a + kPos) + sin(heading) * 1500, -4000, ldf32(a + kPos + 8) + cos(heading) * 1500);
+                if (now - blast >= 0.13) {
+                    blast = now;
+                    effect(c, 0x825D, {ldf32(a + kPos) + rand() % 300 - 150, ldf32(a + kPos + 4) + rand() % 300 - 150, ldf32(a + kPos + 8) + rand() % 300 - 150}, 5);
+                    guest_call(c, GC(0x025E1988), {0x5801});
+                }
+            } else if (state == 10) {
+                if (sub == 1 || sub == 2) {
+                    st16(a + 0x1B50, 150);
                     st32(a + kPos + 4, u32_bits(std::clamp((float)ldf32(a + kPos + 4), 80.f, 300.f)));  // head and body above the waves
                 }
-                if (d < 3000) closed = true;
-                static double behind_since = 0;  // left behind only after 8 s more than 3000 off: it keeps on after him
-                if (d <= 3000 || !closed || g_molgera_gave_up) behind_since = now;
+                if (sub == 2) st32(a + 0x370, u32_bits(34.f));
+                if (sub == 1 && !charging) {
+                    st16(a + 0x1B52, 200);
+                    if (g_molgera_gave_up) {  // off and away from him
+                        target(ldf32(a + kPos) + sin(heading) * 5000, 150, ldf32(a + kPos + 8) + cos(heading) * 5000);
+                    } else {  // on the circle about him, ahead of where it is
+                        const double b = atan2(ldf32(a + kPos) - ldf32(link + kPos), ldf32(a + kPos + 8) - ldf32(link + kPos + 8)) + dir * 1.0;
+                        target(ldf32(link + kPos) + sin(b) * 3000, 150, ldf32(link + kPos + 8) + cos(b) * 3000);
+                        if (now >= phase_at) charging = true, st16(a + 0x1B52, 0), trace("extras: Molgera charges");
+                    }
+                }
+                if (sub == 3) hunt(), circle();  // its charge passed him: round again
+                if (d < 4000) closed = true;
+                static double behind_since = 0;  // left behind only after 8 s more than 4000 off: it keeps on after him
+                if (d <= 4000 || !closed || g_molgera_gave_up) behind_since = now;
                 if (now - behind_since > 8) {
-                    g_molgera_gave_up = true;
+                    g_molgera_gave_up = true, charging = false;
                     trace("extras: Molgera gives up the hunt");
-                } else if (d < 1200 && now >= calm_until && !g_molgera_gave_up) {
+                } else if (sub == 2 && d < 1200 && !g_molgera_gave_up) {
                     st16(a + 0x1B32, 5), st16(a + 0x1B34, 0), st32(a + 0x370, 0);
                 }
-            } else if (state == 1 && !g_molgera_gave_up && (now - waited > 0.5)) {  // after a bite: on after him at once
-                hunt(), calm_until = now + 6;
+            } else if (state == 1 && now - waited > 0.5) {  // after a bite: on, to circle again
+                hunt(), circle();
                 trace("extras: Molgera flies on after its bite");
             }
             // at its size its head's spheres reach the boat every few seconds for 4 hearts: a hit costs at most one
@@ -1110,13 +1158,19 @@ void step(Cpu* c) {
                 guest_call(c, GC(0x0251621C), {sph});
             }
             static double last_hit = -1;  // one hit per 0.3 s: a bomb's burst, a sword's swing last a few steps
+            if (died >= 0) damage = 0;
             if (damage && now - last_hit >= 0.3) trace("extras: Molgera is hit for %d (%d of %d left)", damage, g_molgera_pool - damage, kMolgeraHealth);
             if (damage && now - last_hit >= 0.3 && (last_hit = now, g_molgera_pool -= damage) <= 0) {
                 trace("extras: Molgera is slain");
                 loot(c, 300);
+                died = blast = now, g_molgera_dying = true;
+                effect(c, 0x8265, pos_of(a), 2.5f);  // its last hit's burst
+                guest_call(c, GC(0x025E1988), {0x591B});
+            } else if (died >= 0 && now - died > 1.8) {  // under: gone, and the event ends
+                died = -1, g_molgera_dying = false;
                 finish(c, kMolgera, now, "Molgera is slain");
                 g_molgera.next = now + 600;  // not again at once (Always)
-            } else if (always(kMolgera) && g_molgera_gave_up && d > 4000) {  // no event to end: it goes, and comes back later
+            } else if (always(kMolgera) && g_molgera_gave_up && d > 5000) {  // no event to end: it goes, and comes back later
                 remove_molgera(c);
                 g_molgera.next = now + 300;
             }
@@ -1451,6 +1505,11 @@ extern "C" void hook_020FF80C(Cpu* c) {
     if (!ours) return;
     if (ld16(a + 0x3E96) == 1)
         st16(a + 0x3E96, 0), st16(a + 0x1B32, 1), st16(a + 0x1B34, 0), st16(a + 0x1B50, 0x7A), st16(a + 0x1B54, 100);
+    if (ld16(a + 0x1B32) == 10 && ld16(a + 0x1B34) == 1) {
+        if (g_molgera_pitch >= 0) st16(a + 0x320, (uint16_t)g_molgera_pitch), g_molgera_pitch = -1;
+        if (!g_molgera_dying)  // its circling flight makes 40 a step (speed +0x33C, xz): held to 34
+            for (uint32_t o : {0u, 8u}) st32(a + kPos + o, u32_bits((float)(ldf32(a + kPos + o) - ldf32(a + 0x33C + o) * 0.15)));
+    }
     st32(a + 0x1878, 1);
     if (ld16(a + 0x1B32) == 10) st16(a + 0x1B32, 13);
 }

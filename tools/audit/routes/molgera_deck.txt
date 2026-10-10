@@ -1,0 +1,9 @@
+# title -> Quest Log 1, with Big ship and Molgera on and Molgera forced: out onto the deck (B), then stand there while
+# Molgera circles, charges and bites
+3-3.2 A
+5-5.2 A
+7-7.2 A
+9-9.2 A
+11-11.2 A
+13-13.2 A
+22-22.2 B
