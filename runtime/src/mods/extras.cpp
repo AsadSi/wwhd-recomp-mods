@@ -963,12 +963,12 @@ void step(Cpu* c) {
             // It makes itself at the world's origin (its boss room's centre) and is put far off ahead of Link, then
             // hunts him in its own flight through the sand, here the sea (state 10 "fly", substate 2: fly_pos_move steers
             // at Link's eyes every step, the FLY animation, its body drawn), held a little slower than a boat under
-            // full sail (speedF +0x370 34; the boat makes about 40 a step) and skimming the surface. Within 1200 it
+            // full sail (speedF +0x370 34; the boat makes about 40 a step), its head 80-300 above the sea so it shows. Within 1200 it
             // lunges and bites (state 5: hook_020FF80C turns a bite that catches him into a miss, which sends it back
             // to waiting, state 1), and goes back to the hunt. Every 20-40 s it dives instead (the fly state's own
             // dive, substate 3, by its timer +0x1B50) and bursts up 2000 ahead of him, in his way (waiting, state 1,
             // timers +0x1B50/+0x1B54 cleared: it rises and bites at once). Left 3000 behind, it comes up ahead one
-            // time in two (twice at most), else it gives up and the event ends once he is 4000 away.
+            // time in two (twice at most), else it gives up and the event ends once he is 4000 away ("behind": 8 s more than 3000 off).
             static uint32_t placed = 0;
             static double next_dive = 0, waited = 0;
             static bool diving = false, closed = false;  // closed: it has once come within 3000 of him
@@ -996,15 +996,17 @@ void step(Cpu* c) {
             if (state == 10 && !diving) {
                 if (sub == 1 || sub == 2) {
                     st16(a + 0x1B34, 2), st16(a + 0x1B50, 150), st32(a + 0x370, u32_bits(34.f));
-                    st32(a + kPos + 4, u32_bits(std::clamp((float)ldf32(a + kPos + 4), -150.f, 150.f)));
+                    st32(a + kPos + 4, u32_bits(std::clamp((float)ldf32(a + kPos + 4), 80.f, 300.f)));  // head and body above the waves
                 }
                 if (d < 3000) closed = true;
-                const bool behind = d > 3000 && closed && !g_molgera_gave_up;
+                static double behind_since = 0;  // left behind only after 8 s more than 3000 off: it keeps on after him
+                if (d <= 3000 || !closed || g_molgera_gave_up) behind_since = now;
+                const bool behind = now - behind_since > 8;
                 if (behind && (g_molgera_dives >= 2 || chance(0.5))) {
                     g_molgera_gave_up = true;
                     trace("extras: Molgera gives up the hunt");
                 } else if (behind || (now >= next_dive && d > 1500 && !g_molgera_gave_up)) {
-                    if (behind) g_molgera_dives++;
+                    if (behind) g_molgera_dives++, behind_since = now;
                     diving = true, next_dive = now + 20 + rand() % 20;
                     st16(a + 0x1B34, 3), st16(a + 0x1B50, 60);
                     trace("extras: Molgera dives (%s)", behind ? "left behind" : "to cut Link off");
@@ -1067,16 +1069,17 @@ void step(Cpu* c) {
     // on its flank within 450, slow) hitches it on. It anchors by itself within 4000 of an island's centre or where
     // land rises under its bow, stern or flanks, so it never sails into an island. It is made afresh beside him after a
     // stage change, once he rides out at sea (never at a pier).
-    // Its deck sits 35 above his seat (SHIP_GET_OFF's ledge, l_ship_ledge.y): the hull rides low, deck near the sea.
+    // It floats as the game floats it (its origin at the waterline, the deck 400 above the sea).
     static bool anchored = false;
     static int joining = 0;  // steps left of easing back into its place beside him
     if (const uint32_t korl = ld32(kPlay + 0x5B3C); on<kBigShip>() && stage == "sea" && in_mem2(korl) && settled) {
         // his place in the hull's frame, by the main deck on its +x flank, where his get-off jump (toward his own -x)
-        // goes into the hull (its side, out to x 700 at the waterline, keeps him about 900 out: measured)
-        constexpr double kLionX = 900, kLionZ = 250, kDeckAbove = 35;
+        // goes into the hull, clear of its side (out to x 700 at the waterline; at 900 it still pushed him out a
+        // little when the hull rode low)
+        constexpr double kLionX = 1050, kLionZ = 250;
         const int16_t yaw = (int16_t)ld16(korl + kAngleY);
         V3 to = to_world(pos_of(korl), yaw, {-kLionX, 0, -kLionZ});
-        to.y = ldf32(korl + kPos + 4) + kDeckAbove - kDeckY;
+        to.y = ldf32(korl + kPos + 4);
         auto put = [](uint32_t h, V3 p, int16_t a) {
             st32(h + kPos, u32_bits((float)p.x)), st32(h + kPos + 4, u32_bits((float)p.y)), st32(h + kPos + 8, u32_bits((float)p.z));
             st16(h + 0x322, (uint16_t)a), st16(h + kAngleY, (uint16_t)a);
@@ -1130,18 +1133,20 @@ void step(Cpu* c) {
                 }
             }
             // out of the boat beside it: the get-off jump (SHIP_GET_OFF, its jump phase link +0x69C0 1: speed.y +0x340,
-            // mNormalSpeed +0x6A14 8, gravity +0x374) is made a vault over the gunwale (126 above the deck, its outer
-            // lip 167): up at 36, and as fast as lands him at x 300 when he is back at deck height
+            // mNormalSpeed +0x6A14 8, gravity +0x374) is made a leap up the hull's side and over its gunwale (the deck
+            // 400 above the sea, the gunwale's outer lip at 567): up at 56 (its top about 660), and as fast as lands
+            // him at x 300 as he comes down to the deck
             static bool vaulted = false;
-            constexpr double kVault = 36;
+            constexpr double kVault = 56;
             if (proc != 0x90) vaulted = false;
             else if (!vaulted && ld32(link + 0x69C0) == 1) {
                 vaulted = true;
                 if (const V3 l = to_local(hull, korl); std::hypot(l.x - kLionX, l.z - kLionZ) < 300) {
-                    const double g = std::min(-0.5, (double)ldf32(link + 0x374)), air = 2 * kVault / -g;
+                    const double g = -std::min(-0.5, (double)ldf32(link + 0x374)), up = kDeckY - to_local(hull, link).y;
+                    const double air = (kVault + std::sqrt(std::max(0.0, kVault * kVault - 2 * g * up))) / g;
                     const double run = std::clamp((to_local(hull, link).x - 300) / air, 4.0, 30.0);
                     st32(link + 0x340, u32_bits((float)kVault)), st32(link + 0x6A14, u32_bits((float)run));
-                    trace("extras: Link vaults onto the Big ship's deck (gravity %.2f, run %.1f)", g, run);
+                    trace("extras: Link leaps onto the Big ship's deck (gravity %.2f, run %.1f)", g, run);
                 }
             }
             // back into the boat from the deck: A at the gunwale by him, standing or walking (procShipReady_init
@@ -1154,7 +1159,7 @@ void step(Cpu* c) {
             // (procFall_init 023F6564 (1, 0): no speed): position, old position (+0x300) and the fall's start (+0x6A48/C)
             if (swimming && (pressed & input::kA)) {
                 const V3 l = to_local(hull, link);
-                if (std::fabs(l.x) > 380 && std::fabs(l.x) < 900 && l.z > -1100 && l.z < 950) {
+                if (std::fabs(l.x) > 380 && std::fabs(l.x) < 1000 && l.z > -1100 && l.z < 950) {
                     const V3 w = to_world(pos_of(hull), (int16_t)ld16(hull + kAngleY), {l.x > 0 ? 300.0 : -300.0, kDeckY + 40, l.z});
                     for (uint32_t base : {(uint32_t)kPos, 0x300u})
                         st32(link + base, u32_bits((float)w.x)), st32(link + base + 4, u32_bits((float)w.y)), st32(link + base + 8, u32_bits((float)w.z));
