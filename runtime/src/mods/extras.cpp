@@ -576,10 +576,31 @@ std::vector<uint32_t> monsters_out() {
     for (uint32_t id : {g_leviathan.id, g_molgera.id, g_phantom.id}) if (id != 0xFFFFFFFF) v.push_back(id);
     return v;
 }
+// Phantom Ganon takes no harm from bombs in the game; 18 deck-cannon shots that burst on him (within 300 x his size,
+// at most 2500, of his eyes when the ball goes) drive him off, and his event ends
+constexpr int kPhantomShots = 18;
+std::vector<std::pair<uint32_t, V3>> g_balls;  // the shots in flight, by process id, and where each was last
+void cannon_hits(Cpu* c, double now) {
+    static uint32_t counted = 0xFFFFFFFF;
+    static int hits = 0;
+    if (counted != g_phantom.id) counted = g_phantom.id, hits = 0;
+    const uint32_t pg = g_phantom.actor(c);
+    std::erase_if(g_balls, [&](auto& b) {
+        if (const uint32_t a = guest_call(c, GC(0x025DE50C), {b.first})) return b.second = pos_of(a), false;
+        if (pg && std::hypot(b.second.x - ldf32(pg + 0x37C), b.second.y - ldf32(pg + 0x37C + 4), b.second.z - ldf32(pg + 0x37C + 8)) <
+                      std::min(2500.f, 300 * g_phantom_size)) {
+            trace("extras: a deck cannon shot bursts on Phantom Ganon (%d of %d)", ++hits, kPhantomShots);
+            if (hits >= kPhantomShots && (g_until[kPhantom] > 0 || g_until[kStalker] > 0))
+                finish(c, g_until[kPhantom] > 0 ? kPhantom : kStalker, now, "driven off by the deck cannons");
+        }
+        return true;
+    });
+}
 void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, bool deck, int proc, uint32_t pressed, double now) {
     static int16_t yaw = 0, up = 0x0C00;
     static uint32_t locked = 0xFFFFFFFF;
     static double fired = 0;
+    cannon_hits(c, now);
     static V3 stand;  // where he stood when he manned it: knocked off it (a hit, a fall), he lets go
     if (g_manned >= 0 && (!deck || !g_take_pad || ld8(kPlay + 0x5292) || (pressed & input::kB) ||
                           std::hypot(ldf32(link + kPos) - stand.x, ldf32(link + kPos + 8) - stand.z) > 80)) {
@@ -684,6 +705,7 @@ void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, bool deck, 
     const uint32_t ball = guest_call(c, GC(0x025D5928), {0x126, 0x80020004, buf, (uint32_t)(int8_t)ld8(link + kRoom), buf + 0x10, 0, 0xFFFFFFFF, 0});
     guest_call(c, GC(0x025DEAB4), {layer});
     if (!in_mem2(ball)) return;
+    g_balls.push_back({ld32(ball + 4), pos_of(ball)});
     guest_call(c, GC(0x020CB89C), {ball, 8});
     st32(ball + 0x370, u32_bits((float)(110 * cos(e)))), st32(ball + 0x340, u32_bits((float)(110 * sin(e)))), st32(ball + 0x374, u32_bits(-2.5f));
     guest_call(c, GC(0x025E1988), {0x2852});
@@ -713,6 +735,7 @@ void step(Cpu* c) {
     if (fresh) {
         g_night = Spawner{}, g_sea = Spawner{}, g_gyctrl = 0xFFFFFFFF, g_ghost = g_bigship = g_phantom = g_leviathan = g_molgera = Single{};
         g_cannon[0] = g_cannon[1] = Single{}, g_manned = -1, g_take_pad = false, g_cannon_btn = 0, g_cannon_cam = false;
+        g_balls.clear();
         g_gyorg_ids.clear(), g_giant_ids.clear(), g_big_hits.clear();
         settle = game_time() + 2;
         if (g_warn >= 0) wind(c, 0), g_warn = -1;  // a sea event does not outlive its stage
