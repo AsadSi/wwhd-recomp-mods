@@ -101,7 +101,6 @@ constexpr int kLeviathanHealth = 48, kMolgeraHealth = 80;
 int g_leviathan_pool = kLeviathanHealth, g_molgera_pool = kMolgeraHealth;
 bool g_leviathan_slain = false;
 double g_step_time = 0;  // game time at the last step, for the hooks
-int g_molgera_dives = 0;        // times Molgera, left behind, has come up ahead of Link again this event
 bool g_molgera_gave_up = false;  // it has stopped hunting him (the event ends once he is 4000 away)
 // ph_class is the Peahat and the Seahat: the parameter's low byte picks it (0 or 0xFF a Peahat, else a Seahat, which
 // loads its own archive). Giant Seahats: the class ignores the actor's scale; its two J3DModels (body +0x12C4,
@@ -303,8 +302,8 @@ const std::vector<Mod>& catalogue() {
          "it loses interest, or kill it (it takes a lot of hitting) for 200 rupees and a blue potion.", {}, true},
         {"molgera", "Molgera of the deep", "Spooky",
          "Very rarely, far out at sea, the wind dies, fog rolls in and Molgera, the Wind Temple's sand worm and bigger "
-         "than in its lair, comes for Link through the water from far off, lunging to bite, and now and then dives and "
-         "bursts up in his way. It is a little slower than the boat under full sail: sail well and leave it behind, or "
+         "than in its lair, comes for Link over the water from far off, sweeping in to bite and turning to come again. "
+         "It is a little slower than the boat under full sail: sail well and leave it behind, or "
          "fight it (it takes a lot of hitting) for 300 rupees and a blue potion.", {}, true},
         {"phantom-stalker", "Phantom stalker", "Spooky",
          "Rarely, on an island at night, fog rolls in and Phantom Ganon comes down behind Link and hunts him across the "
@@ -395,7 +394,7 @@ void remove_molgera(Cpu* c) {
         if (st32(found, 0); guest_call(c, GC(0x025D5578), {0xDB, found}) && ld32(found)) guest_call(c, GC(0x025D57E0), {ld32(found)});
         guest_call(c, GC(0x025D57E4), {g_molgera.id});
     }
-    g_molgera = Single{}, g_molgera_actor = 0, g_molgera_dives = 0, g_molgera_gave_up = false;
+    g_molgera = Single{}, g_molgera_actor = 0, g_molgera_gave_up = false;
     st32(GD(kMolgeraScale), u32_bits(1.3f)), st32(GD(kMolgeraPush), u32_bits(6.f)), st32(GD(kMolgeraBite), u32_bits(700.f));
 }
 void wind(Cpu* c, float power) { c->f[1].ps0 = power; guest_call(c, GC(0x0257E594)); }
@@ -1030,77 +1029,50 @@ void step(Cpu* c) {
             st8(a + 0x1B5C, 1), st32(a + 0x3EC8, 0);
             st32(GD(kMolgeraScale), u32_bits(1.3f * 2.5f)), st32(GD(kMolgeraPush), 0), st32(GD(kMolgeraBite), u32_bits(1300.f));
             // It makes itself at the world's origin (its boss room's centre) and is put far off ahead of Link, then
-            // hunts him in its own flight through the sand, here the sea (state 10 "fly", substate 2: fly_pos_move steers
-            // at Link's eyes every step, the FLY animation, its body drawn), held a little slower than a boat under
-            // full sail (speedF +0x370 34; the boat makes about 40 a step), its head 80-300 above the sea so it shows. Within 1200 it
-            // lunges and bites (state 5: hook_020FF80C turns a bite that catches him into a miss, which sends it back
-            // to waiting, state 1), then dives off and comes in again from 3000 away, so he has time to shoot it. Every 20-40 s it dives instead (the fly state's own
-            // dive, substate 3, by its timer +0x1B50) and bursts up 2000 ahead of him, in his way (waiting, state 1,
-            // timers +0x1B50/+0x1B54 cleared: it rises and bites at once). Left 3000 behind, it comes up ahead one
-            // time in two (twice at most), else it gives up and the event ends once he is 4000 away ("behind": 8 s more than 3000 off).
+            // hunts him in one motion in its own flight through the sand, here the sea (state 10 "fly", substate 2:
+            // fly_pos_move steers at Link's eyes every step, the FLY animation, its body drawn), held a little slower
+            // than a boat under full sail (speedF +0x370 34; the boat makes about 40 a step), its head 80-300 above the
+            // sea so it shows. Within 1200 it lunges and bites (state 5: hook_020FF80C turns a bite that catches him
+            // into a miss, which sends it back to waiting, state 1); it flies on at once, and does not lunge again for
+            // 6 s, so it sweeps past and turns. Left 3000 behind for 8 s, it gives up and the event ends once he is 4000 away.
             static uint32_t placed = 0;
-            static double next_dive = 0, waited = 0;
-            static bool diving = false, closed = false;  // closed: it has once come within 3000 of him
-            static bool bit = false, retreat = false;     // it has bitten (and dives off to come in again from afar)
+            static double waited = 0, calm_until = 0;
+            static bool closed = false;  // closed: it has once come within 3000 of him
             const double yaw = (int16_t)ld16(link + kAngleY) * M_PI / 32768;
             const double d = std::hypot(ldf32(a + kPos) - ldf32(link + kPos), ldf32(a + kPos + 8) - ldf32(link + kPos + 8));
-            // its head and the ring of positions and angles its body follows (+0x674, 256 x 12; +0x1274, 256 x 6), all
-            // at one point, so the body is not strung out back to where it was
-            auto put = [a](double x, double y, double z) {
-                st32(a + kPos, u32_bits((float)x)), st32(a + kPos + 4, u32_bits((float)y)), st32(a + kPos + 8, u32_bits((float)z));
+            auto hunt = [a] { st16(a + 0x1B32, 10), st16(a + 0x1B34, 0), st16(a + 0x1B52, 0); };
+            if (placed != g_molgera.id) {
+                placed = g_molgera.id, closed = false, g_molgera_gave_up = false;
+                // its head and the ring of positions and angles its body follows (+0x674, 256 x 12; +0x1274, 256 x 6),
+                // all at one point, so the body is not strung out back to where it was
+                st32(a + kPos, u32_bits((float)(ldf32(link + kPos) + sin(yaw) * 5000))), st32(a + kPos + 4, u32_bits(-60.f));
+                st32(a + kPos + 8, u32_bits((float)(ldf32(link + kPos + 8) + cos(yaw) * 5000)));
                 for (uint32_t i = 0; i < 256; i++) {
                     for (uint32_t k = 0; k < 12; k += 4) st32(a + 0x674 + 12 * i + k, ld32(a + kPos + k));
                     for (uint32_t k = 0; k < 6; k += 2) st16(a + 0x1274 + 6 * i + k, ld16(a + 0x320 + k));
                 }
-            };
-            auto hunt = [a] { st16(a + 0x1B32, 10), st16(a + 0x1B34, 0), st16(a + 0x1B52, 0); };
-            auto ahead = [&](double dist, double y) { put(ldf32(link + kPos) + sin(yaw) * dist, y, ldf32(link + kPos + 8) + cos(yaw) * dist); };
-            if (placed != g_molgera.id) {
-                placed = g_molgera.id, diving = false, closed = false, bit = retreat = false, next_dive = now + 20 + rand() % 20;
-                g_molgera_gave_up = false;
-                ahead(5000, -60), hunt();
+                hunt();
                 trace("extras: Molgera surfaces far off and hunts Link");
             }
             const int state = ld16(a + 0x1B32) == 13 ? 10 : ld16(a + 0x1B32), sub = ld16(a + 0x1B34);
             if (state != 1) waited = now;
-            if (state == 5) bit = true;
-            if (state == 10 && !diving) {
-                if (sub == 1 || sub == 2) {
+            if (state == 10) {
+                if (sub == 1 || sub == 2 || sub == 3) {  // never its dive (3) into the sand
                     st16(a + 0x1B34, 2), st16(a + 0x1B50, 150), st32(a + 0x370, u32_bits(34.f));
                     st32(a + kPos + 4, u32_bits(std::clamp((float)ldf32(a + kPos + 4), 80.f, 300.f)));  // head and body above the waves
                 }
                 if (d < 3000) closed = true;
                 static double behind_since = 0;  // left behind only after 8 s more than 3000 off: it keeps on after him
                 if (d <= 3000 || !closed || g_molgera_gave_up) behind_since = now;
-                const bool behind = now - behind_since > 8;
-                if (behind && (g_molgera_dives >= 2 || chance(0.5))) {
+                if (now - behind_since > 8) {
                     g_molgera_gave_up = true;
                     trace("extras: Molgera gives up the hunt");
-                } else if (behind || (now >= next_dive && d > 1500 && !g_molgera_gave_up)) {
-                    if (behind) g_molgera_dives++, behind_since = now;
-                    diving = true, next_dive = now + 20 + rand() % 20;
-                    st16(a + 0x1B34, 3), st16(a + 0x1B50, 60);
-                    trace("extras: Molgera dives (%s)", behind ? "left behind" : "to cut Link off");
-                } else if (d < 1200 && !g_molgera_gave_up) {
+                } else if (d < 1200 && now >= calm_until && !g_molgera_gave_up) {
                     st16(a + 0x1B32, 5), st16(a + 0x1B34, 0), st32(a + 0x370, 0);
                 }
-            } else if (state == 1 && diving && retreat) {  // dived off after a bite: it comes in again from 3000 away
-                diving = retreat = false;
-                const double r = rand() / (double)RAND_MAX * 2 * M_PI;
-                put(ldf32(link + kPos) + sin(r) * 3000, -60, ldf32(link + kPos + 8) + cos(r) * 3000);
-                hunt();
-                trace("extras: Molgera comes in again from afar");
-            } else if (state == 1 && diving) {  // its dive done (substate 3 ends in waiting): up in his way
-                diving = false;
-                ahead(2000, -700);
-                st16(a + 0x1B50, 0), st16(a + 0x1B54, 0);
-                trace("extras: Molgera bursts up ahead of Link");
-            } else if (state == 1 && bit && !g_molgera_gave_up) {  // after a bite it dives off, to come in again
-                bit = false, diving = retreat = true;
-                st16(a + 0x1B32, 10), st16(a + 0x1B34, 3), st16(a + 0x1B50, 45);
-                trace("extras: Molgera dives off after its bite");
-            } else if (state == 1 && now - waited > 4 && !g_molgera_gave_up) {
-                hunt();  // after an ambush, back to the hunt
+            } else if (state == 1 && !g_molgera_gave_up && (now - waited > 0.5)) {  // after a bite: on after him at once
+                hunt(), calm_until = now + 6;
+                trace("extras: Molgera flies on after its bite");
             }
             // at its size its head's spheres reach the boat every few seconds for 4 hearts: a hit costs at most one
             // heart, and none in the 4 s after one (unless the Damage multiplier says otherwise)
