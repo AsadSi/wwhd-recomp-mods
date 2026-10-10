@@ -182,7 +182,8 @@ const std::vector<Mod>& catalogue() {
          "With Haunted sea on, every Seahat is a giant, one in four a colossus, and most of what comes for Link are Seahats "
          "(Gyorgs less often).", {}},
         {"phantom-ganon", "Phantom Ganon", "Spooky",
-         "A giant Phantom Ganon haunts the open sea around the boat, day and night, and fights as he does in Ganon's Tower.", {}},
+         "A giant Phantom Ganon haunts the open sea around the boat, day and night, and fights as he does in Ganon's Tower.",
+         {"Giant (2.5x)", "Colossal (6x)", "Titanic (12x)"}},
         {"big-ship", "Big ship (look-test)", "Experimental",
          "A pirate ship hull follows the King of Red Lions wherever he sails. A first step towards a walkable ship.", {}},
     };
@@ -357,7 +358,8 @@ void step(Cpu* c) {
             g_phantom.next = now + 20;
         }
         if (const uint32_t pg = g_phantom.actor(c)) {
-            for (int i = 0; i < 3; i++) st32(pg + 0x330 + 4 * i, u32_bits(2.5f));
+            static const float kSize[] = {2.5f, 6.f, 12.f};
+            for (int i = 0; i < 3; i++) st32(pg + 0x330 + 4 * i, u32_bits(kSize[g_choice[kPhantom].load()]));
             // he flies and fights around his home point (fopAc_ac_c::home.pos, +0x2EC): the boat, wherever it goes
             st32(pg + 0x2EC, ld32(link + kPos));
             st32(pg + 0x2F4, ld32(link + kPos + 8));
