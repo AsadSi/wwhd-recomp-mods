@@ -32,7 +32,7 @@
 
 namespace mods::extras {
 namespace {
-enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kCount };
+enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kCount };  // the catalogue's order
 std::atomic<bool> g_on[kCount];
 std::atomic<int> g_choice[kCount];
 
@@ -105,8 +105,8 @@ void spawn(Cpu* c, Spawner& s, Monster m, uint32_t link, float dist, bool behind
 // ---- switches ----
 template <int I> bool on() { return g_on[I].load(std::memory_order_relaxed); }
 template <int I> void set(bool v) { g_on[I] = v; }
-bool (*const kOn[kCount])() = {on<0>, on<1>, on<2>, on<3>, on<4>, on<5>};
-void (*const kSet[kCount])(bool) = {set<0>, set<1>, set<2>, set<3>, set<4>, set<5>};
+bool (*const kOn[kCount])() = {on<0>, on<1>, on<2>, on<3>, on<4>, on<5>, on<6>};
+void (*const kSet[kCount])(bool) = {set<0>, set<1>, set<2>, set<3>, set<4>, set<5>, set<6>};
 
 const std::vector<Mod>& catalogue() {
     static const std::vector<Mod> mods = {
@@ -117,14 +117,14 @@ const std::vector<Mod>& catalogue() {
         {"time", "Time of day", "Gameplay", "Stops the clock, or keeps it at an hour of your choice.",
          {"Stopped", "Morning (7:00)", "Noon", "Evening (18:30)", "Night (23:00)"}},
         {"turbo", "Turbo key", "Gameplay", "Hold T on the keyboard to run the game as fast as this Mac can (sailing, text, cutscenes).", {}},
-        {"night-dead", "Night of the dead (experimental)", "Spooky",
+        {"night-dead", "Night of the dead", "Spooky",
          "After dark the dead rise on land: ReDeads, Stalfos and Poes close in from behind Link, a few at a time. "
-         "Pairs well with Time of day: Night. Experimental: the picture can stop after a spawn (the game keeps running).",
+         "Pairs well with Time of day: Night and Stormy weather.",
          {"Sometimes", "Often", "Relentless"}},
-        {"haunted-sea", "Haunted sea (experimental)", "Spooky",
-         "Out on the open sea (on the boat or swimming) Seahats and Kargarocs come for Link, day and night (more at night). "
-         "Experimental: the picture can stop after a spawn (the game keeps running).",
+        {"haunted-sea", "Haunted sea", "Spooky",
+         "Out on the open sea (on the boat or swimming) Seahats and Kargarocs come for Link, day and night (more at night).",
          {"Sometimes", "Often", "Relentless"}},
+        {"storm", "Stormy weather", "Spooky", "Heavy rain (the game's own) at night, or all the time.", {"At night", "Always"}},
     };
     return mods;
 }
@@ -198,6 +198,13 @@ void step(Cpu* c) {
     const bool night = hour >= 19 || hour < 5, sea = stage == "sea" && water;
     static const double kEvery[] = {25, 12, 5};  // seconds between spawns: Sometimes, Often, Relentless
     static const size_t kMax[] = {2, 4, 7};      // monsters out at once
+    // stormy weather: the rain count (dKyw_rain_set, 0257E7C0; 250 is a downpour) set every step while it should
+    // rain, and 0 once when it should stop
+    static bool raining = false;
+    if (const bool rain = on<kStorm>() && (night || g_choice[kStorm].load() == 1); rain || raining) {
+        guest_call(c, GC(0x0257E7C0), {rain ? 250u : 0u});
+        raining = rain;
+    }
     // Night of the dead: on land at night (the sea stage's islands count)
     if (on<kNight>() && night && !water && !fresh) {
         const int level = g_choice[kNight].load();
