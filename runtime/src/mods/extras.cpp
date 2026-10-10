@@ -1,7 +1,7 @@
 // More built-in mods (Gameplay menu, all off by default), several ported from the Twilight Princess HD
 // recomp: damage and rupee multipliers, time of day, a turbo key; stormy weather and thick fog; and two that spawn
 // the game's own monsters around Link: Night of the dead (ReDeads, Stalfos and Poes on land at night) and
-// Haunted sea (Gyorgs, Seahats and Kargarocs around Link on the open sea).
+// Haunted sea (Gyorgs, Seahats, giant Seahats, Kargarocs and, at night, Poes around Link on the open sea).
 //
 // They run once per full logic step, after the actors' execute (interp.cpp hook_025DE788), and act on what
 // changed in that step, so the game's own rules (maxima, wallet, death) still apply. Offsets (WWHD):
@@ -36,7 +36,7 @@
 
 namespace mods::extras {
 namespace {
-enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kCount };  // the catalogue's order
+enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kCount };  // the catalogue's order
 std::atomic<bool> g_on[kCount];
 std::atomic<int> g_choice[kCount];
 
@@ -64,6 +64,10 @@ struct Spawner {
 };
 Spawner g_night, g_sea;
 constexpr Monster kGyCtrl{0xE5, -1, 0x7F00FF01};
+// giant Seahats: ph_class (Peahat and Seahat) ignores the actor's scale; its two J3DModels (body +0x12C4, propeller
+// +0x12CC) are drawn at their base scale (J3DModel +0xBC in HD), which nothing else sets, so it is set there
+std::vector<uint32_t> g_giant_ids;
+constexpr float kGiant = 2.5f;
 
 // spawns `m` at `dist` from Link, `behind` him (out of the camera's view) or anywhere around him, `dy` above him; a
 // monster `on_ground` only where the game's ground check (dGrass's checkGroundY, 02549F4C) finds land within 250 of
@@ -123,8 +127,8 @@ uint32_t g_gyctrl = 0xFFFFFFFF;
 // ---- switches ----
 template <int I> bool on() { return g_on[I].load(std::memory_order_relaxed); }
 template <int I> void set(bool v) { g_on[I] = v; }
-bool (*const kOn[kCount])() = {on<0>, on<1>, on<2>, on<3>, on<4>, on<5>, on<6>, on<7>};
-void (*const kSet[kCount])(bool) = {set<0>, set<1>, set<2>, set<3>, set<4>, set<5>, set<6>, set<7>};
+bool (*const kOn[kCount])() = {on<0>, on<1>, on<2>, on<3>, on<4>, on<5>, on<6>, on<7>, on<8>};
+void (*const kSet[kCount])(bool) = {set<0>, set<1>, set<2>, set<3>, set<4>, set<5>, set<6>, set<7>, set<8>};
 
 const std::vector<Mod>& catalogue() {
     static const std::vector<Mod> mods = {
@@ -140,11 +144,13 @@ const std::vector<Mod>& catalogue() {
          "Pairs well with Time of day: Night and Stormy weather.",
          {"Sometimes", "Often", "Relentless"}},
         {"haunted-sea", "Haunted sea", "Spooky",
-         "Out on the open sea (on the boat or swimming) Gyorgs, Seahats and Kargarocs come for Link, day and night (more at "
-         "night). Gyorgs come even before Link has the Boomerang.",
+         "Out on the open sea (on the boat or swimming) Gyorgs, Seahats (some of them giants) and Kargarocs come for Link, "
+         "day and night; at night more of them, and Poes drift over the water. Gyorgs come even before Link has the "
+         "Boomerang.",
          {"Sometimes", "Often", "Relentless"}},
         {"storm", "Stormy weather", "Spooky", "Heavy rain (the game's own) at night, or all the time.", {"At night", "Always"}},
         {"fog", "Thick fog", "Spooky", "The world fades into fog a short way from Link, at night or all the time.", {"At night", "Always"}},
+        {"swim", "Endless swimming", "Gameplay", "Link's swim meter never runs out, so he can swim as far as he likes.", {}},
     };
     return mods;
 }
@@ -180,7 +186,7 @@ void step(Cpu* c) {
     std::string stage((const char*)mem::ptr(kStage), strnlen((const char*)mem::ptr(kStage), 8));
     if (!in_mem2(link) || stage.empty() || stage == "sea_T" || stage == "Name" || stage == "ENDumi") return;  // title, file select
     const uint32_t sv = save();
-    if (fresh) g_night = Spawner{}, g_sea = Spawner{}, g_gyctrl = 0xFFFFFFFF, g_gyorg_ids.clear();
+    if (fresh) g_night = Spawner{}, g_sea = Spawner{}, g_gyctrl = 0xFFFFFFFF, g_gyorg_ids.clear(), g_giant_ids.clear();
 
     const uint16_t max_life = ld16(sv), cur = ld16(sv + 2);
     if (on<kDamage>() && !fresh && cur < life) {  // also a hit that killed: None and x0.5 can save Link
@@ -231,6 +237,8 @@ void step(Cpu* c) {
         c->f[1].ps0 = 100, c->f[2].ps0 = 2500, c->f[3].ps0 = 1;
         guest_call(c, GC(0x0255671C));
     }
+    // endless swimming: the air meter (dComIfG_play_c::mAirMeter, 900 = full, +0x5B4C) kept full while Link swims
+    if (on<kSwim>() && (ld32(link + 0x6A70) & 0x40000)) st32(kPlay + 0x5B4C, 900);
     // Night of the dead: on land at night (the sea stage's islands count)
     if (on<kNight>() && night && !water && !fresh) {
         const int level = g_choice[kNight].load();
@@ -258,11 +266,20 @@ void step(Cpu* c) {
             } else if (rand() % 2) {
                 const uint32_t id = spawn(c, g_sea, kGyorg, link, 900 + rand() % 600, false, -40, false, g_gyctrl);
                 if (id != 0xFFFFFFFF) g_gyorg_ids.push_back(id);
-            } else {
-                spawn(c, g_sea, rand() % 3 ? kSeahat : kKargaroc, link, 900 + rand() % 600, false, 300, false);
+            } else {  // Seahats (one in three a giant), Kargarocs; at night also Poes drifting over the water
+                static const Monster kDay[] = {kSeahat, kSeahat, kKargaroc}, kNightSea[] = {kSeahat, kKargaroc, kPoe, kPoe};
+                const Monster m = night ? kNightSea[rand() % 4] : kDay[rand() % 3];
+                const bool poe = m.proc == kPoe.proc;
+                const uint32_t id = spawn(c, g_sea, m, link, poe ? 500 + rand() % 400 : 900 + rand() % 600, false, poe ? 120 : 300, false);
+                if (m.proc == kSeahat.proc && rand() % 3 == 0 && id != 0xFFFFFFFF) g_giant_ids.push_back(id);
             }
             g_sea.next = now + kEvery[level] * (night ? 0.6 : 1) * (0.6 + rand() / (double)RAND_MAX * 0.8);
         }
+        for (uint32_t id : g_giant_ids)
+            if (const uint32_t ph = guest_call(c, GC(0x025DE50C), {id}))
+                for (uint32_t off : {0x12C4u, 0x12CCu})
+                    if (const uint32_t model = ld32(ph + off); in_mem2(model))
+                        for (int i = 0; i < 3; i++) st32(model + 0xBC + 4 * i, u32_bits(kGiant));
         // the Gyorgs hunt Link: without their controller's path and battle state they would only dive and circle
         // (daGy_c mode at +0x3CC: 0 dive, 1 circle, 6 circle with others), so those are turned into an attack on the
         // player (modeAttackPlayerInit, 02169B48, mode 3); attacks, damage and deletion run as the game decides
