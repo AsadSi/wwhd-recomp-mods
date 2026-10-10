@@ -506,6 +506,12 @@ void install_menu(NSWindow* tv) {
         for (int i = 0; i < (int)m.choices.size(); i++)
             toggle(gp, [NSString stringWithFormat:@"        %s", m.choices[i].c_str()], ^BOOL { return mods::extras::choice(id) == i; },
                    ^(BOOL) { mods::extras::set_choice(id, i); hostui::set(("mod." + id + ".choice").c_str(), std::to_string(i)); });
+        if (m.often) {
+            [gp addItemWithTitle:@"        How often:" action:nil keyEquivalent:@""].enabled = NO;
+            for (int i = 0; i < (int)mods::extras::kOften.size(); i++)
+                toggle(gp, [NSString stringWithFormat:@"            %s", mods::extras::kOften[i].c_str()], ^BOOL { return mods::extras::often(id) == i; },
+                       ^(BOOL) { mods::extras::set_often(id, i); hostui::set(("mod." + id + ".often").c_str(), std::to_string(i)); });
+        }
     }
     [gp addItem:[NSMenuItem separatorItem]];
     [gp addItemWithTitle:@"Cheats (save in game to keep them)" action:nil keyEquivalent:@""].enabled = NO;

@@ -34,7 +34,7 @@ const Entry builtin[] = {
      "Speed up fades and scene transitions while keeping ordinary gameplay at normal speed.",
      "WWHD_MOD_FAST_SCENES", fast_scenes, set_fast_scenes},
 };
-// the built-in list plus extras.cpp's mods (WWHD_MOD_<ID>=1 / WWHD_MOD_<ID>_CHOICE=n set them at startup)
+// the built-in list plus extras.cpp's mods (WWHD_MOD_<ID>=1 / WWHD_MOD_<ID>_CHOICE=n / WWHD_MOD_<ID>_OFTEN=n set them at startup)
 const std::vector<Entry> catalogue = [] {
     std::vector<Entry> v(std::begin(builtin), std::end(builtin));
     for (const auto& m : extras::catalogue()) {
@@ -42,6 +42,7 @@ const std::vector<Entry> catalogue = [] {
                      extras::enabled_fn(m.id), extras::apply_fn(m.id)});
         if (const char* e = std::getenv(m.env.c_str())) v.back().apply(std::atoi(e) != 0);
         if (const char* e = std::getenv((m.env + "_CHOICE").c_str())) extras::set_choice(m.id, std::atoi(e));
+        if (const char* e = std::getenv((m.env + "_OFTEN").c_str())) extras::set_often(m.id, std::atoi(e));
     }
     return v;
 }();
@@ -85,6 +86,8 @@ void load_saved() {
         std::string value;
         if (!m.choices.empty() && !std::getenv((m.env + "_CHOICE").c_str()) && hostui::get(("mod." + m.id + ".choice").c_str(), value))
             extras::set_choice(m.id, std::atoi(value.c_str()));
+        if (m.often && !std::getenv((m.env + "_OFTEN").c_str()) && hostui::get(("mod." + m.id + ".often").c_str(), value))
+            extras::set_often(m.id, std::atoi(value.c_str()));
     }
 }
 bool set_enabled(std::string_view id, bool on) {

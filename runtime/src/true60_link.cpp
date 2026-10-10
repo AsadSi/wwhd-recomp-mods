@@ -207,21 +207,21 @@ T60_FENCE_LINK(023DC7AC, (void)0)      // daPy_lk_c::deleteEquipItem
 T60_FENCE_ANY(025E14A8, c->r[3] = 0xFFFFFFFFu)  // fpcSCtRq_Request: no process created
 T60_FENCE_ANY(025DFAB8, c->r[3] = 0)            // fpcM_FastCreate
 // JPAEmitterManager::createSimpleEmitterID (r3 the manager, r5 the effect, r7 the resource bank, banks at +0x30): a
-// scene-bank effect (bank 1) the stage's bank lacks is made from bank 2 when a mod loaded one there and it has it
-// (Phantom Ganon's on the sea, mods/extras.cpp; JPAEmitterResource lookup 02826EF8); and no emitter, instead of the
+// scene-bank effect (bank 1) the stage's bank lacks is made from bank 2 or 3 when a mod loaded one there that has it
+// (Phantom Ganon's and Molgera's on the sea, mods/extras.cpp; JPAEmitterResource lookup 02826EF8); and no emitter, instead of the
 // game's halt ("pResMgrArray[rmID] != 0"), when the bank is not loaded
 extern "C" void f_02821448_orig(Cpu* c);
 extern "C" void hook_02821448(Cpu* c) {
     if (true60::enabled() && true60::preview()) { c->r[3] = 0; return; }
     const uint32_t banks = c->r[3] + 0x30;
-    if (c->r[7] == 1 && ld32(banks + 8)) {
+    if (c->r[7] == 1 && (ld32(banks + 8) || ld32(banks + 12))) {
         uint32_t args[8];
         memcpy(args, &c->r[3], sizeof args);
-        const uint32_t own = ld32(banks + 4);
-        const bool other = (!own || !guest_call(c, GC(0x02826EF8), {ld32(own + 4), args[2]})) &&
-                           guest_call(c, GC(0x02826EF8), {ld32(ld32(banks + 8) + 4), args[2]});
+        auto has = [&](uint32_t bank) { return bank && guest_call(c, GC(0x02826EF8), {ld32(bank + 4), args[2]}); };
+        int from = 1;
+        if (!has(ld32(banks + 4))) from = has(ld32(banks + 8)) ? 2 : has(ld32(banks + 12)) ? 3 : 1;
         memcpy(&c->r[3], args, sizeof args);
-        if (other) c->r[7] = 2;
+        c->r[7] = from;
     }
     if (c->r[7] < 8 && !ld32(banks + 4 * c->r[7])) { c->r[3] = 0; return; }
     f_02821448_orig(c);

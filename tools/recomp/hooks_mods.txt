@@ -20,3 +20,5 @@
 02018C8C  # cM3dGSph::SetR: Haunted sea's Gyorgs hit from further
 025A809C  # dPa_control_c::removeScene: Phantom Ganon's particle bank (slot 2) goes with the stage (extras.cpp)
 028249B0  # JPABaseEmitter::setGlobalRTMatrix: skipped for a missing emitter (Phantom Ganon's energy ball on the sea, extras.cpp)
+@02168488 # daGy_c::checkTgHit death test: the Leviathan Gyorg is not killed (extras.cpp)
+020FF80C  # bwd_move: Molgera of the deep never swallows Link (extras.cpp)

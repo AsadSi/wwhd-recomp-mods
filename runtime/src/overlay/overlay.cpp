@@ -1110,6 +1110,14 @@ void tab_mods() {
                     if (radio(x->choices[i].c_str(), mods::extras::choice(x->id) == i))
                         hostui::post([id = x->id, i] { mods::extras::set_choice(id, i); hostui::set(("mod." + id + ".choice").c_str(), std::to_string(i)); });
                 }
+                if (x->often) {
+                    ImGui::TextUnformatted("How often");
+                    for (int i = 0; i < (int)mods::extras::kOften.size(); ++i) {
+                        ImGui::SameLine();
+                        if (radio(mods::extras::kOften[i].c_str(), mods::extras::often(x->id) == i))
+                            hostui::post([id = x->id, i] { mods::extras::set_often(id, i); hostui::set(("mod." + id + ".often").c_str(), std::to_string(i)); });
+                    }
+                }
             }
         }
         ImGui::EndTable();
