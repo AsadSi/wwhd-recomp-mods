@@ -205,7 +205,14 @@ T60_FENCE_LINK(023FD4E4, (void)0)      // daPy_lk_c::startRestartRoom
 T60_FENCE_LINK(023DC7AC, (void)0)      // daPy_lk_c::deleteEquipItem
 T60_FENCE_ANY(025E14A8, c->r[3] = 0xFFFFFFFFu)  // fpcSCtRq_Request: no process created
 T60_FENCE_ANY(025DFAB8, c->r[3] = 0)            // fpcM_FastCreate
-T60_FENCE_ANY(02821448, c->r[3] = 0)            // JPAEmitterManager::createSimpleEmitterID
+// JPAEmitterManager::createSimpleEmitterID (r3 the manager, r7 the resource bank): also no emitter, instead of the
+// game's halt ("pResMgrArray[rmID] != 0"), when that bank is not loaded (an actor's effects outside its own stage,
+// e.g. Phantom Ganon on the sea in mods/extras.cpp)
+extern "C" void f_02821448_orig(Cpu* c);
+extern "C" void hook_02821448(Cpu* c) {
+    if ((true60::enabled() && true60::preview()) || (c->r[7] < 8 && !ld32(c->r[3] + 0x30 + 4 * c->r[7]))) { c->r[3] = 0; return; }
+    f_02821448_orig(c);
+}
 T60_FENCE_ANY(0200E240, (void)0)                // cCcS::Set
 T60_FENCE_ANY(0253EC0C, c->r[3] = 0)            // dEvt_control_c::order
 T60_FENCE_ANY(0253ED80, c->r[3] = 0)            // dEvt_control_c::orderOld

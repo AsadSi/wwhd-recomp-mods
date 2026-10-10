@@ -228,6 +228,7 @@ void step(Cpu* c) {
         settle = game_time() + 2;
     }
     const bool settled = !fresh && game_time() >= settle;
+    g_big_hits.clear();  // refilled below by the mods whose monsters hit bigger
 
     const uint16_t max_life = ld16(sv), cur = ld16(sv + 2);
     if (on<kDamage>() && !fresh && cur < life) {  // also a hit that killed: None and x0.5 can save Link
@@ -329,7 +330,6 @@ void step(Cpu* c) {
             g_ghost.id = spawn(c, none, ghost, link, 4500 + rand() % 2000, -1, 0, false);
             g_ghost.next = now + 5;
         }
-        g_big_hits.clear();
         for (uint32_t id : g_sea.ids)
             if (const uint32_t a = guest_call(c, GC(0x025DE50C), {id}); a && (ld16(a + 8) == kGyorg.proc || ld16(a + 8) == kSeahat.proc)) {
                 float scale = kHitScale;
@@ -350,7 +350,7 @@ void step(Cpu* c) {
         }
     }
     // Phantom Ganon: one near a sailing Link, a giant: his own execute eases the actor's scale (+0x330) to 1, so it is
-    // set after it every step; his colliders follow the model (this file's size hooks do not)
+    // set after it every step; his colliders' centres follow the model and their sizes are scaled by the hooks below
     if (on<kPhantom>() && sea && boat && settled) {
         if (g_phantom.wanted(c, now)) {
             Spawner none;
@@ -359,7 +359,9 @@ void step(Cpu* c) {
         }
         if (const uint32_t pg = g_phantom.actor(c)) {
             static const float kSize[] = {2.5f, 6.f, 12.f};
-            for (int i = 0; i < 3; i++) st32(pg + 0x330 + 4 * i, u32_bits(kSize[g_choice[kPhantom].load()]));
+            const float size = kSize[g_choice[kPhantom].load()];
+            for (int i = 0; i < 3; i++) st32(pg + 0x330 + 4 * i, u32_bits(size));
+            g_big_hits.push_back({pg, pg + 0x1000, size});  // his sword and body colliders as big as he is
             // he flies and fights around his home point (fopAc_ac_c::home.pos, +0x2EC): the boat, wherever it goes
             st32(pg + 0x2EC, ld32(link + kPos));
             st32(pg + 0x2F4, ld32(link + kPos + 8));
@@ -415,7 +417,6 @@ extern "C" void site_0216BB70(Cpu* c) {
 // the size setters of the collision shapes (cM3dGSph::SetR, cM3dGCyl::SetR / SetH; the size in f1): bigger for
 // Haunted sea's Gyorgs and Seahats
 static void big_hit(Cpu* c) {
-    if (!mods::extras::on<mods::extras::kSea>()) return;
     for (const auto& [lo, hi, scale] : mods::extras::g_big_hits)
         if (c->r[3] >= lo && c->r[3] < hi) { c->f[1].ps0 *= scale; return; }
 }
