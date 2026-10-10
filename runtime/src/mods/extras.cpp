@@ -640,10 +640,14 @@ void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, bool deck, 
                 if (const double d = std::hypot(ldf32(a + kPos) - ldf32(link + kPos), ldf32(a + kPos + 8) - ldf32(link + kPos + 8)); d < best) best = d, locked = id;
     }
     if (const uint32_t a = locked == 0xFFFFFFFF ? 0 : guest_call(c, GC(0x025DE50C), {locked})) {
-        // at its eyes (eyePos +0x37C); the shot's range r = 4840 sin 2e (speed 110, gravity 2.5) after its ~800 straight
+        // at its eyes (eyePos +0x37C), on the shot's low arc (speed v 110, gravity g 2.5): tan e = (v^2 - sqrt(v^4 -
+        // g (g x^2 + 2 y v^2))) / (g x), x the distance and y the height to it from the muzzle; out of reach, 45 degrees
         const double dx = ldf32(a + 0x37C) - ldf32(link + kPos), dz = ldf32(a + 0x37C + 8) - ldf32(link + kPos + 8);
+        const double x = std::max(1.0, std::hypot(dx, dz)), y = ldf32(a + 0x37C + 4) - ldf32(link + kPos + 4) - 100;
+        constexpr double v2 = 110.0 * 110, g = 2.5;
+        const double root = v2 * v2 - g * (g * x * x + 2 * y * v2);
         yaw = (int16_t)(atan2(dx, dz) * 32768 / M_PI);
-        up = (int16_t)(0.5 * asin(std::clamp((std::hypot(dx, dz) - 800) / 4840, 0.0, 1.0)) * 32768 / M_PI);
+        up = (int16_t)std::clamp(root < 0 ? 0x2000 : atan((v2 - std::sqrt(root)) / (g * x)) * 32768 / M_PI, 0.0, (double)0x2AAA);
     } else {
         locked = 0xFFFFFFFF;
         yaw = (int16_t)(yaw - g_pad_lx.load() * 0x2A0);
