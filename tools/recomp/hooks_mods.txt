@@ -15,3 +15,6 @@
 # More built-in mods (mods/extras.cpp)
 @02167A64 # daGy_c::_create: the Boomerang check passes for Haunted sea's Gyorgs
 @0216BB70 # daGy_Ctrl_c::_create: the same for its GyCtrl
+020184DC  # cM3dGCyl::SetR: Haunted sea's Seahats hit from further (extras.cpp)
+02018428  # cM3dGCyl::SetH: the same
+02018C8C  # cM3dGSph::SetR: Haunted sea's Gyorgs hit from further

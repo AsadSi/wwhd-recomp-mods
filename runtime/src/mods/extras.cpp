@@ -36,7 +36,7 @@
 
 namespace mods::extras {
 namespace {
-enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kCount };  // the catalogue's order
+enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kCount };  // the catalogue's order
 std::atomic<bool> g_on[kCount];
 std::atomic<int> g_choice[kCount];
 
@@ -52,7 +52,7 @@ uint32_t u32_bits(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
 // a monster from the object name table, and the parameter it is created with (0xFFFFFFFF: the defaults)
 struct Monster { int16_t proc; int8_t subtype; uint32_t param; };
 constexpr Monster kRedead{0xE0, 0, 0xFFFFFFFF}, kStalfos{0xBE, -1, 0xFFFFFFFF}, kPoe{0xD4, -1, 0xFFFFFFFF},
-                  kGyorg{0xE4, -1, 0xFFFFFFFF}, kSeahat{0xD1, -1, 0xFFFFFFFF}, kKargaroc{0xB5, -1, 0};
+                  kGyorg{0xE4, -1, 0xFFFFFFFF}, kSeahat{0xD1, -1, 0xFFFFFF01}, kKargaroc{0xB5, -1, 0};
 
 // the monsters a spawner has out, by process id; forgotten when they die or the stage changes
 struct Spawner {
@@ -64,10 +64,15 @@ struct Spawner {
 };
 Spawner g_night, g_sea;
 constexpr Monster kGyCtrl{0xE5, -1, 0x7F00FF01};
-// giant Seahats: ph_class (Peahat and Seahat) ignores the actor's scale; its two J3DModels (body +0x12C4, propeller
-// +0x12CC) are drawn at their base scale (J3DModel +0xBC in HD), which nothing else sets, so it is set there
+// ph_class is the Peahat and the Seahat: the parameter's low byte picks it (0 or 0xFF a Peahat, else a Seahat, which
+// loads its own archive). Giant Seahats: the class ignores the actor's scale; its two J3DModels (body +0x12C4,
+// propeller +0x12CC) are drawn at their base scale (J3DModel +0xBC in HD), which nothing else sets, so it is set there
 std::vector<uint32_t> g_giant_ids;
-constexpr float kGiant = 2.5f;
+constexpr float kGiant = 1.5f;
+// bigger hits: the collider sizes Gyorgs (spheres) and Seahats (cylinders) set each step are doubled while the
+// collider lies inside one of them (sph_set_r / cyl_setR / cyl_setH hooks below)
+std::vector<std::pair<uint32_t, uint32_t>> g_big_hits;  // [actor, actor + its size)
+constexpr float kHitScale = 2.0f;
 
 // spawns `m` at `dist` from Link, `behind` him (out of the camera's view) or anywhere around him, `dy` above him; a
 // monster `on_ground` only where the game's ground check (dGrass's checkGroundY, 02549F4C) finds land within 250 of
@@ -127,8 +132,8 @@ uint32_t g_gyctrl = 0xFFFFFFFF;
 // ---- switches ----
 template <int I> bool on() { return g_on[I].load(std::memory_order_relaxed); }
 template <int I> void set(bool v) { g_on[I] = v; }
-bool (*const kOn[kCount])() = {on<0>, on<1>, on<2>, on<3>, on<4>, on<5>, on<6>, on<7>, on<8>};
-void (*const kSet[kCount])(bool) = {set<0>, set<1>, set<2>, set<3>, set<4>, set<5>, set<6>, set<7>, set<8>};
+bool (*const kOn[kCount])() = {on<0>, on<1>, on<2>, on<3>, on<4>, on<5>, on<6>, on<7>, on<8>, on<9>};
+void (*const kSet[kCount])(bool) = {set<0>, set<1>, set<2>, set<3>, set<4>, set<5>, set<6>, set<7>, set<8>, set<9>};
 
 const std::vector<Mod>& catalogue() {
     static const std::vector<Mod> mods = {
@@ -151,6 +156,8 @@ const std::vector<Mod>& catalogue() {
         {"storm", "Stormy weather", "Spooky", "Heavy rain (the game's own) at night, or all the time.", {"At night", "Always"}},
         {"fog", "Thick fog", "Spooky", "The world fades into fog a short way from Link, at night or all the time.", {"At night", "Always"}},
         {"swim", "Endless swimming", "Gameplay", "Link's swim meter never runs out, so he can swim as far as he likes.", {}},
+        {"giant-seahats", "Giant Seahats", "Spooky",
+         "With Haunted sea on, every Seahat is a giant and most of what comes for Link are Seahats (Gyorgs less often).", {}},
     };
     return mods;
 }
@@ -186,7 +193,7 @@ void step(Cpu* c) {
     std::string stage((const char*)mem::ptr(kStage), strnlen((const char*)mem::ptr(kStage), 8));
     if (!in_mem2(link) || stage.empty() || stage == "sea_T" || stage == "Name" || stage == "ENDumi") return;  // title, file select
     const uint32_t sv = save();
-    if (fresh) g_night = Spawner{}, g_sea = Spawner{}, g_gyctrl = 0xFFFFFFFF, g_gyorg_ids.clear(), g_giant_ids.clear();
+    if (fresh) g_night = Spawner{}, g_sea = Spawner{}, g_gyctrl = 0xFFFFFFFF, g_gyorg_ids.clear(), g_giant_ids.clear(), g_big_hits.clear();
 
     const uint16_t max_life = ld16(sv), cur = ld16(sv + 2);
     if (on<kDamage>() && !fresh && cur < life) {  // also a hit that killed: None and x0.5 can save Link
@@ -257,24 +264,29 @@ void step(Cpu* c) {
             // not the Ghost Ship (Ayush, proc 0xB2) or cannon boats (Oship, 0xB3) yet: the Ghost Ship shows only at night
             // when its parameter's moon phase is tonight's (dKy_moon_type_chk) and fades as Link comes close; a cannon
             // boat (params 0xFFFFFFFF, spawn angle.x 0x00FF for "no switch B") appears but sits still and is gone in
-            // seconds without its path. Both hunt a sailing Link, and this early test file has no boat to sail.
+            // seconds without its path. Both hunt a sailing Link, and this early test file has no boat to sail. Phantom
+            // Ganon (Fganon, 0xF1) spawned out here crashes in his own update (a null read: he needs his fight).
             const bool ctrl = g_gyctrl != 0xFFFFFFFF && guest_call(c, GC(0x025DE50C), {g_gyctrl});
             if (!ctrl) {  // its controller first; Gyorgs once it exists
                 Spawner none;
                 g_gyctrl = spawn(c, none, kGyCtrl, link, 0, false, 0, false);
                 g_gyorg_ids.push_back(g_gyctrl);
-            } else if (rand() % 2) {
+            } else if (rand() % (on<kGiants>() ? 4 : 2) == 0) {
                 const uint32_t id = spawn(c, g_sea, kGyorg, link, 900 + rand() % 600, false, -40, false, g_gyctrl);
                 if (id != 0xFFFFFFFF) g_gyorg_ids.push_back(id);
             } else {  // Seahats (one in three a giant), Kargarocs; at night also Poes drifting over the water
                 static const Monster kDay[] = {kSeahat, kSeahat, kKargaroc}, kNightSea[] = {kSeahat, kKargaroc, kPoe, kPoe};
-                const Monster m = night ? kNightSea[rand() % 4] : kDay[rand() % 3];
+                const Monster m = on<kGiants>() ? kSeahat : night ? kNightSea[rand() % 4] : kDay[rand() % 3];
                 const bool poe = m.proc == kPoe.proc;
                 const uint32_t id = spawn(c, g_sea, m, link, poe ? 500 + rand() % 400 : 900 + rand() % 600, false, poe ? 120 : 300, false);
-                if (m.proc == kSeahat.proc && rand() % 3 == 0 && id != 0xFFFFFFFF) g_giant_ids.push_back(id);
+                if (m.proc == kSeahat.proc && (on<kGiants>() || rand() % 3 == 0) && id != 0xFFFFFFFF) g_giant_ids.push_back(id);
             }
             g_sea.next = now + kEvery[level] * (night ? 0.6 : 1) * (0.6 + rand() / (double)RAND_MAX * 0.8);
         }
+        g_big_hits.clear();
+        for (uint32_t id : g_sea.ids)
+            if (const uint32_t a = guest_call(c, GC(0x025DE50C), {id}); a && (ld16(a + 8) == kGyorg.proc || ld16(a + 8) == kSeahat.proc))
+                g_big_hits.push_back({a, a + (ld16(a + 8) == kGyorg.proc ? 0x1000 : 0x1600)});
         for (uint32_t id : g_giant_ids)
             if (const uint32_t ph = guest_call(c, GC(0x025DE50C), {id}))
                 for (uint32_t off : {0x12C4u, 0x12CCu})
@@ -301,3 +313,16 @@ extern "C" void site_0216BB70(Cpu* c) {
     if (!c->r[3] && ours(c->r[31])) c->r[3] = 1;
 }
 
+// the size setters of the collision shapes (cM3dGSph::SetR, cM3dGCyl::SetR / SetH; the size in f1): bigger for
+// Haunted sea's Gyorgs and Seahats
+static void big_hit(Cpu* c) {
+    if (!mods::extras::on<mods::extras::kSea>()) return;
+    for (const auto& [lo, hi] : mods::extras::g_big_hits)
+        if (c->r[3] >= lo && c->r[3] < hi) { c->f[1].ps0 *= mods::extras::kHitScale; return; }
+}
+extern "C" void f_02018C8C_orig(Cpu* c);
+extern "C" void hook_02018C8C(Cpu* c) { big_hit(c); f_02018C8C_orig(c); }
+extern "C" void f_020184DC_orig(Cpu* c);
+extern "C" void hook_020184DC(Cpu* c) { big_hit(c); f_020184DC_orig(c); }
+extern "C" void f_02018428_orig(Cpu* c);
+extern "C" void hook_02018428(Cpu* c) { big_hit(c); f_02018428_orig(c); }
