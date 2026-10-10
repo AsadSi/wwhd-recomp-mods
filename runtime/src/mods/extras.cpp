@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <ctime>
 #include <string>
@@ -36,7 +37,7 @@
 
 namespace mods::extras {
 namespace {
-enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kCount };  // the catalogue's order
+enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kCount };  // the catalogue's order
 std::atomic<bool> g_on[kCount];
 std::atomic<int> g_choice[kCount];
 
@@ -50,9 +51,20 @@ bool in_mem2(uint32_t a) { return a >= 0x10000000 && a < 0x50000000; }
 uint32_t u32_bits(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
 
 // a monster from the object name table, and the parameter it is created with (0xFFFFFFFF: the defaults)
-struct Monster { int16_t proc; int8_t subtype; uint32_t param; };
+struct Monster { int16_t proc; int8_t subtype; uint32_t param; int16_t angle_x = 0; };  // some read a second parameter from angle.x
 constexpr Monster kRedead{0xE0, 0, 0xFFFFFFFF}, kStalfos{0xBE, -1, 0xFFFFFFFF}, kPoe{0xD4, -1, 0xFFFFFFFF},
-                  kGyorg{0xE4, -1, 0xFFFFFFFF}, kSeahat{0xD1, -1, 0xFFFFFF01}, kKargaroc{0xB5, -1, 0};
+                  kGyorg{0xE4, -1, 0xFFFFFFFF}, kSeahat{0xD1, -1, 0xFFFFFF01}, kKargaroc{0xB5, -1, 0},
+                  // a cannon boat (daOship): sub mode 0 (no path), no Triforce / salvage / switch conditions, switch B none
+                  kOship{0xB3, -1, 0x00FFFF00, 0x00FF},
+                  // the Ghost Ship (daGhostship): no path; its moon phase (low byte) is tonight's when spawned (see below)
+                  kAyush{0xB2, -1, 0x00FF0000},
+                  // Tetra's pirate ship (daObjPirateship): type 3 (no pirates, no scene), no path; a moving BG with a walkable deck
+                  kPirates{0x39, -1, 0x03FFFF00},
+                  // Phantom Ganon (daFganon): type 3 (the Ganon's Tower fight) with no switch; he waits 10000 above, unseen,
+                  // until Link comes within byte 1 x 10 of where he was made (2550), then descends and fights (flies, fires,
+                  // spin attacks, and makes his own short-lived copies). HD fganon_class: mAction +0x5BA, mMode +0x5BC,
+                  // materialized +0x8C1 (GameCube + 0x234 from there; the first fields are + 0x11C)
+                  kFganon{0xF1, -1, 0x00FFFF03};
 
 // the monsters a spawner has out, by process id; forgotten when they die or the stage changes
 struct Spawner {
@@ -64,28 +76,38 @@ struct Spawner {
 };
 Spawner g_night, g_sea;
 constexpr Monster kGyCtrl{0xE5, -1, 0x7F00FF01};
+// one actor kept out at a time; a spawn takes a few steps to come to life, so it is not retried before `next`
+struct Single {
+    uint32_t id = 0xFFFFFFFF;
+    double next = 0;
+    uint32_t actor(Cpu* c) { return id == 0xFFFFFFFF ? 0 : guest_call(c, GC(0x025DE50C), {id}); }
+    bool wanted(Cpu* c, double now) { return !actor(c) && now >= next; }
+};
+Single g_ghost, g_bigship, g_phantom;
 // ph_class is the Peahat and the Seahat: the parameter's low byte picks it (0 or 0xFF a Peahat, else a Seahat, which
 // loads its own archive). Giant Seahats: the class ignores the actor's scale; its two J3DModels (body +0x12C4,
 // propeller +0x12CC) are drawn at their base scale (J3DModel +0xBC in HD), which nothing else sets, so it is set there
-std::vector<uint32_t> g_giant_ids;
-constexpr float kGiant = 1.5f;
+std::vector<std::pair<uint32_t, float>> g_giant_ids;  // and the scale
+constexpr float kGiant = 1.5f, kColossus = 3.0f;
 // bigger hits: the collider sizes Gyorgs (spheres) and Seahats (cylinders) set each step are doubled while the
 // collider lies inside one of them (sph_set_r / cyl_setR / cyl_setH hooks below)
-std::vector<std::pair<uint32_t, uint32_t>> g_big_hits;  // [actor, actor + its size)
+struct BigHit { uint32_t lo, hi; float scale; };  // [actor, actor + its size)
+std::vector<BigHit> g_big_hits;
 constexpr float kHitScale = 2.0f;
 
-// spawns `m` at `dist` from Link, `behind` him (out of the camera's view) or anywhere around him, `dy` above him; a
+// spawns `m` at `dist` from Link, `dy` above him; a
 // monster `on_ground` only where the game's ground check (dGrass's checkGroundY, 02549F4C) finds land within 250 of
 // Link's height and above the sea (y 0), never over water or off a cliff (6 tries, the last 3 all around him, else
 // not this time)
-uint32_t spawn(Cpu* c, Spawner& s, Monster m, uint32_t link, float dist, bool behind, float dy, bool on_ground, uint32_t parent = 0) {
+// `side`: 0 anywhere around him, 1 behind (out of the camera's view), -1 ahead
+uint32_t spawn(Cpu* c, Spawner& s, Monster m, uint32_t link, float dist, int side, float dy, bool on_ground, uint32_t parent = 0) {
     static const bool seeded = (srand((unsigned)time(nullptr)), true);
     (void)seeded;
     static const uint32_t buf = mem::host_alloc(0x20);  // pos (cXyz) at +0, angle (csXyz) at +0x10
     const float ly = (float)ldf32(link + kPos + 4);
     for (int attempt = 0; attempt < 6; attempt++) {
         const double yaw = (int16_t)ld16(link + kAngleY) * M_PI / 32768;
-        const double a = behind && attempt < 3 ? yaw + M_PI + (rand() / (double)RAND_MAX - 0.5) * 1.6 : rand() / (double)RAND_MAX * 2 * M_PI;
+        const double a = side && attempt < 3 ? yaw + (side > 0 ? M_PI : 0) + (rand() / (double)RAND_MAX - 0.5) * 1.6 : rand() / (double)RAND_MAX * 2 * M_PI;
         const float x = (float)ldf32(link + kPos) + (float)(sin(a) * dist), z = (float)ldf32(link + kPos + 8) + (float)(cos(a) * dist);
         st32(buf, u32_bits(x));
         st32(buf + 4, u32_bits(ly + dy));
@@ -97,7 +119,7 @@ uint32_t spawn(Cpu* c, Spawner& s, Monster m, uint32_t link, float dist, bool be
             if (ground == ly + 250 || ground < 5 || std::fabs(ground - ly) > 250) continue;  // nothing, water or a drop
             st32(buf + 4, u32_bits(ground + 5));
         }
-        st16(buf + 0x10, 0);
+        st16(buf + 0x10, (uint16_t)m.angle_x);
         st16(buf + 0x12, (uint16_t)(int16_t)(atan2(-sin(a), -cos(a)) * 32768 / M_PI));  // facing Link
         st16(buf + 0x14, 0);
         // created in Link's process layer (base_process_class::mLyTg.mpLayer, +0x2C), as an actor's own spawns are: here,
@@ -132,8 +154,8 @@ uint32_t g_gyctrl = 0xFFFFFFFF;
 // ---- switches ----
 template <int I> bool on() { return g_on[I].load(std::memory_order_relaxed); }
 template <int I> void set(bool v) { g_on[I] = v; }
-bool (*const kOn[kCount])() = {on<0>, on<1>, on<2>, on<3>, on<4>, on<5>, on<6>, on<7>, on<8>, on<9>};
-void (*const kSet[kCount])(bool) = {set<0>, set<1>, set<2>, set<3>, set<4>, set<5>, set<6>, set<7>, set<8>, set<9>};
+bool (*const kOn[kCount])() = {on<0>, on<1>, on<2>, on<3>, on<4>, on<5>, on<6>, on<7>, on<8>, on<9>, on<10>, on<11>};
+void (*const kSet[kCount])(bool) = {set<0>, set<1>, set<2>, set<3>, set<4>, set<5>, set<6>, set<7>, set<8>, set<9>, set<10>, set<11>};
 
 const std::vector<Mod>& catalogue() {
     static const std::vector<Mod> mods = {
@@ -157,7 +179,12 @@ const std::vector<Mod>& catalogue() {
         {"fog", "Thick fog", "Spooky", "The world fades into fog a short way from Link, at night or all the time.", {"At night", "Always"}},
         {"swim", "Endless swimming", "Gameplay", "Link's swim meter never runs out, so he can swim as far as he likes.", {}},
         {"giant-seahats", "Giant Seahats", "Spooky",
-         "With Haunted sea on, every Seahat is a giant and most of what comes for Link are Seahats (Gyorgs less often).", {}},
+         "With Haunted sea on, every Seahat is a giant, one in four a colossus, and most of what comes for Link are Seahats "
+         "(Gyorgs less often).", {}},
+        {"phantom-ganon", "Phantom Ganon", "Spooky",
+         "A giant Phantom Ganon haunts the open sea around the boat, day and night, and fights as he does in Ganon's Tower.", {}},
+        {"big-ship", "Big ship (look-test)", "Experimental",
+         "A pirate ship hull follows the King of Red Lions wherever he sails. A first step towards a walkable ship.", {}},
     };
     return mods;
 }
@@ -193,7 +220,13 @@ void step(Cpu* c) {
     std::string stage((const char*)mem::ptr(kStage), strnlen((const char*)mem::ptr(kStage), 8));
     if (!in_mem2(link) || stage.empty() || stage == "sea_T" || stage == "Name" || stage == "ENDumi") return;  // title, file select
     const uint32_t sv = save();
-    if (fresh) g_night = Spawner{}, g_sea = Spawner{}, g_gyctrl = 0xFFFFFFFF, g_gyorg_ids.clear(), g_giant_ids.clear(), g_big_hits.clear();
+    static double settle = 0;  // no spawning while a stage is still being entered (the spawns would land in the old one)
+    if (fresh) {
+        g_night = Spawner{}, g_sea = Spawner{}, g_gyctrl = 0xFFFFFFFF, g_ghost = g_bigship = g_phantom = Single{};
+        g_gyorg_ids.clear(), g_giant_ids.clear(), g_big_hits.clear();
+        settle = game_time() + 2;
+    }
+    const bool settled = !fresh && game_time() >= settle;
 
     const uint16_t max_life = ld16(sv), cur = ld16(sv + 2);
     if (on<kDamage>() && !fresh && cur < life) {  // also a hit that killed: None and x0.5 can save Link
@@ -228,7 +261,7 @@ void step(Cpu* c) {
     // swimming (mModeFlg +0x6A70, ModeFlg_SWIM); the sea stage also holds the islands
     const int proc = (int)ld32(link + 0x65F0);
     const bool water = (proc >= 0x86 && proc <= 0x91 && proc != 0x90) || (ld32(link + 0x6A70) & 0x40000);
-    const bool night = hour >= 19 || hour < 5, sea = stage == "sea" && water;
+    const bool night = hour >= 19 || hour < 5, sea = stage == "sea" && water, boat = proc >= 0x86 && proc <= 0x91 && proc != 0x90;
     static const double kEvery[] = {25, 12, 5};  // seconds between spawns: Sometimes, Often, Relentless
     static const size_t kMax[] = {2, 4, 7};      // monsters out at once
     // stormy weather: the rain count (dKyw_rain_set, 0257E7C0; 250 is a downpour) set every step while it should
@@ -247,7 +280,7 @@ void step(Cpu* c) {
     // endless swimming: the air meter (dComIfG_play_c::mAirMeter, 900 = full, +0x5B4C) kept full while Link swims
     if (on<kSwim>() && (ld32(link + 0x6A70) & 0x40000)) st32(kPlay + 0x5B4C, 900);
     // Night of the dead: on land at night (the sea stage's islands count)
-    if (on<kNight>() && night && !water && !fresh) {
+    if (on<kNight>() && night && !water && settled) {
         const int level = g_choice[kNight].load();
         g_night.prune(c);
         static const Monster kDead[] = {kRedead, kRedead, kStalfos, kPoe};
@@ -257,7 +290,7 @@ void step(Cpu* c) {
         }
     }
     // Haunted sea: on the open sea, more often at night
-    if (on<kSea>() && sea && !fresh) {
+    if (on<kSea>() && sea && settled) {
         const int level = g_choice[kSea].load();
         g_sea.prune(c);
         if (now >= g_sea.next && g_sea.ids.size() < kMax[level] + (night ? 2 : 0)) {
@@ -271,6 +304,8 @@ void step(Cpu* c) {
                 Spawner none;
                 g_gyctrl = spawn(c, none, kGyCtrl, link, 0, false, 0, false);
                 g_gyorg_ids.push_back(g_gyctrl);
+            } else if (boat && rand() % 4 == 0) {  // a cannon boat ahead of a sailing Link, bombarding from its range (2500-6000)
+                spawn(c, g_sea, kOship, link, 3000 + rand() % 2500, false, 0, false);
             } else if (rand() % (on<kGiants>() ? 4 : 2) == 0) {
                 const uint32_t id = spawn(c, g_sea, kGyorg, link, 900 + rand() % 600, false, -40, false, g_gyctrl);
                 if (id != 0xFFFFFFFF) g_gyorg_ids.push_back(id);
@@ -279,25 +314,87 @@ void step(Cpu* c) {
                 const Monster m = on<kGiants>() ? kSeahat : night ? kNightSea[rand() % 4] : kDay[rand() % 3];
                 const bool poe = m.proc == kPoe.proc;
                 const uint32_t id = spawn(c, g_sea, m, link, poe ? 500 + rand() % 400 : 900 + rand() % 600, false, poe ? 120 : 300, false);
-                if (m.proc == kSeahat.proc && (on<kGiants>() || rand() % 3 == 0) && id != 0xFFFFFFFF) g_giant_ids.push_back(id);
+                if (m.proc == kSeahat.proc && (on<kGiants>() || rand() % 3 == 0) && id != 0xFFFFFFFF)
+                    g_giant_ids.push_back({id, on<kGiants>() && rand() % 4 == 0 ? kColossus : kGiant});
             }
             g_sea.next = now + kEvery[level] * (night ? 0.6 : 1) * (0.6 + rand() / (double)RAND_MAX * 0.8);
         }
+        // the Ghost Ship: one at a time, at night (the game hides it by day and when its moon phase is not tonight's,
+        // dKy_moon_type_chk 02560828), far off, singing; it fades as Link comes close (unless he has the Ghost Ship Chart)
+        if (night && boat && g_ghost.wanted(c, now)) {
+            Monster ghost = kAyush;
+            ghost.param |= guest_call(c, GC(0x02560828)) & 0xFF;
+            Spawner none;
+            g_ghost.id = spawn(c, none, ghost, link, 4500 + rand() % 2000, -1, 0, false);
+            g_ghost.next = now + 5;
+        }
         g_big_hits.clear();
         for (uint32_t id : g_sea.ids)
-            if (const uint32_t a = guest_call(c, GC(0x025DE50C), {id}); a && (ld16(a + 8) == kGyorg.proc || ld16(a + 8) == kSeahat.proc))
-                g_big_hits.push_back({a, a + (ld16(a + 8) == kGyorg.proc ? 0x1000 : 0x1600)});
-        for (uint32_t id : g_giant_ids)
+            if (const uint32_t a = guest_call(c, GC(0x025DE50C), {id}); a && (ld16(a + 8) == kGyorg.proc || ld16(a + 8) == kSeahat.proc)) {
+                float scale = kHitScale;
+                for (const auto& [gid, gs] : g_giant_ids) if (gid == id && gs > kGiant) scale = gs;
+                g_big_hits.push_back({a, a + (ld16(a + 8) == kGyorg.proc ? 0x1000u : 0x1600u), scale});
+            }
+        for (const auto& [id, scale] : g_giant_ids)
             if (const uint32_t ph = guest_call(c, GC(0x025DE50C), {id}))
                 for (uint32_t off : {0x12C4u, 0x12CCu})
                     if (const uint32_t model = ld32(ph + off); in_mem2(model))
-                        for (int i = 0; i < 3; i++) st32(model + 0xBC + 4 * i, u32_bits(kGiant));
+                        for (int i = 0; i < 3; i++) st32(model + 0xBC + 4 * i, u32_bits(scale));
         // the Gyorgs hunt Link: without their controller's path and battle state they would only dive and circle
         // (daGy_c mode at +0x3CC: 0 dive, 1 circle, 6 circle with others), so those are turned into an attack on the
         // player (modeAttackPlayerInit, 02169B48, mode 3); attacks, damage and deletion run as the game decides
         for (uint32_t id : g_gyorg_ids) {
             const uint32_t gy = id == g_gyctrl ? 0 : guest_call(c, GC(0x025DE50C), {id});
             if (const uint32_t mode = gy ? ld32(gy + 0x3CC) : 9; mode == 0 || mode == 1 || mode == 6) guest_call(c, GC(0x02169B48), {gy});
+        }
+    }
+    // Phantom Ganon: one near a sailing Link, a giant: his own execute eases the actor's scale (+0x330) to 1, so it is
+    // set after it every step; his colliders follow the model (this file's size hooks do not)
+    if (on<kPhantom>() && sea && boat && settled) {
+        if (g_phantom.wanted(c, now)) {
+            Spawner none;
+            g_phantom.id = spawn(c, none, kFganon, link, 1500 + rand() % 500, 1, 0, false);
+            g_phantom.next = now + 20;
+        }
+        if (const uint32_t pg = g_phantom.actor(c)) {
+            for (int i = 0; i < 3; i++) st32(pg + 0x330 + 4 * i, u32_bits(2.5f));
+            // he flies and fights around his home point (fopAc_ac_c::home.pos, +0x2EC): the boat, wherever it goes
+            st32(pg + 0x2EC, ld32(link + kPos));
+            st32(pg + 0x2F4, ld32(link + kPos + 8));
+        }
+    }
+    // Big ship: a pirate ship hull made once the King of Red Lions (dComIfGp_getShipActor, play +0x5B3C) is in the sea
+    // stage, then put at his position and heading every step (current.pos, current.angle.y +0x322, shape_angle.y)
+    if (const uint32_t korl = ld32(kPlay + 0x5B3C); on<kBigShip>() && stage == "sea" && in_mem2(korl) && settled) {
+        const uint32_t hull = g_bigship.actor(c);
+        if (!hull) {
+            if (g_bigship.wanted(c, now)) {
+                Spawner none;
+                g_bigship.id = spawn(c, none, kPirates, korl, 0, false, 0, false);
+                g_bigship.next = now + 5;
+            }
+        } else {
+            // the hull's centre 1300 ahead of him, so he rides at its stern
+            const double yaw = (int16_t)ld16(korl + kAngleY) * M_PI / 32768;
+            st32(hull + 0x314, u32_bits((float)(ldf32(korl + 0x314) + sin(yaw) * 1300)));
+            st32(hull + 0x318, ld32(korl + 0x318));
+            st32(hull + 0x31C, u32_bits((float)(ldf32(korl + 0x31C) + cos(yaw) * 1300)));
+            st16(hull + 0x322, ld16(korl + kAngleY));
+            st16(hull + kAngleY, ld16(korl + kAngleY));
+        }
+    }
+    // test aid: WWHD_EXTRAS_SPAWN=proc:param:dist:dy[:anglex] (hex) spawns that once, 3 s after Link appears
+    static const char* test_spawn = getenv("WWHD_EXTRAS_SPAWN");
+    static double test_at = -1;
+    if (test_spawn) {
+        if (fresh) test_at = now + 4;
+        if (test_at > 0 && now >= test_at) {
+            test_at = -1;
+            unsigned proc = 0, param = 0, dist = 0, dy = 0, ax = 0;
+            if (sscanf(test_spawn, "%x:%x:%x:%x:%x", &proc, &param, &dist, &dy, &ax) >= 4) {
+                Spawner none;
+                spawn(c, none, Monster{(int16_t)proc, -1, param, (int16_t)ax}, link, (float)dist, false, (float)dy, false);
+            }
         }
     }
 }
@@ -317,8 +414,8 @@ extern "C" void site_0216BB70(Cpu* c) {
 // Haunted sea's Gyorgs and Seahats
 static void big_hit(Cpu* c) {
     if (!mods::extras::on<mods::extras::kSea>()) return;
-    for (const auto& [lo, hi] : mods::extras::g_big_hits)
-        if (c->r[3] >= lo && c->r[3] < hi) { c->f[1].ps0 *= mods::extras::kHitScale; return; }
+    for (const auto& [lo, hi, scale] : mods::extras::g_big_hits)
+        if (c->r[3] >= lo && c->r[3] < hi) { c->f[1].ps0 *= scale; return; }
 }
 extern "C" void f_02018C8C_orig(Cpu* c);
 extern "C" void hook_02018C8C(Cpu* c) { big_hit(c); f_02018C8C_orig(c); }
@@ -326,3 +423,12 @@ extern "C" void f_020184DC_orig(Cpu* c);
 extern "C" void hook_020184DC(Cpu* c) { big_hit(c); f_020184DC_orig(c); }
 extern "C" void f_02018428_orig(Cpu* c);
 extern "C" void hook_02018428(Cpu* c) { big_hit(c); f_02018428_orig(c); }
+
+// JPABaseEmitter::setGlobalRTMatrix (028249B0; r4, r5 inside the emitter): Phantom Ganon's energy ball calls it on the
+// emitters of its hit effect without checking them, and on the sea, whose particle banks lack those effects,
+// dComIfGp_particle_set returns none (daFgmahou_Execute 0213E098): nothing to set then
+extern "C" void f_028249B0_orig(Cpu* c);
+extern "C" void hook_028249B0(Cpu* c) {
+    if (c->r[4] < 0x1000) return;
+    f_028249B0_orig(c);
+}
