@@ -33,3 +33,7 @@
 02363164  # daObj_Ikada execute: Beedle's ship in tow behind the King of Red Lions (extras.cpp)
 02360420  # daObj_Ikada::setMtx: Beedle's ship's deck as big as its model, and lowered
 024EECC8  # dBgS::GetExitId: Beedle's ship's hut is no door (extras.cpp)
+024C8A58  # daTornado execute: the wandering cyclone takes the boat only from within 3000 (extras.cpp)
+@024C99E0 # daTornado create: Cyclos beaten (event bit 0x2710) does not stop the wandering cyclone
+@024C8F68 # daTornado execute: nor fade it out
+@024C8FF8 # daTornado execute: (the other test)
