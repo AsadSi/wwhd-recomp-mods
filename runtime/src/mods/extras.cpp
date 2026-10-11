@@ -43,7 +43,7 @@
 
 namespace mods::extras {
 namespace {
-enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kAudio, kDeep, kLeviathan, kMolgera, kStalker, kBeedle, kCalm, kPhoto, kGunner, kBlood, kCyclone, kMaelstrom, kArmada, kSiren, kCount };  // the catalogue's order
+enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kAudio, kDeep, kLeviathan, kMolgera, kStalker, kBeedle, kCalm, kPhoto, kGunner, kBlood, kCyclone, kMaelstrom, kArmada, kSiren, kWrongLion, kCount };  // the catalogue's order
 std::atomic<bool> g_on[kCount];
 std::atomic<int> g_choice[kCount];
 std::atomic<int> g_often[kCount];
@@ -398,6 +398,9 @@ const std::vector<Mod>& catalogue() {
          "Now and then, far out at sea and mostly at night, a sad little melody drifts over the water and the boat begins "
          "to turn toward it on its own. Steer against it until the song fades; sail all the way to it and something "
          "waits there.", {}, true},
+        {"wrong-lion", "Something in the Lion", "Spooky",
+         "Very rarely, sailing at night, the King of Red Lions laughs a laugh that is not his, swerves off and races on by "
+         "himself for a few seconds, then sails on as if nothing happened.", {}, true},
     };
     return mods;
 }
@@ -434,7 +437,7 @@ void set_often(const std::string& id, int o) {
 // land, near an island or after its time, the fog rolling out. Night of the dead is a roll at nightfall for that night;
 // Stormy weather and Thick fog are spells of a few minutes. Rain and fog fade in and out: the rain count
 // (dKyw_rain_set) is ramped, and our fog is blended with the game's by dKy_fog_startendz_set's ratio.
-// Test aid: WWHD_SPOOKY=<sea|giants|phantom|dead|storm|fog|deep|leviathan|molgera|stalker|calm|blood|cyclone|maelstrom|armada|siren>@<game seconds>[;...] starts that event at that time
+// Test aid: WWHD_SPOOKY=<sea|giants|phantom|dead|storm|fog|deep|leviathan|molgera|stalker|calm|blood|cyclone|maelstrom|armada|siren|lion>@<game seconds>[;...] starts that event at that time
 // (@+<seconds>: that long after Link is first in play).
 namespace {
 constexpr int kAlways = 3;
@@ -499,7 +502,7 @@ void remove_molgera(Cpu* c) {
 }
 void wind(Cpu* c, float power) { c->f[1].ps0 = power; guest_call(c, GC(0x0257E594)); }
 void begin(int k, double now) {
-    g_until[k] = now + (k == kPhantom || k == kLeviathan ? 180 : k == kMolgera ? 150 : k == kStalker ? 120 : k == kSea ? 120 + rand() % 120 : k == kCalm ? 60 + rand() % 90 : k == kCyclone ? 150 : k == kMaelstrom ? 90 : k == kArmada ? 240 : k == kSiren ? 75 : 180 + rand() % 300);
+    g_until[k] = now + (k == kPhantom || k == kLeviathan ? 180 : k == kMolgera ? 150 : k == kStalker ? 120 : k == kSea ? 120 + rand() % 120 : k == kCalm ? 60 + rand() % 90 : k == kCyclone ? 150 : k == kMaelstrom ? 90 : k == kArmada ? 240 : k == kSiren ? 75 : k == kWrongLion ? 6 + rand() % 4 : 180 + rand() % 300);
     if (k == kPhantom || k == kStalker) g_phantom = Single{};  // made afresh by their blocks below
     if (k == kLeviathan) g_leviathan = Single{};
     if (k == kMolgera) g_molgera = Single{};
@@ -511,7 +514,7 @@ void begin(int k, double now) {
 void finish(Cpu* c, int k, double now, const char* why) {
     trace("extras: event %s ends (%s)", event_name(k), why);
     g_until[k] = 0;
-    if (k != kNight && k != kStorm && k != kFog && k != kDeep && k != kBlood) g_cool = now + (k == kSea || k == kCalm || k == kCyclone || k == kMaelstrom ? 300 : 600);
+    if (k != kNight && k != kStorm && k != kFog && k != kDeep && k != kBlood && k != kWrongLion) g_cool = now + (k == kSea || k == kCalm || k == kCyclone || k == kMaelstrom ? 300 : 600);
     if ((k == kPhantom || k == kStalker) && g_phantom.actor(c)) guest_call(c, GC(0x025D57E4), {g_phantom.id});  // fopAcM_delete_id
     if (k == kLeviathan && g_leviathan.actor(c)) guest_call(c, GC(0x025D57E4), {g_leviathan.id});
     if (k == kMolgera) remove_molgera(c);
@@ -537,7 +540,7 @@ std::vector<Forced> forced_events() {
     std::vector<Forced> v;
     const char* e = getenv("WWHD_SPOOKY");
     static const std::pair<const char*, int> kNames[] = {{"sea", kSea}, {"giants", kGiants}, {"phantom", kPhantom},
-                                                         {"dead", kNight}, {"storm", kStorm}, {"fog", kFog}, {"deep", kDeep}, {"leviathan", kLeviathan}, {"molgera", kMolgera}, {"stalker", kStalker}, {"calm", kCalm}, {"blood", kBlood}, {"cyclone", kCyclone}, {"maelstrom", kMaelstrom}, {"armada", kArmada}, {"siren", kSiren}};
+                                                         {"dead", kNight}, {"storm", kStorm}, {"fog", kFog}, {"deep", kDeep}, {"leviathan", kLeviathan}, {"molgera", kMolgera}, {"stalker", kStalker}, {"calm", kCalm}, {"blood", kBlood}, {"cyclone", kCyclone}, {"maelstrom", kMaelstrom}, {"armada", kArmada}, {"siren", kSiren}, {"lion", kWrongLion}};
     for (std::string rest = e ? e : ""; !rest.empty();) {
         const std::string item = rest.substr(0, rest.find(';'));
         rest = item.size() < rest.size() ? rest.substr(item.size() + 1) : "";
@@ -618,6 +621,8 @@ void direct(Cpu* c, uint32_t sv, uint32_t link, double now, bool night, bool wat
     if (stage == "sea" && ashore && night && now >= g_cool && g_until[kStalker] == 0 && rolls(kStalker, 0.03))
         begin(kStalker, now);
     if (now >= g_until[kDeep] && stage == "sea" && !ashore && rolls(kDeep, 0.07 * (night ? 1.5 : 0.8))) begin(kDeep, now);
+    if (now >= g_until[kWrongLion] && stage == "sea" && night && boat && g_until[kSiren] == 0 && (always(kWrongLion) ? g_on[kWrongLion].load() : rolls(kWrongLion, 0.02)))
+        begin(kWrongLion, now);  // (Always: every minute of the night)
     if (stage != "sea" || ashore || isle < 6000 || now < g_cool || g_warn >= 0 || g_until[kSea] > 0 || g_until[kPhantom] > 0 || g_until[kLeviathan] > 0 || g_until[kMolgera] > 0 || g_until[kCalm] > 0 || g_until[kCyclone] > 0 || g_until[kMaelstrom] > 0 || g_until[kArmada] > 0 || g_until[kSiren] > 0) return;
     const double more = std::min(3.0, 1 + (now - g_out_since) / 600);
     if (boat && rolls(kPhantom, 0.017 * (night ? 2 : 0.4) * more)) g_warn = kPhantom;
@@ -1518,6 +1523,23 @@ void step(Cpu* c) {
             }
             for (int i = 0; i < 3; i++)
                 if (const uint32_t id = spawn(c, g_sea, kGyorg, link, 900 + rand() % 400, 0, -40, false, g_gyctrl, true); id != 0xFFFFFFFF) g_gyorg_ids.push_back(id);
+        }
+    }
+    // Something in the Lion: a laugh (CV_G_SHIP_LAUGH 0x4925), and for a few seconds the boat swerves (its yaw rate
+    // m03B8, +0x6A0, as Siren song's) and races (speedF +0x370 35, its steering's speed limit m03E0 +0x6C4 raised so it
+    // is not cut back), each step after its execute, whatever the stick and the wind say
+    if (const uint32_t korl = ld32(kPlay + 0x5B3C); in_mem2(korl) && riding) {
+        static double for_event = -1;
+        static int16_t swerve = 0;
+        if (g_until[kWrongLion] > now) {
+            if (for_event != g_until[kWrongLion]) {
+                for_event = g_until[kWrongLion], swerve = rand() % 2 ? 0x300 : -0x300;
+                guest_call(c, GC(0x025E1988), {0x4925});
+                trace("extras: something in the Lion laughs and takes the helm");
+            }
+            st16(korl + 0x6A0, (uint16_t)swerve);
+            st32(korl + 0x6C4, u32_bits(40.f)), st32(korl + 0x370, u32_bits(35.f));
+            if (static int every = 0; ++every % 45 == 0) swerve = (int16_t)-swerve;  // weaving
         }
     }
     // the event's bosses are kept in Link's room (+0x326): made in the room he was in, they went with it when it unloaded
