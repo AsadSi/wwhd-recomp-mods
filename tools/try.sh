@@ -22,6 +22,7 @@ BEEDLE="Beedle's ship (keys: move WASD, A = K/Space, B = J, pause/items = Return
   its deck; walk it, climb the hut, use weapons. A by the boat's seat sits you back down. Fall in: swim to its side and
   press A to climb aboard."
 case "${1:-}" in
+  plain) NOTE="Every new mod off: plain sailing, to compare (does Link and the boat lag here too?)." ;;
   beedle) ON=(BEEDLE_SHIP); NOTE="$BEEDLE" ;;
   beedle-bosses) ON=(BEEDLE_SHIP MOLGERA PHANTOM_GANON); EVENT="molgera@+40;phantom@+45"; export WWHD_MOD_PHANTOM_GANON_CHOICE=1; NOTE="$BEEDLE
 Molgera and Titanic Phantom Ganon together from about 40 s: fight them from its deck or from the boat's cannon." ;;
@@ -59,7 +60,7 @@ The Seahats should now swoop at you while you swim instead of drifting off." ;;
 Everything at once. The first minute is yours: get on the deck, try the helm and a cannon. Then, one after another:
   at 1 min the Leviathan (48 health), at about 4.5 min Molgera (80 health), at about 8 min Titanic Phantom Ganon, at about
   11 min Haunted sea. Each ends when you kill it, outrun it or after its time. Kills give rupees and a blue potion." ;;
-  *) echo "Usage: tools/try.sh <beedle|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim>"; exit 2 ;;
+  *) echo "Usage: tools/try.sh <plain|beedle|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim>"; exit 2 ;;
 esac
 for m in "${SPOOKY[@]}"; do export WWHD_MOD_$m=0; done
 for m in "${ON[@]}"; do export WWHD_MOD_$m=1; done
