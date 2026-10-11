@@ -1270,9 +1270,10 @@ void step(Cpu* c) {
         static V3 left_at;    // where it was last seen, and its heading: remade there when its room's unloading took it
         static int16_t left_yaw = 0;
         static bool left_one = false;
-        static bool made = false;  // made on this outing: left behind or gone, it waits for the next (after Link is ashore)
-        if (fresh) left_one = false;
-        if (fresh || !water) made = false;
+        // when it was made: left behind or gone, it waits for his next outing, once he has been ashore since (off the
+        // water over 3 s, as the director has it: the jump from its rail into the boat is not ashore)
+        static double made_at = -1;
+        if (fresh) left_one = false, made_at = -1;
         const double away = hull ? std::hypot(ldf32(hull + kPos) - ldf32(link + kPos), ldf32(hull + kPos + 8) - ldf32(link + kPos + 8)) : 0;
         if (hull && away < 15000)  // kept in Link's room while he is near, so the room it was made in can unload
             st8(hull + kRoom, ld8(link + kRoom)), left_at = pos_of(hull), left_yaw = (int16_t)ld16(hull + kAngleY), left_one = true;
@@ -1291,8 +1292,8 @@ void step(Cpu* c) {
             static const double off = getenv("WWHD_BIGSHIP_OFF") ? atof(getenv("WWHD_BIGSHIP_OFF")) : 3500;  // (test aid)
             V3 to = back ? left_at : to_world(pos_of(korl), yaw, {-off, 0, 0});
             to.y = ldf32(korl + kPos + 4);
-            if ((riding || back) && (back || (!made && isle(to) >= 6000 && !land(to, yaw))) && g_bigship.wanted(c, now)) {
-                made = true;
+            if ((riding || back) && (back || (made_at < g_out_since && isle(to) >= 6000 && !land(to, yaw))) && g_bigship.wanted(c, now)) {
+                made_at = now;
                 Spawner none;
                 g_bigship.id = spawn(c, none, kPirates, korl, 0, false, 0, false);
                 g_bigship.next = now + 5;
