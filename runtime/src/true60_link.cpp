@@ -23,6 +23,8 @@ void f_0211D2F8_orig(Cpu* c);  // cLib_calcTimer<s32>
 void f_025AAE08_orig(Cpu* c);  // cLib_calcTimer<s32> (second copy)
 }
 
+namespace interp { void fx_emitter_made(uint32_t emtr, bool by_link); }
+
 namespace {
 constexpr uint32_t kSpeed = 0x33C;  // fopAc_ac_c::speed
 
@@ -135,7 +137,7 @@ constexpr uint32_t kResetFlg0 = 0x3C0;  // u32 mResetFlg0 (cleared at 0240D300)
 constexpr uint32_t kReplayFlg0 = 0x2;
 uint32_t g_noop = 0;  // guest address of a stand-in that does nothing
 void noop_proc(Cpu* c) { c->r[3] = 1; }
-struct ProcOut { uint64_t pass = ~0ull; uint32_t link = 0, flg0_pre = 0, flg0_set = 0; uint8_t m34c2 = 0; float bob[2] = {}; int16_t ang[2][2] = {}; } g_out;
+struct ProcOut { uint64_t pass = ~0ull; uint32_t link = 0, flg0_pre = 0, flg0_set = 0; uint8_t m34c2 = 0; float bob[2] = {}; int16_t ang[2][2] = {}; float vy_pre = 0, dvy = 0; } g_out;
 bool t_full_call = false;
 void proc_call(Cpu* c) {
     uint32_t l = c->r[31];  // this (r3 = this + member delta)
@@ -151,8 +153,12 @@ void proc_call(Cpu* c) {
             // swimming: what the procedure turns or sets each step goes half a step on along its last change, the model's
             // height offset m35C4 (+0x6A1C, the bob), the heading and the facing (current.angle.y, shape_angle.y), or he
             // bobbed and turned at 30 Hz and moved along the old heading on half passes
-            if (const uint32_t p = ld32(l + kCurProc); p == 0x36 || p == 0x37) {
+            if (const uint32_t p = ld32(l + kCurProc); p >= 0x35 && p <= 0x37) {
                 const float k = 1.0f - true60::dt();
+                // buoyancy: the change the procedure made to speed.y, as posMove does gravity (site_023FD39C), so the
+                // half step lands halfway along the 30 Hz path (v += a; p += v)
+                st32(l + kSpeed + 4, f32_as_u32(u32_as_f32(ld32(l + kSpeed + 4)) + g_out.dvy * true60::dt()));
+                st32(l + 0x318, f32_as_u32(u32_as_f32(ld32(l + 0x318)) + g_out.dvy * k * 0.5f));
                 if (const float d = g_out.bob[1] - g_out.bob[0]; std::fabs(d) < 2.0f)  // (not its jump between the two)
                     st32(l + kM35C4, f32_as_u32(g_out.bob[1] + d * k));
                 for (int i = 0; i < 2; i++)  // (not a snap: a turn about, stick back, is made in one step)
@@ -167,6 +173,7 @@ void proc_call(Cpu* c) {
     g_out.link = l;
     g_out.pass = ~0ull;
     g_out.flg0_pre = ld32(l + kResetFlg0);
+    g_out.vy_pre = u32_as_f32(ld32(l + kSpeed + 4));
 }
 }  // namespace
 extern "C" void site_0240D6D8(Cpu* c) { proc_call(c); }
@@ -180,6 +187,7 @@ extern "C" void site_0240D6FC(Cpu* c) {
     g_out.flg0_set = ld32(l + kResetFlg0) & ~g_out.flg0_pre;
     g_out.m34c2 = ld8(l + kM34C2);
     g_out.bob[0] = g_out.bob[1], g_out.bob[1] = u32_as_f32(ld32(l + kM35C4));
+    g_out.dvy = u32_as_f32(ld32(l + kSpeed + 4)) - g_out.vy_pre;
     for (int i = 0; i < 2; i++) g_out.ang[i][0] = g_out.ang[i][1], g_out.ang[i][1] = (int16_t)ld16(l + kAngleY[i]);
 }
 
@@ -266,7 +274,9 @@ extern "C" void hook_02821448(Cpu* c) {
         c->r[7] = from;
     }
     if (c->r[7] < 8 && !ld32(banks + 4 * c->r[7])) { c->r[3] = 0; return; }
+    const bool by_link = true60::link() && true60::exec_proc() == true60::link();
     f_02821448_orig(c);
+    if (c->r[3]) interp::fx_emitter_made(c->r[3], by_link);  // (his effects drawn on his timing, interp_fx.cpp)
 }
 T60_FENCE_ANY(0200E240, (void)0)                // cCcS::Set
 T60_FENCE_ANY(0253EC0C, c->r[3] = 0)            // dEvt_control_c::order

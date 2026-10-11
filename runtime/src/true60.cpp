@@ -243,10 +243,9 @@ const ProcGroup kLinkGroups[] = {
         0x55, 0x58, 0x59,        // CUT_TURN (spin attack), CUT_TURN_CHARGE, CUT_TURN_MOVE
         0x5A,                    // CUT_REVERSE (sword bounces off a wall)
     }},
-    // swimming: treading water and swimming, the procedure on every pass (each step puts him at the water's height,
-    // mWaterY, so the preview does too); not SWIM_UP (surfacing: 27.5 steps instead of 35 when measured)
+    // swimming: surfacing, treading water and swimming (true60_link.cpp: the preview's water height, bob, heading)
     {kGrpSwim, 1, {
-        0x36, 0x37,              // SWIM_WAIT SWIM_MOVE
+        0x35, 0x36, 0x37,        // SWIM_UP SWIM_WAIT SWIM_MOVE
     }},
     // items (the item actors themselves stay at 30 Hz): aiming, throwing, shooting, catching
     {kGrpItems, 2, {

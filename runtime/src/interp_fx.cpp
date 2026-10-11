@@ -39,6 +39,7 @@
 #include <cstdio>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "guest_addr.h"
@@ -136,6 +137,8 @@ struct Applied {
     uint32_t a[kPW];  // the previous step's values (blended particles)
     float born[3];    // born this step: its whole first step (velocity and emitter movement)
     bool is_born, extras;
+    bool lead = false;  // Link's (true 60): drawn on his timing, half a step ahead of the 30 Hz world
+    float ahead = 0.5f;  // ... that far along its last step on the record pass (less while it slows down)
 };
 std::unordered_map<uint32_t, PtclState> g_ptcl_before;  // step N, per particle (current group)
 std::vector<Applied> g_ptcl_applied;                    // particles currently showing halfway values
@@ -207,6 +210,29 @@ void ptcl_mid(const Applied& ap, float t, uint32_t* mid) {
 // blended hold pass: the particles blended on the logic pass, at this pass's fraction (they were
 // put back to their exact values at the pass start, and the list kept)
 std::vector<Applied> g_ptcl_keep;
+// Emitters made while Link's execute ran (true 60): his ripples, splashes, swim rings, footstep dust. While he is drawn at
+// 60 Hz (his step N on the logic pass, half a step on, N + 1/2, on the record pass) their particles are too, instead of
+// the 30 Hz world's halfway blend (N - 1/2, then N), or they trailed him by half a step that changed as he sped up,
+// slowed or turned. A slot made again by anything else is no longer his.
+std::unordered_set<uint32_t> g_link_emtr;
+std::unordered_map<uint32_t, float> g_lead_speed, g_lead_speed_now;  // Link's particles: their last step's length
+bool lead(uint32_t emtr) {
+    return true60::enabled() && g_link_emtr.count(emtr) && true60::runs_60(true60::link());
+}
+// record pass: Link's particles half a step on along their last step (position and size; colours stay exact). Most of
+// them slow down (rings spreading, spray): slowing by f a step, half a step on is f (1 - sqrt f) / (1 - f) of the last
+// step, not 1/2, or they drew long-short (12% of a frame's move against the blend's 4%)
+void ptcl_lead_ahead() {
+    for (const Applied& ap : g_ptcl_keep) {
+        if (!ap.lead) continue;
+        uint32_t m[kPW];
+        memcpy(m, ap.w, sizeof m);
+        for (int i = kWPos; i < kWSize + 2; i++)
+            m[i] = fw(wf(ap.w[i]) + ap.ahead * (ap.is_born ? (i < 3 ? ap.born[i] : 0.0f) : wf(ap.w[i]) - wf(ap.a[i])));
+        g_ptcl_applied.push_back(ap);
+        write_ptcl(ap.ptcl, m);
+    }
+}
 void ptcl_reapply(float t) {
     for (const Applied& ap : g_ptcl_keep) {
         uint32_t mid[kPW];
@@ -803,7 +829,12 @@ void fx_hold_blend(float t) {
 extern "C" void hook_025AF8A0(Cpu* c) {
     // (already done at the pass start; a blended hold pass has its particles re-applied by now)
     if (!(interp::hold_pass() && !interp::record_pass())) ptcl_restore();
-    if (interp::logic_pass()) fx_step_stats();
+    if (interp::record_pass()) ptcl_lead_ahead();
+    if (interp::logic_pass()) {
+        fx_step_stats();
+        g_lead_speed.swap(g_lead_speed_now);  // (a new step's particle calcs follow)
+        g_lead_speed_now.clear();
+    }
     f_025AF8A0_orig(c);
 }
 
@@ -847,8 +878,9 @@ extern "C" void hook_0282167C(Cpu* c) {
             memcpy(ap.w, cur.w, sizeof ap.w);
             memcpy(ap.born, full, sizeof full);
             ap.is_born = true;
+            ap.lead = lead(emtr);
             uint32_t mid[kPW];
-            ptcl_mid(ap, t, mid);
+            ptcl_mid(ap, ap.lead ? 1.0f : t, mid);
             if (tr_born && d2 > 0.01f) {
                 tr_born--;
                 LOG("[interp-fx] particle born at %.2f %.2f %.2f, drawn halfway at %.2f %.2f %.2f (emitter moved %.2f %.2f %.2f)",
@@ -865,9 +897,19 @@ extern "C" void hook_0282167C(Cpu* c) {
         for (int i = 0; i < 3; i++) d2 += (wf(a.w[i]) - wf(cur.w[i])) * (wf(a.w[i]) - wf(cur.w[i]));
         if (!(d2 <= kCut * kCut)) return;  // teleported with its emitter
         uint32_t mid[kPW];
-        mid_ptcl(a.w, cur.w, mid, on(128), t);
-        if (!memcmp(mid, cur.w, sizeof mid)) return;
+        const bool ahead = lead(emtr);
+        mid_ptcl(a.w, cur.w, mid, on(128), ahead ? 1.0f : t);
+        if (!ahead && !memcmp(mid, cur.w, sizeof mid)) return;
         Applied ap{p};
+        ap.lead = ahead;
+        if (ahead) {
+            const float v = std::sqrt(d2), was = g_lead_speed.count(p) ? g_lead_speed[p] : 0.0f;
+            g_lead_speed_now[p] = v;
+            if (const float f = was > 1e-4f ? std::min(1.0f, v / was) : 1.0f; f < 0.999f) {
+                const float r = std::sqrt(f);
+                ap.ahead = f * (1 - r) / (1 - f);
+            }
+        }
         memcpy(ap.w, cur.w, sizeof ap.w);
         memcpy(ap.a, a.w, sizeof ap.a);
         ap.is_born = false;
@@ -1277,10 +1319,18 @@ extern "C" void hook_024EC1C8(Cpu* c) {
 // save state loaded: forget every effect history (the guest state jumped); interp.cpp also bumps the
 // hold pass count, which invalidates the step-stamped records
 namespace interp {
+// an emitter made (JPAEmitterManager::createSimpleEmitterID, true60_link.cpp): Link's if his execute made it
+void fx_emitter_made(uint32_t emtr, bool by_link) {
+    if (by_link) g_link_emtr.insert(emtr);
+    else g_link_emtr.erase(emtr);
+}
 void fx_ss_reset() {
     g_ptcl_before.clear();
     g_ptcl_applied.clear();
     g_ptcl_keep.clear();
+    g_link_emtr.clear();
+    g_lead_speed.clear();
+    g_lead_speed_now.clear();
     g_emtr.clear();
     g_anm.clear();
     g_temp.clear();

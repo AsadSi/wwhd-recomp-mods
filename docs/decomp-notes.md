@@ -224,10 +224,14 @@ Converted, per group (`WWHD_TRUE60_GROUPS=+name,-name`, or a plain list; `all`, 
 | `sword` | on | Link: CUT_A/F/R/L, CUT_EA/EB (combo finishers), CUT_EX_A/EX_B (parry attacks), CUT_KESA, CUT_TURN (spin attack), CUT_TURN_CHARGE, CUT_TURN_MOVE, CUT_REVERSE |
 | `camera` | on | the follow camera (other camera modes stay at 30 Hz) |
 | `items` | off | Link: boomerang, hookshot and bow aiming/throwing (not yet gated) |
-| `swim`, `sail`, `bk`, `mo2`, `cc`, `ki` | — | reserved, nothing converted |
+| `swim` | on | Link: SWIM_UP, SWIM_WAIT, SWIM_MOVE (the preview: water height, buoyancy, bob, heading; true60_link.cpp) |
+| `sail`, `bk`, `mo2`, `cc`, `ki` | — | reserved, nothing converted |
 
-Everything else (other Link procedures, swimming, the ship, enemies, NPCs, objects) stays at
-30 Hz and is drawn interpolated. Link drops to 30 Hz while moving collision carries him.
+Everything else (other Link procedures, the ship, enemies, NPCs, objects) stays at 30 Hz and is
+drawn interpolated. A 60 Hz Link is drawn half a step ahead of that world (his step N on the logic
+pass, N + 1/2 on the record pass, where it shows N - 1/2 and N): effects his execute made (ripples,
+swim rings, splashes, dust) are drawn on his timing (interp_fx.cpp, lead), and a preview's
+collision push and water current are dt of a step (posMove 023FDD58 / 023FDDAC). Link drops to 30 Hz while moving collision carries him.
 `WWHD_TRUE60_LINK=list` (decimal/0x hex procedure numbers) overrides the procedure list for tests.
 
 ### Gates (measured; scripted runs, 30 fps vs true 60 at every full step)
