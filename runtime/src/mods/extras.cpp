@@ -43,7 +43,7 @@
 
 namespace mods::extras {
 namespace {
-enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kAudio, kDeep, kLeviathan, kMolgera, kStalker, kBeedle, kCalm, kCount };  // the catalogue's order
+enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kAudio, kDeep, kLeviathan, kMolgera, kStalker, kBeedle, kCalm, kPhoto, kCount };  // the catalogue's order
 std::atomic<bool> g_on[kCount];
 std::atomic<int> g_choice[kCount];
 std::atomic<int> g_often[kCount];
@@ -234,7 +234,11 @@ bool on_beedle(uint32_t ship, uint32_t link) {  // anywhere on board, the hut's 
 std::atomic<uint32_t> g_pad_hold{0}, g_pad_seen{0};
 std::atomic<float> g_pad_lx{0}, g_pad_ly{0};
 std::atomic<bool> g_take_pad{false};
-std::atomic<bool> g_at_helm{false};  // the pad is the helm's: ZL is left to the game (its camera is forced instead)
+std::atomic<bool> g_at_helm{false};
+// the free camera (F7): flying, and the pad it flies by (filter_pad keeps it from the game)
+std::atomic<bool> g_free_cam{false};
+std::atomic<float> g_free_lx{0}, g_free_ly{0}, g_free_rx{0}, g_free_ry{0};
+std::atomic<uint32_t> g_free_buttons{0};  // the pad is the helm's: ZL is left to the game (its camera is forced instead)
 // a manned deck cannon, for the camera (camera_draw): where it stands, which way it points (s16 yaw, elevation)
 std::atomic<bool> g_cannon_cam{false};
 std::atomic<float> g_cannon_x{0}, g_cannon_y{0}, g_cannon_z{0};
@@ -367,6 +371,9 @@ const std::vector<Mod>& catalogue() {
          "Now and then, far out at sea, the wind dies away altogether and a still fog settles: the sail hangs slack, the "
          "Wind Waker can turn the wind but not wake it, and the music fades. Drift on, wait it out, or reach an island.",
          {}, true},
+        {"photo-mode", "Free camera", "Gameplay",
+         "F7 lets the camera go: fly it with the left stick (WASD), look with the right stick (arrow keys), L and R (Q, E) "
+         "down and up, ZL (Shift) held for speed. Link stands still and the world goes on; F7 again gives the camera back.", {}},
     };
     return mods;
 }
@@ -1546,6 +1553,37 @@ void step(Cpu* c) {
 // point the way it already looks, and 40% of that above it (a fixed distance, so it is the same however often it runs)
 void camera_draw(uint32_t cam) {
     if (!in_mem2(cam)) return;
+    // the free camera: F7 lets it go (and takes it back); from where the game's camera was, it flies at 40 units a draw
+    // (160 with ZL), turning 2 degrees a draw at full tilt, and pitching at most 85 degrees up or down
+    {
+        static bool f7 = false;
+        static double ex, ey, ez, yaw, pitch;
+        bool keys[256];
+        input::held_keys(keys);
+        if (keys[kVK_F7] && !f7 && (g_free_cam || on<kPhoto>())) {
+            g_free_cam = !g_free_cam;
+            if (g_free_cam) {
+                ex = ldf32(cam + 0xDC), ey = ldf32(cam + 0xE0), ez = ldf32(cam + 0xE4);
+                const double dx = ldf32(cam + 0xE8) - ex, dy = ldf32(cam + 0xEC) - ey, dz = ldf32(cam + 0xF0) - ez;
+                yaw = atan2(dx, dz), pitch = atan2(dy, std::hypot(dx, dz));
+            }
+            trace("extras: free camera %s", g_free_cam ? "on" : "off");
+        }
+        f7 = keys[kVK_F7];
+        if (g_free_cam && !on<kPhoto>()) g_free_cam = false;
+        if (g_free_cam) {
+            const uint32_t b = g_free_buttons.load();
+            const double v = (b & input::kZL) ? 160 : 40;
+            yaw -= g_free_rx.load() * 0.035, pitch = std::clamp(pitch + g_free_ry.load() * 0.035, -1.48, 1.48);
+            const double fx = sin(yaw) * cos(pitch), fy = sin(pitch), fz = cos(yaw) * cos(pitch);
+            const double lx = g_free_lx.load(), ly = g_free_ly.load();
+            ex += (fx * ly - cos(yaw) * lx) * v, ez += (fz * ly + sin(yaw) * lx) * v;
+            ey += fy * ly * v + ((b & input::kR) ? v : 0) - ((b & input::kL) ? v : 0);
+            st32(cam + 0xDC, u32_bits((float)ex)), st32(cam + 0xE0, u32_bits((float)ey)), st32(cam + 0xE4, u32_bits((float)ez));
+            st32(cam + 0xE8, u32_bits((float)(ex + fx * 1000))), st32(cam + 0xEC, u32_bits((float)(ey + fy * 1000))), st32(cam + 0xF0, u32_bits((float)(ez + fz * 1000)));
+            return;
+        }
+    }
     if (g_cannon_cam) {  // a manned deck cannon: as on the boat, from behind it out along its aim, far back
         const double t = g_cannon_yaw.load() * M_PI / 32768, e = g_cannon_up.load() * M_PI / 32768;
         const float x = g_cannon_x, y = g_cannon_y, z = g_cannon_z, fx = (float)sin(t), fz = (float)cos(t);
@@ -1570,6 +1608,11 @@ void filter_pad(input::PadState& s) {
     g_pad_hold = s.buttons;
     g_pad_seen |= s.buttons;
     g_pad_lx = s.lx, g_pad_ly = s.ly;
+    if (g_free_cam) {  // the free camera has the pad; Link stands still
+        g_free_lx = s.lx, g_free_ly = s.ly, g_free_rx = s.rx, g_free_ry = s.ry, g_free_buttons = s.buttons;
+        s.lx = s.ly = s.rx = s.ry = 0, s.buttons &= input::kPlus;
+        return;
+    }
     // a cannon manned or the helm taken: the stick, A, ZL (the cannon's lock-on), the Bomb Bag's button and B are theirs
     if (g_take_pad) s.lx = s.ly = 0, s.buttons &= ~(g_cannon_btn.load() | input::kA | input::kB | input::kZL);
     else s.buttons &= ~g_cannon_btn.load();
