@@ -95,7 +95,7 @@ struct Single {
     uint32_t actor(Cpu* c) { return id == 0xFFFFFFFF ? 0 : guest_call(c, GC(0x025DE50C), {id}); }
     bool wanted(Cpu* c, double now) { return !actor(c) && now >= next; }
 };
-Single g_ghost, g_bigship, g_phantom, g_leviathan, g_molgera, g_beedle;
+Single g_ghost, g_bigship, g_phantom, g_leviathan, g_molgera, g_beedle, g_tow_rope;
 uint32_t g_leviathan_actor = 0, g_molgera_actor = 0;  // for the hooks below, which must not call into the game
 uint32_t g_phantom_actor = 0;                          // Phantom Ganon, and his size, for the same
 // Beedle's ship in tow behind the King of Red Lions (below), for its hooks: the ship, the boat, the ship's BG matrix
@@ -906,7 +906,7 @@ void step(Cpu* c) {
     const uint32_t sv = save();
     static double settle = 0;  // no spawning while a stage is still being entered (the spawns would land in the old one)
     if (fresh) {
-        g_night = Spawner{}, g_sea = Spawner{}, g_gyctrl = 0xFFFFFFFF, g_ghost = g_bigship = g_phantom = g_leviathan = g_molgera = g_beedle = Single{};
+        g_night = Spawner{}, g_sea = Spawner{}, g_gyctrl = 0xFFFFFFFF, g_ghost = g_bigship = g_phantom = g_leviathan = g_molgera = g_beedle = g_tow_rope = Single{};
         g_cannon[0] = g_cannon[1] = Single{}, g_manned = -1, g_take_pad = false, g_cannon_btn = 0, g_cannon_cam = false;
         g_balls.clear();
         g_gyorg_ids.clear(), g_giant_ids.clear(), g_big_hits.clear();
@@ -1531,6 +1531,7 @@ void step(Cpu* c) {
     // (procShipReady_init 023ECA94 as he lands beside it); A while swimming by its side climbs aboard
     if (const uint32_t korl = ld32(kPlay + 0x5B3C); on<kBeedle>() && stage == "sea" && in_mem2(korl) && settled) {
         if (!beedle) {
+            if (g_tow_rope.actor(c)) guest_call(c, GC(0x025D57E4), {g_tow_rope.id}), g_tow_rope = Single{};
             if (riding && g_beedle.wanted(c, now)) {
                 Spawner none;
                 g_beedle.id = spawn(c, none, kBeedleShip, korl, 0, false, 0, false);
@@ -1545,6 +1546,22 @@ void step(Cpu* c) {
                 guest_call(c, GC(0x020087EC), {bgs, bgw});
                 const uint32_t failed = guest_call(c, GC(0x020086D4), {bgs, bgw, ld32(korl + 4), beedle});
                 trace("extras: Beedle's ship in tow behind the boat (its deck his%s)", failed & 0xFF ? ": regist failed" : "");
+            }
+            // the tow-shaft drawn: the game's rope (daHimo3, RopeR, proc 0x1BF; param 0xFF006401: type 1, its claw at the
+            // far end, 100 segments of 20, no path) in its mode 2 (byte +0x3DA), straight from where it is to a point
+            // (+0x2624), here from his stern to the ship's bow, kept in his room; the segments it uses (+0x1828) as many as
+            // that takes, so none hang past the bow (it lays them out in its next execute)
+            if (const uint32_t r = g_tow_rope.actor(c)) {
+                const V3 a = to_world(pos_of(korl), (int16_t)ld16(korl + kAngleY), {0, 60, -150});
+                const V3 b = to_world(pos_of(beedle), (int16_t)ld16(beedle + kAngleY), {0, kBeedleTop + 40, 900});
+                st32(r + kPos, u32_bits((float)a.x)), st32(r + kPos + 4, u32_bits((float)a.y)), st32(r + kPos + 8, u32_bits((float)a.z));
+                st32(r + 0x2624, u32_bits((float)b.x)), st32(r + 0x2628, u32_bits((float)b.y)), st32(r + 0x262C, u32_bits((float)b.z));
+                st8(r + kRoom, ld8(link + kRoom)), st8(r + 0x3DA, 2);
+                st32(r + 0x1828, (uint32_t)std::clamp((int)(std::hypot(b.x - a.x, b.y - a.y, b.z - a.z) / 20) + 2, 2, 100));
+            } else if (g_tow_rope.wanted(c, now)) {
+                Spawner none;
+                g_tow_rope.id = spawn(c, none, Monster{0x1BF, -1, 0xFF006401}, korl, 0, false, 60, false);
+                g_tow_rope.next = now + 5;
             }
             static Leap leap;
             static bool to_boat = false;  // the leap is into the boat
@@ -1581,7 +1598,8 @@ void step(Cpu* c) {
             }
         }
     } else if (const uint32_t a = g_beedle.actor(c); a && !on<kBeedle>()) {
-        guest_call(c, GC(0x025D57E4), {g_beedle.id});  // switched off: it goes
+        guest_call(c, GC(0x025D57E4), {g_beedle.id});  // switched off: it goes, and its tow rope
+        if (g_tow_rope.actor(c)) guest_call(c, GC(0x025D57E4), {g_tow_rope.id}), g_tow_rope = Single{};
     }
     // the guns of the ship out (not the Big ship deleted above this step: its cannons would be made again on it)
     {
