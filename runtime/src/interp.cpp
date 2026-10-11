@@ -318,6 +318,7 @@ struct Prev {
     uint32_t cam = 0; CamState s{}; bool valid = false; bool snap = true; uint64_t snap_step = ~0ull;
     CamState drawn{};          // the camera as camera_draw drew it on pass drawn_pass (blended or exact)
     uint64_t drawn_pass = ~0ull;
+    float step_was = 0;        // its eye's last step (a 30 Hz camera drawn on Link's timing, below)
 };
 Prev g_prev[4];
 
@@ -358,6 +359,10 @@ extern "C" void hook_024FFC40(Cpu* c) {
     uint32_t cam = c->r[3];
     mods::extras::camera_draw(cam);  // the Big ship helm's far camera (mods/extras.cpp)
     Prev* p = prev_for(cam);
+    // true 60 with Link drawn at 60 Hz (his step on the logic pass, half a step on on the record pass): a 30 Hz camera
+    // (lock-on, talk, events; the follow camera during a moment of 30 Hz) is drawn on his timing too, not the 30 Hz
+    // world's halfway blend half a step behind, or each change of camera mode or rate moved the view half a step
+    const bool lead = true60::enabled() && !true60::runs_60(cam) && true60::runs_60(true60::link());
     if (g_blend_draw && !true60::runs_60(cam)) {  // blended between the step drawn last (S) and the new one (S+1)
         CamState cur = read_cam(cam);
         if (p->valid) {
@@ -365,7 +370,7 @@ extern "C" void hook_024FFC40(Cpu* c) {
                 p->snap = cam_snap(p->s, cur);
                 p->snap_step = g_logic_steps;
             }
-            if (p->snap_step == g_logic_steps && !p->snap) write_cam(cam, blend(p->s, cur, pass_t()));
+            if (p->snap_step == g_logic_steps && !p->snap && !lead) write_cam(cam, blend(p->s, cur, pass_t()));
         }
         p->drawn = read_cam(cam);
         p->drawn_pass = g_passes;
@@ -377,18 +382,35 @@ extern "C" void hook_024FFC40(Cpu* c) {
         write_cam(cam, cur);
         return;
     }
+    const CamState was = p->s;
+    const bool had = p->valid && p->snap_step == g_logic_steps && !p->snap;
     p->s = read_cam(cam);  // exact step: remember it for the next step's blended frames
     p->valid = true;
     p->drawn = p->s;
     p->drawn_pass = g_passes;
-    cam_trace(cam, "exact");
     if (g_hold && true60::enabled()) {  // true 60: the half pass's camera is a preview (true60.cpp)
         p->drawn_pass = ~0ull;  // (drawn with the preview: the stars keep the camera as it is)
+        CamState ahead = p->s;
+        if (lead && had) {  // half a step on along its last step, less as it slows (a smoothed camera mostly does)
+            const float v = dist(was.eye, p->s.eye), f = p->step_was > 1e-3f ? std::min(1.0f, v / p->step_was) : 1.0f;
+            const float k = f < 0.999f ? f * (1 - std::sqrt(f)) / (1 - f) : 0.5f;
+            p->step_was = v;
+            for (int i = 0; i < 3; i++) {
+                ahead.eye[i] += k * (p->s.eye[i] - was.eye[i]);
+                ahead.center[i] += k * (p->s.center[i] - was.center[i]);
+                ahead.up[i] += k * (p->s.up[i] - was.up[i]);
+            }
+            ahead.fovy += k * (p->s.fovy - was.fovy);
+            write_cam(cam, ahead);
+        }
+        cam_trace(cam, lead && had ? "ahead" : "exact");
         true60::camera_draw_preview(true);
         f_024FFC40_orig(c);
         true60::camera_draw_preview(false);
+        if (lead && had) write_cam(cam, p->s);
         return;
     }
+    cam_trace(cam, "exact");
     static const bool dbg = getenv("WWHD_T60_CAMDRAWLOG") != nullptr;  // debug: statics camera_draw writes
     if (dbg && g_hold) {
         static std::vector<uint32_t> before;

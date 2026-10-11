@@ -224,6 +224,12 @@ const ProcGroup kLinkGroups[] = {
         0x24,  // AUTO_JUMP
         0x27,  // FALL
     }},
+    // ... and the moves between them that are over in a moment (each change of rate moved him half a step)
+    {kGrpLoco, 2, {
+        0x18,  // MOVE_TURN (turning about while running)
+        0x19,  // SLIP
+        0x29,  // SMALL_JUMP (a hop off a ledge)
+    }},
     // locomotion that ends on animation frames or picks idle animations at random: the procedure's
     // own logic on full passes (same step and same random numbers as at 30 fps)
     {kGrpLoco, 2, {
@@ -327,6 +333,7 @@ static bool link_60() {
     uint32_t p = ld32(g_link + kCurProc);
     return p < 256 && g_link_proc[p];
 }
+uint64_t g_link60_step = 0;  // the last logic step Link was at 60 Hz
 
 // step length a process executes with on this pass
 float classify(uint32_t proc) {
@@ -347,7 +354,8 @@ float classify(uint32_t proc) {
         }
         // standing on moving collision of a 30 Hz actor (platform, raft): the platform moves on full
         // passes only and is drawn interpolated, so Link moves with it at 30 Hz
-        return link_60() ? 0.5f : 1.0f;
+        if (link_60()) return g_link60_step = interp::logic_steps(), 0.5f;
+        return 1.0f;
     }
     if (is_camera(proc)) {  // checked every time: each scene creates its own camera process
         if (g_camera != proc) LOG("[true60] camera is process %08X", proc);
@@ -358,9 +366,10 @@ float classify(uint32_t proc) {
             auto it = g_procs.find(proc);
             return it != g_procs.end() && it->second.pass + 1 == g_pass && it->second.dt < 1.0f ? 0.5f : 1.0f;
         }
-        // while Link steps at 30 Hz (a ship's deck, swimming, any procedure not converted) the camera does too: at 60 Hz
-        // its half pass ran ahead to his next step while he was drawn half way there, a long-short shake every frame pair
-        return camera_enabled() && g_cam_follow && link_60() ? 0.5f : 1.0f;
+        // while Link steps at 30 Hz (a ship's deck, sailing, any procedure not converted) the camera does too: at 60 Hz
+        // its half pass ran ahead to his next step while he was drawn half way there, a long-short shake every frame pair.
+        // Not for a moment of 30 Hz (half a second: a quick turn, a hop): each change of rate moves the view half a step.
+        return camera_enabled() && g_cam_follow && interp::logic_steps() - g_link60_step < 15 ? 0.5f : 1.0f;
     }
     return 1.0f;
 }
