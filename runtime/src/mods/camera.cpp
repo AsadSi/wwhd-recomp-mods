@@ -81,7 +81,8 @@ uint32_t link_proc() {
     uint32_t l = g_link.load(std::memory_order_relaxed);
     return l ? ld32(l + kCurProc) : 0xFFFFFFFFu;
 }
-bool aiming_item(uint32_t p) { return p == 0x76 || (p >= 0x80 && p <= 0x8D) || p == 0x94 || p == 0x95; }
+// (not 0x86..0x89, SHIP_READY, SHIP_JUMP_RIDE, SHIP_STEER, SHIP_PADDLE: riding the boat aims nothing)
+bool aiming_item(uint32_t p) { return p == 0x76 || (p >= 0x80 && p <= 0x85) || (p >= 0x8A && p <= 0x8D) || p == 0x94 || p == 0x95; }
 
 // test aid: WWHD_TEST_MOUSE=2-3:5:0,... moves the mouse by (dx, dy) points per logic step from 2 s
 // to 3 s of game time (full logic steps / 30, from boot);
