@@ -98,9 +98,8 @@ struct Single {
 Single g_ghost, g_bigship, g_phantom, g_leviathan, g_molgera, g_beedle;
 uint32_t g_leviathan_actor = 0, g_molgera_actor = 0;  // for the hooks below, which must not call into the game
 uint32_t g_phantom_actor = 0;                          // Phantom Ganon, and his size, for the same
-// Beedle's ship as the King of Red Lions' hull (below), for its hooks: the ship, the boat, the ship's BG matrix, and
-// the boat's body and head models, which are not drawn
-uint32_t g_beedle_actor = 0, g_beedle_lion = 0, g_beedle_mtx = 0, g_hide_body = 0, g_hide_head = 0;
+// Beedle's ship in tow behind the King of Red Lions (below), for its hooks: the ship, the boat, the ship's BG matrix
+uint32_t g_beedle_actor = 0, g_beedle_lion = 0, g_beedle_mtx = 0;
 bool g_beedle_aboard = false;  // Link on its deck: its hut's door (an exit only where Beedle's own ship lies) does nothing
 float g_phantom_size = 1, g_fx_size = 1;               // g_fx_size: his size while his execute runs (particle hook)
 // the Leviathan and Molgera can be killed, by any weapon (a cannonball or bomb 4, an arrow 2, the sword its power):
@@ -193,16 +192,38 @@ void put_link(uint32_t link, V3 w) {
     for (uint32_t a : {link + kPos, link + 0x300, link + 0x84C, link + 0x68B0, link + 0x7350, GD(0x1046CD48)})
         st32(a, u32_bits((float)w.x)), st32(a + 4, u32_bits((float)w.y)), st32(a + 8, u32_bits((float)w.z));
 }
+// a leap of Link's onto a ship: carried on an arc (every copy of his position, each step after his own execute) from
+// where he jumps to a spot in the ship's frame (followed as it moves), 250 over the higher end, in 36 steps
+struct Leap {
+    int step = -1;  // steps into it; -1 none
+    V3 from, onto;  // onto: in the ship's frame
+    uint32_t ship = 0;
+    void start(uint32_t link, uint32_t s, V3 local) { step = 0, from = pos_of(link), ship = s, onto = local; }
+    // a step of it; true on the step it lands
+    bool carry(uint32_t link) {
+        if (step < 0) return false;
+        constexpr int kSteps = 36;
+        const V3 to = to_world(pos_of(ship), (int16_t)ld16(ship + kAngleY), onto);
+        const double k = ++step / (double)kSteps, top = std::max(from.y, to.y) + 250;
+        const double y = from.y + (to.y - from.y) * k + 4 * (top - (from.y + to.y) / 2) * k * (1 - k);
+        put_link(link, {from.x + (to.x - from.x) * k, y, from.z + (to.z - from.z) * k});
+        st32(link + 0x340, 0), st32(link + 0x6A14, 0);
+        if (step < kSteps) return false;
+        step = -1;
+        return true;
+    }
+};
 constexpr double kDeckY = 400;
 bool on_deck(uint32_t hull, uint32_t link) {  // anywhere on board: the main deck, the castles, the crow's nest
     const V3 l = to_local(hull, link);
     return std::fabs(l.x) < 720 && l.z > -1800 && l.z < 2250 && l.y > kDeckY - 30 && l.y < 2500;
 }
-// Beedle's ship (IkadaH vtsp), 1.5x and lowered 60 so the King of Red Lions' seat is near its deck: its deck (found
-// with the ground check, in its frame) a strip x +-300 from z 0 to 900 (y 50..130, the bow rising to 170), Beedle's hut
-// over z -300..300 (its floor 520); the King of Red Lions at its local z +600, forward of the hut
+// Beedle's ship (IkadaH vtsp), 1.5x and lowered 60: its deck (found with the ground check, in its frame) a strip x
+// +-300 from z 0 to 900 (y 50..130, the bow rising to 170), Beedle's hut over z -300..300 (its floor 520). In tow: its
+// centre kept kTowR behind the King of Red Lions' centre, on the line from it to him (a rigid tow-shaft from his stern
+// to its bow), so it swings in behind him as he turns, as a trailer does
 constexpr float kBeedleScale = 1.5f;
-constexpr double kBeedleLionZ = 600, kBeedleDy = -60, kBeedleTop = 130 * kBeedleScale + kBeedleDy;
+constexpr double kBeedleDy = -60, kBeedleTop = 130 * kBeedleScale + kBeedleDy, kTowR = 1500;
 constexpr double kBeedleHalfX = 575 * kBeedleScale, kBeedleHalfZ = 635 * kBeedleScale;
 bool on_beedle(uint32_t ship, uint32_t link) {  // anywhere on board, the hut's roof too
     const V3 l = to_local(ship, link);
@@ -338,9 +359,10 @@ const std::vector<Mod>& catalogue() {
          "Rarely, on an island at night, fog rolls in and Phantom Ganon comes down behind Link and hunts him across the "
          "island, until Link takes to the sea, beats him, or he fades back into the fog.", {}, true},
         {"beedle-ship", "Beedle's ship", "Experimental",
-         "The King of Red Lions sails as Beedle's shop ship, a size bigger, with his own sail and cannon. Stop and get "
-         "out to stand on its deck, walk it and fight from it; A by him sits Link back down to sail on. Fall in, and A by "
-         "its side climbs back aboard.", {}},
+         "Out at sea the King of Red Lions tows Beedle's shop ship, a size bigger, behind him on a tow-shaft. Stop and get "
+         "out to leap back onto its deck, walk it and fight from it with its two cannons (one at the bow, one up on the "
+         "hut's roof, manned from before the hut); A at its bow leaps Link forward into the boat. Fall in, and A by its "
+         "side climbs back aboard.", {}},
     };
     return mods;
 }
@@ -601,7 +623,9 @@ void horror_audio(Cpu* c, uint32_t link, double now, bool event, bool enabled) {
         next_beat = now + (nearest < 400 ? 0.45 : 0.8);
     }
 }
-// Deck cannons, at the Big ship's bow (on the forecastle, beside the catapult) and stern (on the poop deck behind the wheel):
+// Deck cannons, two on a ship: the Big ship's at its bow (on the forecastle, beside the catapult) and stern (on the
+// poop deck behind the wheel), Beedle's ship's at its bow and on its hut's roof (manned from the deck before the hut,
+// which lifts Link up behind it, and down again as he leaves it):
 // the cannon game's cannon (daCanon_c, proc 0x3D, its own Bomber archive; it only waits for its minigame's event, and
 // draws from current.pos and shape_angle each execute: y the way it points, x its barrel from straight up, 0x4000
 // level), its speak prompt (attention flags +0x39C) cleared, put on the deck where the ground check finds it each step.
@@ -612,7 +636,11 @@ void horror_audio(Cpu* c, uint32_t link, double now, bool event, bool enabled) {
 // (0x80020004) by fopAcM_fastCreate (025D5928), no gravity for its first 8 steps (020CB89C), then speedF +0x370
 // v cos e, speed.y +0x340 v sin e (v kShotSpeed), gravity +0x374 -2.5; it bursts on what it hits. One bomb from the bag each
 // (dSv_player_c +0x6A), none when it is empty (the boat's dud sound 0x0883); the firing sound 0x2852.
-constexpr V3 kCannon[2] = {{-130, 0, 950}, {0, 0, -1320}};  // beside the catapult; on the poop deck
+// A gun: where it stands in the ship's frame, which way it rests (0 over the bow, 0x8000 the stern), and, for one up on
+// a roof, the deck spot it is manned from (`lift`)
+struct Gun { V3 at; int16_t face; bool lift = false; V3 man{}; };
+constexpr Gun kBigShipGuns[2] = {{{-130, 0, 950}, 0}, {{0, 0, -1320}, (int16_t)0x8000}};
+constexpr Gun kBeedleGuns[2] = {{{-120, 0, 880}, 0}, {{0, 0, -60}, (int16_t)0x8000, true, {0, 0, 560}}};
 // the shot's speed: the boat's is 110 (about 4800 at most); a ship's gun carries twice as far (about 10000), so it
 // reaches a titanic Phantom Ganon
 constexpr double kShotSpeed = 160;
@@ -646,18 +674,33 @@ void cannon_hits(Cpu* c, double now) {
         return true;
     });
 }
-void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, bool deck, int proc, uint32_t pressed, double now) {
+// the gun Link stands by on `ship` (by the deck spot it is manned from, for one up on a roof), or -1
+int gun_by(uint32_t ship, const Gun* guns, uint32_t link) {
+    const V3 me = to_local(ship, link);
+    for (int i = 0; i < 2; i++)
+        if (const V3 p = guns[i].lift ? guns[i].man : guns[i].at; std::hypot(me.x - p.x, me.z - p.z) < 220) return i;
+    return -1;
+}
+// `deck_y`: the deck's height in the ship's frame, until the ground check has found the floor under each gun
+void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, const Gun* guns, double deck_y, bool deck, int proc, uint32_t pressed, double now) {
     static int16_t yaw = 0, up = 0x0C00;
     static uint32_t locked = 0xFFFFFFFF;
     static double fired = 0;
     cannon_hits(c, now);
     static V3 stand;  // where he stood when he manned it, in the hull's frame: a hit's knockback does not carry him off
-    if (g_manned >= 0 && (!deck || !g_take_pad || ld8(kPlay + 0x5292) || (pressed & input::kB))) {
+    if (g_manned >= 0 && (!hull || !deck || !g_take_pad || ld8(kPlay + 0x5292) || (pressed & input::kB))) {
+        // down off the roof, onto the deck before the hut
+        if (hull && deck && guns[g_manned].lift) put_link(link, to_world(pos_of(hull), (int16_t)ld16(hull + kAngleY), {guns[g_manned].man.x, deck_y + 30, guns[g_manned].man.z}));
         g_manned = -1, g_take_pad = false, g_cannon_btn = 0, g_cannon_cam = false;
         trace("extras: Link leaves the deck cannon");
         return;
     }
-    if (!hull) { g_manned = -1, g_take_pad = false, g_cannon_btn = 0, g_cannon_cam = false; return; }
+    if (!hull) {  // no ship: its guns go too
+        for (Single& s : g_cannon)
+            if (s.actor(c)) guest_call(c, GC(0x025D57E4), {s.id}), s = Single{};
+        g_cannon_btn = 0;
+        return;
+    }
     const int16_t hull_yaw = (int16_t)ld16(hull + kAngleY);
     static float floor_y[2];
     for (int i = 0; i < 2; i++) {
@@ -667,37 +710,41 @@ void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, bool deck, 
                 Spawner none;
                 g_cannon[i].id = spawn(c, none, Monster{0x3D, -1, 0xFFFFFFFF}, hull, 0, false, 0, false);
                 g_cannon[i].next = now + 5;
-                floor_y[i] = (float)kDeckY;
+                floor_y[i] = (float)deck_y;
             }
             continue;
         }
-        // the deck under it (the hull's own collision, once it is where it is put), from above its castles
+        // the deck (or roof) under it (the hull's own collision, once it is where it is put), from above its castles
         if (static int every = 0; ++every % 15 == 0) {
             static const uint32_t buf = mem::host_alloc(0x10);
-            const V3 w = to_world(pos_of(hull), hull_yaw, {kCannon[i].x, kDeckY + 800, kCannon[i].z});
+            const V3 w = to_world(pos_of(hull), hull_yaw, {guns[i].at.x, kDeckY + 800, guns[i].at.z});
             st32(buf, u32_bits((float)w.x)), st32(buf + 4, u32_bits((float)w.y)), st32(buf + 8, u32_bits((float)w.z));
             guest_call(c, GC(0x02549F4C), {buf});
             if ((float)c->f[1].ps0 != (float)w.y) floor_y[i] = (float)(c->f[1].ps0 - ldf32(hull + kPos + 4));
         }
-        const V3 w = to_world(pos_of(hull), hull_yaw, {kCannon[i].x, floor_y[i], kCannon[i].z});
+        const V3 w = to_world(pos_of(hull), hull_yaw, {guns[i].at.x, floor_y[i], guns[i].at.z});
         st32(a + kPos, u32_bits((float)w.x)), st32(a + kPos + 4, u32_bits((float)w.y)), st32(a + kPos + 8, u32_bits((float)w.z));
         const bool mine = g_manned == i;
-        st16(a + kAngleY, (uint16_t)(mine ? yaw : (int16_t)(hull_yaw + (i == 0 ? 0 : 0x8000))));
+        st16(a + kAngleY, (uint16_t)(mine ? yaw : (int16_t)(hull_yaw + guns[i].face)));
         st16(a + 0x328, (uint16_t)(mine ? 0x4000 - up : 0x3400));
         st32(a + 0x39C, 0);
     }
     if (!deck) { g_cannon_btn = 0; return; }
-    const V3 me = to_local(hull, link);
-    int by = -1;  // the cannon he stands by
-    for (int i = 0; i < 2; i++) if (std::hypot(me.x - kCannon[i].x, me.z - kCannon[i].z) < 220) by = i;
+    const int by = gun_by(hull, guns, link);
     const uint32_t button = by >= 0 && (proc == 0x4 || proc == 0x6) ? bomb_button() : 0;
     g_cannon_btn = g_manned >= 0 ? bomb_button() : button;
     if (g_manned < 0) {
         if (by >= 0 && (proc == 0x4 || proc == 0x6) && (pressed & (button | input::kA))) {
             g_manned = by, g_take_pad = true, locked = 0xFFFFFFFF, up = 0x0C00, stand = to_local(hull, link);
-            yaw = (int16_t)(hull_yaw + (by == 0 ? 0 : 0x8000));  // out over the bow, or the stern
+            yaw = (int16_t)(hull_yaw + guns[by].face);  // out over the bow, or the stern
+            if (guns[by].lift) {  // up onto the roof, behind the gun
+                const Gun& g = guns[by];
+                stand = {g.at.x, floor_y[by] + 5.0, g.at.z + (g.face ? 170 : -170)};
+                put_link(link, to_world(pos_of(hull), hull_yaw, stand));
+                st32(link + 0x340, 0);
+            }
             fired = now;  // the press that manned it does not also fire
-            trace("extras: Link mans the %s cannon", by == 0 ? "bow" : "stern");
+            trace("extras: Link mans the %s cannon", by == 0 ? "bow" : guns[by].lift ? "roof" : "stern");
         }
         return;
     }
@@ -789,7 +836,7 @@ void step(Cpu* c) {
     const bool fresh = link != last_link;  // a file loaded, a stage entered: start over
     last_link = link;
     std::string stage((const char*)mem::ptr(kStage), strnlen((const char*)mem::ptr(kStage), 8));
-    g_beedle_actor = g_beedle_lion = g_hide_body = g_hide_head = 0, g_beedle_aboard = false;  // (set again below while Beedle's ship sails)
+    g_beedle_actor = g_beedle_lion = 0, g_beedle_aboard = false;  // (set again below while Beedle's ship is out)
     if (!in_mem2(link) || stage.empty() || stage == "sea_T" || stage == "Name" || stage == "ENDumi") {  // title, file select
         g_manned = -1, g_take_pad = false, g_cannon_btn = 0, g_cannon_cam = false;
         return;
@@ -1303,27 +1350,18 @@ void step(Cpu* c) {
             static uint32_t placed = 0;
             if (placed != g_bigship.id) placed = g_bigship.id, put(hull, home, home_yaw), trace("extras: Big ship lies at anchor (%.0f %.0f)", home.x, home.z);
             // out of the boat beside it: the get-off jump (SHIP_GET_OFF, its jump phase link +0x69C0 1), with its deck within
-            // 1600 on either side, is made a leap onto it: Link is carried on an arc (every copy of his position, each
-            // step after his own execute) from where he jumps to the nearest spot of its main deck (x +-250), 250 over
-            // the higher end, in 36 steps, then falls the last 30 onto it
-            static int leap = -1;  // steps into the leap
-            static V3 from, onto;
-            if (leap < 0 && proc == 0x90 && ld32(link + 0x69C0) == 1) {
+            // 1600 on either side, is made a leap onto the nearest spot of its main deck (x +-250), then he falls the last
+            // 30 onto it
+            static Leap leap;
+            if (leap.step < 0 && proc == 0x90 && ld32(link + 0x69C0) == 1) {
                 const V3 l = to_local(hull, link);
                 const V3 t{std::clamp(l.x, -250.0, 250.0), kDeckY + 30, std::clamp(l.z, -1500.0, 1800.0)};
                 if (std::hypot(t.x - l.x, t.z - l.z) < 1600) {
-                    leap = 0, from = pos_of(link), onto = to_world(pos_of(hull), (int16_t)ld16(hull + kAngleY), t);
+                    leap.start(link, hull, t);
                     trace("extras: Link leaps onto the Big ship's deck (%.0f off)", std::hypot(t.x - l.x, t.z - l.z));
                 }
             }
-            if (leap >= 0) {
-                constexpr int kSteps = 36;
-                const double k = ++leap / (double)kSteps, top = std::max(from.y, onto.y) + 250;
-                const double y = from.y + (onto.y - from.y) * k + 4 * (top - (from.y + onto.y) / 2) * k * (1 - k);
-                put_link(link, {from.x + (onto.x - from.x) * k, y, from.z + (onto.z - from.z) * k});
-                st32(link + 0x340, 0), st32(link + 0x6A14, 0);
-                if (leap >= kSteps) leap = -1;
-            }
+            leap.carry(link);
             // back into the boat from the deck: A at the gunwale by him, standing or walking (procShipReady_init
             // 023ECA94, the game's own boarding: a hop onto his ledge)
             if (deck && (proc == 0x4 || proc == 0x6) && (pressed & input::kA) && std::hypot(ldf32(link + kPos) - ldf32(korl + kPos), ldf32(link + kPos + 8) - ldf32(korl + kPos + 8)) < 700) {
@@ -1405,12 +1443,12 @@ void step(Cpu* c) {
             st8(GD(0x1046D78E), sail_set), st8(hull + 0x3E6, sail_set);
         }
     }
-    // Beedle's ship: the King of Red Lions sails as Beedle's shop ship (made around him at sea, put on him each step
-    // by its own execute, hook_02363164), his body and head not drawn (hook_025E2E5C; his sail, the Grid actor, and
-    // his cannon, drawn only while it is out, stay). Its deck, a moving BG, is registered as his (cBgS::Release
-    // 020087EC, Regist 020086D4 on dComIfG_Bgsp, 025200D4() + 0x12A0, with his process id): his own ground and wall
-    // checks pass through it as through himself, Link's do not. Stopped, B (SHIP_GET_OFF) jumps Link up onto its deck;
-    // A by him there sits him back down (procShipReady_init 023ECA94); A while swimming by its side climbs aboard
+    // Beedle's ship in tow: made behind the King of Red Lions at sea, it follows him on its tow-shaft (put there each
+    // step by its own execute, hook_02363164). Its deck, a moving BG, is registered as his (cBgS::Release 020087EC,
+    // Regist 020086D4 on dComIfG_Bgsp, 025200D4() + 0x12A0, with his process id): his own ground and wall checks pass
+    // through it as through himself (backing into it), Link's do not. Stopped, B (SHIP_GET_OFF) leaps Link back onto its
+    // deck; A at its bow, by none of its guns and within 700 of him, leaps him forward into the boat
+    // (procShipReady_init 023ECA94 as he lands beside it); A while swimming by its side climbs aboard
     if (const uint32_t korl = ld32(kPlay + 0x5B3C); on<kBeedle>() && stage == "sea" && in_mem2(korl) && settled) {
         if (!beedle) {
             if (riding && g_beedle.wanted(c, now)) {
@@ -1420,39 +1458,35 @@ void step(Cpu* c) {
             }
         } else {
             g_beedle_actor = beedle, g_beedle_lion = korl, g_beedle_aboard = deck;
-            if (const uint32_t body = ld32(korl + 0x3B4), head = ld32(korl + 0x3B8); in_mem2(body) && in_mem2(head))
-                g_hide_body = ld32(body + 0x90), g_hide_head = ld32(head + 0x90);
             static uint32_t owned = 0;  // the ship whose BG is his
             if (const uint32_t bgw = ld32(beedle + 0x6E4); owned != g_beedle.id && in_mem2(bgw)) {
                 owned = g_beedle.id, g_beedle_mtx = 0;
                 const uint32_t bgs = guest_call(c, GC(0x025200D4)) + 0x12A0;
                 guest_call(c, GC(0x020087EC), {bgs, bgw});
                 const uint32_t failed = guest_call(c, GC(0x020086D4), {bgs, bgw, ld32(korl + 4), beedle});
-                trace("extras: Beedle's ship made around the boat (its deck his%s)", failed & 0xFF ? ": regist failed" : "");
+                trace("extras: Beedle's ship in tow behind the boat (its deck his%s)", failed & 0xFF ? ": regist failed" : "");
             }
-            // out of the boat: the get-off jump made a hop up onto its deck (speed.y +0x340 at its jump phase,
-            // link +0x69C0 1, enough to clear the deck's top by 50)
-            static bool hopped = false;
-            if (proc != 0x90) hopped = false;
-            else if (!hopped && ld32(link + 0x69C0) == 1) {
-                hopped = true;
-                const double g = -std::min(-0.5, (double)ldf32(link + 0x374)), up = kBeedleTop + 50 - to_local(beedle, link).y;
-                st32(link + 0x340, u32_bits((float)std::sqrt(2 * g * std::max(0.0, up))));
-                trace("extras: Link hops onto Beedle's ship");
+            static Leap leap;
+            static bool to_boat = false;  // the leap is into the boat
+            // out of the boat: the get-off jump (its jump phase, link +0x69C0 1) a leap back onto its deck, before the hut
+            if (leap.step < 0 && proc == 0x90 && ld32(link + 0x69C0) == 1) {
+                leap.start(link, beedle, {0, kBeedleTop + 30, 700}), to_boat = false;
+                trace("extras: Link leaps back onto Beedle's ship");
             }
-            // back in the boat: A on its deck within 500 of him, standing or walking
-            if (deck && (proc == 0x4 || proc == 0x6) && (pressed & input::kA) &&
-                std::hypot(ldf32(link + kPos) - ldf32(korl + kPos), ldf32(link + kPos + 8) - ldf32(korl + kPos + 8)) < 500) {
-                guest_call(c, GC(0x023ECA94), {link});
-                trace("extras: Link sits back down in the boat");
+            // into the boat: A at its bow, by none of its guns, within 700 of him
+            if (leap.step < 0 && deck && g_manned < 0 && (proc == 0x4 || proc == 0x6) && (pressed & input::kA) && gun_by(beedle, kBeedleGuns, link) < 0 &&
+                std::hypot(ldf32(link + kPos) - ldf32(korl + kPos), ldf32(link + kPos + 8) - ldf32(korl + kPos + 8)) < 700) {
+                leap.start(link, korl, {0, 60, -120}), to_boat = true;
+                trace("extras: Link leaps forward into the boat");
             }
+            if (leap.carry(link) && to_boat) guest_call(c, GC(0x023ECA94), {link});
             // out of the water: A while swimming by its side puts him just inside it, falling onto its deck
             // (procFall_init 023F6564 (1, 0)): position, old position (+0x300) and the fall's start (+0x6A48/C)
             if (swimming && (pressed & input::kA)) {
                 const V3 l = to_local(beedle, link);
                 if (std::fabs(l.x) < kBeedleHalfX + 300 && std::fabs(l.z) < kBeedleHalfZ + 300) {
                     const V3 w = to_world(pos_of(beedle), (int16_t)ld16(beedle + kAngleY),
-                                          {std::clamp(l.x, -200.0, 200.0), kBeedleTop + 60, std::clamp(l.z, 100.0, 800.0)});
+                                          {std::clamp(l.x, -200.0, 200.0), kBeedleTop + 60, std::clamp(l.z, 500.0, 1000.0)});
                     put_link(link, w);
                     st32(link + 0x340, 0), st32(link + 0x6A48, u32_bits((float)w.y)), st32(link + 0x6A4C, u32_bits((float)w.y));
                     c->f[1].ps0 = 0;
@@ -1463,14 +1497,15 @@ void step(Cpu* c) {
             if (static double t = 0; now - t >= 1) {  // where Link is about it, once a second (the trace)
                 t = now;
                 const V3 l = to_local(beedle, link);
-                trace("extras: Beedle's ship: Link proc %#x deck %d swim %d at %.0f %.0f %.0f", proc, deck, swimming, l.x, l.y, l.z);
+                trace("extras: Beedle's ship: Link proc %#x deck %d swim %d at %.0f %.0f %.0f, cannon %d", proc, deck, swimming, l.x, l.y, l.z, g_manned);
             }
         }
     } else if (const uint32_t a = g_beedle.actor(c); a && !on<kBeedle>()) {
         guest_call(c, GC(0x025D57E4), {g_beedle.id});  // switched off: it goes
     }
-    // (not the ship deleted above this step: its cannons would be made again on it)
-    deck_cannons(c, sv, link, g_bigship.id == 0xFFFFFFFF ? 0 : hull, deck, proc, pressed, now);
+    // the guns of the ship out (not the Big ship deleted above this step: its cannons would be made again on it)
+    if (beedle) deck_cannons(c, sv, link, beedle, kBeedleGuns, kBeedleTop, deck, proc, pressed, now);
+    else deck_cannons(c, sv, link, g_bigship.id == 0xFFFFFFFF ? 0 : hull, kBigShipGuns, kDeckY, deck, proc, pressed, now);
     if (static double t = 0; hull && now - t >= 1) {  // where Link is about the Big ship, once a second (the trace)
         t = now;
         const V3 l = to_local(hull, link);
@@ -1706,17 +1741,22 @@ extern "C" void hook_023C6DB4(Cpu* c) {
     }
 }
 
-// daObj_Ikada's execute (02363164; r3 the actor): Beedle's ship as the King of Red Lions' hull is put around him before
-// it runs (its execute floats it on the water and moves its BG from where it is), his way, 1.5x, his speed its own for
-// its wake (it makes one above speedF 2)
+// daObj_Ikada's execute (02363164; r3 the actor): Beedle's ship in tow is put before it runs (its execute floats it on
+// the water and moves its BG from where it is): kTowR behind the King of Red Lions on the line from it to him, facing
+// him, 1.5x, his speed its own for its wake (it makes one above speedF 2); fresh (made on him), straight behind him
 extern "C" void f_02363164_orig(Cpu* c);
 extern "C" void hook_02363164(Cpu* c) {
     using namespace mods::extras;
     if (const uint32_t a = c->r[3], k = g_beedle_lion; a && a == g_beedle_actor && in_mem2(k)) {
-        const int16_t yaw = (int16_t)ld16(k + kAngleY);
-        const V3 at = to_world(pos_of(k), yaw, {0, 0, -kBeedleLionZ});
-        st32(a + kPos, u32_bits((float)at.x)), st32(a + kPos + 8, u32_bits((float)at.z));
-        st16(a + 0x322, (uint16_t)yaw), st16(a + kAngleY, (uint16_t)yaw);
+        const V3 lion = pos_of(k), p = pos_of(a);
+        double dx = lion.x - p.x, dz = lion.z - p.z, d = std::hypot(dx, dz);
+        if (d < 100 || d > 3 * kTowR) {
+            const double t = (int16_t)ld16(k + kAngleY) * M_PI / 32768;
+            dx = sin(t), dz = cos(t), d = 1;
+        }
+        st32(a + kPos, u32_bits((float)(lion.x - dx / d * kTowR))), st32(a + kPos + 8, u32_bits((float)(lion.z - dz / d * kTowR)));
+        const uint16_t yaw = (uint16_t)(int16_t)(atan2(dx, dz) * 32768 / M_PI);
+        st16(a + 0x322, yaw), st16(a + kAngleY, yaw);
         for (int i = 0; i < 3; i++) st32(a + 0x330 + 4 * i, u32_bits(kBeedleScale));
         st32(a + 0x370, u32_bits(std::fabs((float)ldf32(k + 0x370))));
     }
@@ -1741,14 +1781,6 @@ extern "C" void hook_02360420(Cpu* c) {
     if (const uint32_t m = g_beedle_mtx)
         for (uint32_t r = 0; r < 3; r++)
             for (uint32_t k = 0; k < 3; k++) st32(m + 16 * r + 4 * k, u32_bits((float)ldf32(m + 16 * r + 4 * k) * kBeedleScale));
-}
-// mDoExt_modelEntryDL (025E2E5C; r3 the J3DModel): the King of Red Lions' body and head are not drawn while he sails
-// as Beedle's ship (still animated: his sail and cannon hang on his joints)
-extern "C" void f_025E2E5C_orig(Cpu* c);
-extern "C" void hook_025E2E5C(Cpu* c) {
-    using namespace mods::extras;
-    if (const uint32_t m = c->r[3]; m && (m == g_hide_body || m == g_hide_head)) return;
-    f_025E2E5C_orig(c);
 }
 // dBgS::GetExitId (024EECC8; r4 the polygon): no exit while Link is aboard Beedle's ship. Its hut's floor is a door into
 // Beedle's shop, an exit of the sea room the game's own Beedle's ship lies in: from ours it would load a room that is
