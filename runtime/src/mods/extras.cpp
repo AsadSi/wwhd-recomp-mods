@@ -803,7 +803,9 @@ void step(Cpu* c) {
         g_until[kSea] = g_until[kPhantom] = g_until[kLeviathan] = g_until[kMolgera] = g_until[kStalker] = 0;
         remove_molgera(c);
     }
-    const bool settled = !fresh && game_time() >= settle;
+    // nor while the next stage is asked for (dComIfGp's next stage enabled, play +0x514C): through the Big ship's
+    // cabin door its actors are gone before Link is, and a spawn then halted the game
+    const bool settled = !fresh && game_time() >= settle && !ld8(kPlay + 0x514C);
     g_big_hits.clear();  // refilled below by the mods whose monsters hit bigger
     g_phantom_actor = 0;
 
