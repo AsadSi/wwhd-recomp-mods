@@ -456,12 +456,21 @@ float wf(uint32_t w) { return u32_as_f32(__builtin_bswap32(w)); }
 uint32_t fw(float f) { return __builtin_bswap32(f32_as_u32(f)); }
 
 // debug: WWHD_INTERP_MODEL_TRACE=n logs n draws of one model (the first with at least
-// WWHD_INTERP_MODEL_TRACE_JOINTS joints, default 40): root joint translation as drawn
+// WWHD_INTERP_MODEL_TRACE_JOINTS joints, default 40; or every one with a joint count in WWHD_INTERP_MODEL_TRACE_SET,
+// a comma list; from logic step WWHD_INTERP_MODEL_TRACE_FROM): root joint translation as drawn
 void trace_model(const char* what, uint32_t jnt, uint32_t n, const uint32_t* w) {
     static int left = getenv("WWHD_INTERP_MODEL_TRACE") ? atoi(getenv("WWHD_INTERP_MODEL_TRACE")) : 0;
     static const uint32_t min_joints = getenv("WWHD_INTERP_MODEL_TRACE_JOINTS") ? atoi(getenv("WWHD_INTERP_MODEL_TRACE_JOINTS")) : 40;
+    static const uint64_t from = getenv("WWHD_INTERP_MODEL_TRACE_FROM") ? strtoull(getenv("WWHD_INTERP_MODEL_TRACE_FROM"), nullptr, 10) : 0;  // logic step
     static uint32_t which = 0;
-    if (left <= 0 || n < min_joints || (which && which != jnt)) return;
+    static const std::string set = getenv("WWHD_INTERP_MODEL_TRACE_SET") ? "," + std::string(getenv("WWHD_INTERP_MODEL_TRACE_SET")) + "," : "";
+    if (!set.empty()) {  // every model with one of these joint counts (comma list), from that step on
+        if (left > 0 && g_logic_steps >= from && set.find("," + std::to_string(n) + ",") != std::string::npos)
+            left--, LOG("[interp] model %08X (%u joints, mtx %08X) step %llu t %.3f %-7s root %.2f %.2f %.2f", jnt, n, ld32(jnt + kJntMtx),
+                        (unsigned long long)g_logic_steps, pass_t(), what, wf(w[3]), wf(w[7]), wf(w[11]));
+        return;
+    }
+    if (left <= 0 || n < min_joints || g_logic_steps < from || (which && which != jnt)) return;
     which = jnt;
     left--;
     LOG("[interp] model %08X (%u joints, mtx %08X) step %llu t %.3f %-7s root %.2f %.2f %.2f", jnt, n, ld32(jnt + kJntMtx),

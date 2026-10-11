@@ -9,12 +9,13 @@ pgrep -fl "wwhd " >/dev/null && { echo "The game is already running; close it fi
 SPOOKY=(NIGHT_DEAD HAUNTED_SEA STORM FOG GIANT_SEAHATS PHANTOM_GANON HORROR_AUDIO DEEP LEVIATHAN MOLGERA PHANTOM_STALKER BIG_SHIP BEEDLE_SHIP)
 ON=(); EVENT=; NOTE=
 SHIP="Big ship (keys: move WASD, A = K/Space, B = J, ZL = Left Shift, pause/items = Return):
-  Stop the boat beside the ship and press B (Get Out) to jump onto its deck. Walk it, climb its castles, use weapons.
-  Sail it: on the stern castle (the raised deck at the back), stand by the middle and press A to take the helm.
+  Tetra's ship is a boat of its own: once you are out at sea it waits at anchor a little way off your left.
+  Sail up beside it so it is on your left, stop, and press B (Get Out) to leap onto its deck. Walk it, climb its castles.
+  Sail it: on the stern castle (the raised deck at the back), stand by the wheel and press A to take the helm.
   Stick up raises the sail, down lowers it, left/right steers (quicker the faster you go); B lets go and it drifts
-  to a stop. The Red Lion comes along tied to its side.
+  to a stop. The Red Lion comes along beside it while it sails.
   Back in the boat: stand at the rail by the boat and press A. Fall in the sea: swim to the hull's side and press A.
-  Sail off alone in the boat and the ship waits at anchor; sail up alongside it, slowly, to hitch it on again.
+  It stays where you leave it; leave it far behind and it waits near you again the next time you are at sea.
 Deck cannons (bow and stern): stand by one and press A (or your Bomb Bag's button) to man it. Stick aims, ZL locks on
   the nearest monster (again to unlock), A fires (one bomb a shot), B leaves."
 BEEDLE="Beedle's ship (keys: move WASD, A = K/Space, B = J, pause/items = Return):

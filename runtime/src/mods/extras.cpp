@@ -173,11 +173,12 @@ uint32_t spawn(Cpu* c, Spawner& s, Monster m, uint32_t link, float dist, int sid
 // (cMtx_YrotS): local +x is (cos a, -sin a) in the world, +z (forward) (sin a, cos a); the main deck at local y 400
 // (x +-350, z -700..650), the gunwale top 126 above it (x 350..500), the hull's side out to x 700 at the waterline
 struct V3 { double x, y, z; };
-V3 to_local(uint32_t hull, uint32_t a) {
+V3 to_local(uint32_t hull, V3 p) {
     const double t = (int16_t)ld16(hull + kAngleY) * M_PI / 32768;
-    const double dx = ldf32(a + kPos) - ldf32(hull + kPos), dz = ldf32(a + kPos + 8) - ldf32(hull + kPos + 8);
-    return {dx * cos(t) - dz * sin(t), ldf32(a + kPos + 4) - ldf32(hull + kPos + 4), dx * sin(t) + dz * cos(t)};
+    const double dx = p.x - ldf32(hull + kPos), dz = p.z - ldf32(hull + kPos + 8);
+    return {dx * cos(t) - dz * sin(t), p.y - ldf32(hull + kPos + 4), dx * sin(t) + dz * cos(t)};
 }
+V3 to_local(uint32_t hull, uint32_t a) { return to_local(hull, V3{ldf32(a + kPos), ldf32(a + kPos + 4), ldf32(a + kPos + 8)}); }
 V3 to_world(V3 o, int16_t yaw, V3 l) {
     const double t = yaw * M_PI / 32768;
     return {o.x + l.x * cos(t) + l.z * sin(t), o.y + l.y, o.z - l.x * sin(t) + l.z * cos(t)};
@@ -312,9 +313,9 @@ const std::vector<Mod>& catalogue() {
          "into the fog.",
          {"Normal size", "Titanic (12x)"}, true},
         {"big-ship", "Big ship", "Experimental",
-         "Tetra's ship sails beside the King of Red Lions. Stop and get out to jump onto its deck, walk it, fight from it "
-         "and man its cannons; it waits at anchor while you take the boat in to an island, and follows again once you "
-         "sail up alongside it.", {}},
+         "Tetra's ship, a boat of its own: out at sea it waits at anchor near the King of Red Lions. Stop beside it and get "
+         "out to jump onto its deck; walk it, fight from it, man its cannons, and sail it from its wheel while he comes "
+         "along beside it. Leave it far behind and it waits near you again the next time you are out at sea.", {}},
         {"horror-audio", "Horror audio", "Spooky",
          "While a spooky event's monsters are about, the music sinks low, and a heartbeat sounds that quickens as "
          "one of them comes close.", {}},
@@ -1213,23 +1214,16 @@ void step(Cpu* c) {
     static uint32_t pad_prev = 0;
     const uint32_t pad_hold = g_pad_hold.load(), pressed = g_pad_seen.exchange(0) & ~pad_prev;
     pad_prev = pad_hold;
-    // Big ship: Tetra's ship sails beside the King of Red Lions (dComIfGp_getShipActor, play +0x5B3C), he on its +x
-    // flank (he stays the boat that sails; the hull is put beside him every step). Getting out of the boat (SHIP_GET_OFF)
-    // leaves it at anchor where it is; the get-off jump is made a vault over its gunwale onto its deck. Back in the boat, sailing up alongside it again (his place
-    // on its flank within 450, slow) hitches it on. It anchors by itself within 4000 of an island's centre or where
-    // land rises under its bow, stern or flanks, so it never sails into an island. It is made afresh beside him after a
-    // stage change, once he rides out at sea (never at a pier).
-    // It floats as the game floats it (its origin at the waterline, the deck 400 above the sea).
-    static bool anchored = false;
-    static int joining = 0;  // steps left of easing back into its place beside him
+    // Big ship: Tetra's ship, a boat of its own. It is made at anchor 3500 off the King of Red Lions' left (his -x) once
+    // he is out at sea (not near an island, no land under it), lies where it is left and moves only from its helm; gone
+    // (its room unloaded as he sailed away, a stage change) or left more than 20000 behind, it is made at anchor near him
+    // again. Stopped beside it with it on his left, B (SHIP_GET_OFF, which jumps toward his -x) leaps Link onto its deck;
+    // A at its rail by him takes him back in the boat; A while swimming by its side climbs aboard. While it sails from its
+    // helm, the King of Red Lions comes along beside it (on its +x flank). It floats as the game floats it (its origin at
+    // the waterline, the deck 400 above the sea).
     if (const uint32_t korl = ld32(kPlay + 0x5B3C); on<kBigShip>() && !on<kBeedle>() && stage == "sea" && in_mem2(korl) && settled) {
-        // his place in the hull's frame, by the main deck on its +x flank, where his get-off jump (toward his own -x)
-        // goes into the hull, clear of its side (out to x 700 at the waterline; at 900 it still pushed him out a
-        // little when the hull rode low)
-        constexpr double kLionX = 1050, kLionZ = 250;
+        constexpr double kLionX = 1050, kLionZ = 250;  // his place beside it while it sails (its +x flank, by the main deck)
         const int16_t yaw = (int16_t)ld16(korl + kAngleY);
-        V3 to = to_world(pos_of(korl), yaw, {-kLionX, 0, -kLionZ});
-        to.y = ldf32(korl + kPos + 4);
         auto put = [](uint32_t h, V3 p, int16_t a) {
             st32(h + kPos, u32_bits((float)p.x)), st32(h + kPos + 4, u32_bits((float)p.y)), st32(h + kPos + 8, u32_bits((float)p.z));
             st16(h + 0x322, (uint16_t)a), st16(h + kAngleY, (uint16_t)a);
@@ -1238,7 +1232,6 @@ void step(Cpu* c) {
         // check would find: 02549F4C returns the start height when it finds nothing, below 5 over water)
         auto land = [c](V3 o, int16_t a) {
             static const uint32_t buf = mem::host_alloc(0x10);
-            // clear of its own deck and of the boat (whose own collision the check finds)
             for (V3 l : {V3{0, 0, 2700}, V3{0, 0, -2200}, V3{1000, 0, 250}, V3{-1200, 0, 250}}) {
                 const V3 w = to_world(o, a, l);
                 st32(buf, u32_bits((float)w.x)), st32(buf + 4, u32_bits(900.f)), st32(buf + 8, u32_bits((float)w.z));
@@ -1251,54 +1244,51 @@ void step(Cpu* c) {
             return false;
         };
         auto isle = [](V3 p) { return std::hypot(p.x - std::round(p.x / 1e5) * 1e5, p.z - std::round(p.z / 1e5) * 1e5); };
-        if (!hull) {
-            if (riding && isle(to) >= 4000 && g_bigship.wanted(c, now) && !land(to, yaw)) {  // not at a pier: out at sea
+        static V3 home;       // where it is made at anchor, and its heading
+        static int16_t home_yaw = 0;
+        static V3 left_at;    // where it was last seen, and its heading: remade there when its room's unloading took it
+        static int16_t left_yaw = 0;
+        static bool left_one = false;
+        if (fresh) left_one = false;
+        const double away = hull ? std::hypot(ldf32(hull + kPos) - ldf32(link + kPos), ldf32(hull + kPos + 8) - ldf32(link + kPos + 8)) : 0;
+        if (hull && away < 15000)  // kept in Link's room while he is near, so the room it was made in can unload
+            st8(hull + kRoom, ld8(link + kRoom)), left_at = pos_of(hull), left_yaw = (int16_t)ld16(hull + kAngleY), left_one = true;
+        if (hull && riding && away > 20000) {
+            guest_call(c, GC(0x025D57E4), {g_bigship.id});
+            g_bigship = Single{}, left_one = false;
+            trace("extras: Big ship left far behind: it waits near Link again");
+        } else if (!hull) {
+            const bool back = left_one && std::hypot(left_at.x - ldf32(link + kPos), left_at.z - ldf32(link + kPos + 8)) < 15000;
+            V3 to = back ? left_at : to_world(pos_of(korl), yaw, {-3500, 0, 0});
+            to.y = ldf32(korl + kPos + 4);
+            if ((riding || back) && (back || (isle(to) >= 6000 && !land(to, yaw))) && g_bigship.wanted(c, now)) {
                 Spawner none;
                 g_bigship.id = spawn(c, none, kPirates, korl, 0, false, 0, false);
                 g_bigship.next = now + 5;
-                anchored = false, joining = 0;
+                home = to, home_yaw = back ? left_yaw : yaw;
             }
         } else {
             static uint32_t placed = 0;
-            static int land_check = 0;
-            if (placed != g_bigship.id) placed = g_bigship.id, put(hull, to, yaw), anchored = false, joining = 0;
-            const bool checking = ++land_check % 15 == 0, slot_land = checking && !anchored && land(to, yaw);
-            if (!anchored && (!riding || isle(to) < 4000 || slot_land)) {
-                anchored = true;
-                trace("extras: Big ship anchors (%s)", !riding ? "Link is out of the boat" : slot_land ? "land" : "near an island");
-            } else if (anchored && riding && !joining && checking) {  // he alongside, heading its way, slow
-                const V3 l = to_local(hull, korl);
-                if (std::hypot(l.x - kLionX, l.z - kLionZ) < 450 && std::abs((int16_t)(yaw - (int16_t)ld16(hull + kAngleY))) < 0x1800 &&
-                    std::fabs(ldf32(korl + 0x370)) < 20 && isle(to) >= 4000)  // (no land check: it is floating there, and
-                                                                                // the check would find its own deck)
-                    anchored = false, joining = 20, trace("extras: Big ship hitched on again");
-            }
-            if (!anchored) {
-                if (joining > 0) {  // eased into its place over 20 steps (2/3 s)
-                    const V3 at = pos_of(hull);
-                    const double k = 1.0 / joining--;
-                    const int16_t a = (int16_t)ld16(hull + kAngleY);
-                    put(hull, {at.x + (to.x - at.x) * k, at.y + (to.y - at.y) * k, at.z + (to.z - at.z) * k}, (int16_t)(a + (int16_t)(yaw - a) * k));
-                } else {
-                    put(hull, to, yaw);
-                }
-            }
+            if (placed != g_bigship.id) placed = g_bigship.id, put(hull, home, home_yaw), trace("extras: Big ship lies at anchor (%.0f %.0f)", home.x, home.z);
             // out of the boat beside it: the get-off jump (SHIP_GET_OFF, its jump phase link +0x69C0 1: speed.y +0x340,
-            // mNormalSpeed +0x6A14 8, gravity +0x374) is made a leap up the hull's side and over its gunwale (the deck
-            // 400 above the sea, the gunwale's outer lip at 567): up at 56 (its top about 660), and as fast as lands
-            // him at x 300 as he comes down to the deck
+            // mNormalSpeed +0x6A14, gravity +0x374), when its deck lies the way he jumps (his -x) within 1600, is made a
+            // leap up its side and over its gunwale (the deck 400 above the sea, the gunwale's outer lip at 567): up at
+            // 56 (its top about 660), and as fast as lands him 150 inside its side as he comes down to the deck
             static bool vaulted = false;
             constexpr double kVault = 56;
             if (proc != 0x90) vaulted = false;
             else if (!vaulted && ld32(link + 0x69C0) == 1) {
                 vaulted = true;
-                if (const V3 l = to_local(hull, korl); std::hypot(l.x - kLionX, l.z - kLionZ) < 300) {
-                    const double g = -std::min(-0.5, (double)ldf32(link + 0x374)), up = kDeckY - to_local(hull, link).y;
-                    const double air = (kVault + std::sqrt(std::max(0.0, kVault * kVault - 2 * g * up))) / g;
-                    const double run = std::clamp((to_local(hull, link).x - 300) / air, 4.0, 30.0);
-                    st32(link + 0x340, u32_bits((float)kVault)), st32(link + 0x6A14, u32_bits((float)run));
-                    trace("extras: Link leaps onto the Big ship's deck (gravity %.2f, run %.1f)", g, run);
-                }
+                const double t = yaw * M_PI / 32768, dx = -cos(t), dz = sin(t);  // his -x in the world
+                for (double s = 150; s <= 1600; s += 50)
+                    if (const V3 l = to_local(hull, {ldf32(link + kPos) + dx * s, 0, ldf32(link + kPos + 8) + dz * s}); std::fabs(l.x) < 330 && l.z > -1700 && l.z < 2000) {
+                        const double g = -std::min(-0.5, (double)ldf32(link + 0x374)), up = kDeckY - to_local(hull, link).y;
+                        const double air = (kVault + std::sqrt(std::max(0.0, kVault * kVault - 2 * g * up))) / g;
+                        const double run = std::clamp((s + 150) / air, 4.0, 40.0);
+                        st32(link + 0x340, u32_bits((float)kVault)), st32(link + 0x6A14, u32_bits((float)run));
+                        trace("extras: Link leaps onto the Big ship's deck (%.0f off, run %.1f)", s, run);
+                        break;
+                    }
             }
             // back into the boat from the deck: A at the gunwale by him, standing or walking (procShipReady_init
             // 023ECA94, the game's own boarding: a hop onto his ledge)
@@ -1307,7 +1297,7 @@ void step(Cpu* c) {
                 trace("extras: Link gets back in the boat from the deck");
             }
             // out of the water onto the deck: A while swimming by its side puts Link just inside the gunwale, falling
-            // (procFall_init 023F6564 (1, 0): no speed): position, old position (+0x300) and the fall's start (+0x6A48/C)
+            // (procFall_init 023F6564 (1, 0): no speed): every copy of his position (put_link) and the fall's start (+0x6A48/C)
             if (swimming && (pressed & input::kA)) {
                 const V3 l = to_local(hull, link);
                 if (std::fabs(l.x) > 380 && std::fabs(l.x) < 1000 && l.z > -1100 && l.z < 950) {
@@ -1319,13 +1309,14 @@ void step(Cpu* c) {
                     trace("extras: Link climbs out of the water onto the deck");
                 }
             }
-            // The helm, the ship's wheel (Kaji, at z -858) on the stern castle: A by it takes it (the stick, A and B are then the helm's, filter_pad). The
-            // stick up raises the sail, down lowers it (0.7 s from furled to full); full sail makes the boat's 40 a
-            // step, and it turns quicker the faster it goes (left and right). The hull is moved here, Link standing
-            // on it carried by the game's moving-BG rule, the King of Red Lions kept tied alongside (his place on its
-            // flank, his heading), and the camera is the boat's own (dCamera_c::SetTypeForce 02514EE4 by name, every
-            // step, on dCam_getBody 024F8044; WWHD_HELM_CAM=<camera type> tries another). B lets go: the ship slows
-            // to a stop and lies at anchor. Land under its outline stops it dead (it runs aground, the sail down).
+            // The helm, the ship's wheel (Kaji, at z -858) on the stern castle: A by it takes it (the stick, A and B are
+            // then the helm's, filter_pad). The stick up raises the sail, down lowers it (0.7 s from furled to full);
+            // full sail makes the boat's 40 a step, and it turns quicker the faster it goes (left and right). The hull is
+            // moved here, Link standing on it carried by the game's moving-BG rule, the King of Red Lions brought along
+            // beside it (eased to his place on its flank, its heading), and the camera is the boat's own
+            // (dCamera_c::SetTypeForce 02514EE4 by name, every step, on dCam_getBody 024F8044; WWHD_HELM_CAM=<camera
+            // type> tries another). B lets go: the ship slows to a stop. Land under its outline stops it dead (it runs
+            // aground, the sail down).
             static bool helm = false;
             static double speed = 0, sail = 0;
             static int helm_land = 0;
@@ -1334,7 +1325,7 @@ void step(Cpu* c) {
             constexpr V3 kHelm{0, 0, -880};  // the wheel, from either side of it
             const V3 me = to_local(hull, link);
             if (!helm && deck && g_manned < 0 && (proc == 0x4 || proc == 0x6) && (pressed & input::kA) && std::hypot(me.x - kHelm.x, me.z - kHelm.z) < 200) {
-                helm = true, g_take_pad = true, g_at_helm = true, anchored = true, joining = 0;
+                helm = true, g_take_pad = true, g_at_helm = true;
                 trace("extras: Link takes the Big ship's helm");
             } else if (helm && (!deck || !g_take_pad || (pressed & input::kB) || ld8(kPlay + 0x5292))) {
                 helm = false, g_take_pad = false, g_at_helm = false, sail = 0;
@@ -1363,24 +1354,23 @@ void step(Cpu* c) {
                 } else {
                     put(hull, p, a);
                     if (helm) st16(link + 0x322, (uint16_t)a), st16(link + kAngleY, (uint16_t)a);
-                    if (const V3 l = to_local(hull, korl); !riding && std::hypot(l.x - kLionX, l.z - kLionZ) < 600) {  // he comes along
-                        const V3 w = to_world(p, a, {kLionX, 0, kLionZ});
-                        st32(korl + kPos, u32_bits((float)w.x)), st32(korl + kPos + 8, u32_bits((float)w.z));
+                    if (!riding) {  // he comes along beside it, eased into his place there
+                        const V3 w = to_world(p, a, {kLionX, 0, kLionZ}), at = pos_of(korl);
+                        const double k = std::hypot(w.x - at.x, w.z - at.z) > 1500 ? 0.1 : 1.0;
+                        st32(korl + kPos, u32_bits((float)(at.x + (w.x - at.x) * k))), st32(korl + kPos + 8, u32_bits((float)(at.z + (w.z - at.z) * k)));
                         st16(korl + 0x322, (uint16_t)a), st16(korl + kAngleY, (uint16_t)a), st32(korl + 0x370, 0);
                     }
                 }
             }
             // its sail is shown set or furled: daSail's l_HIO byte (1046D78E, 1 eases it full, 0 furls it) is read every
-            // step by every sail; set while it sails at more than a crawl (at the helm, or beside the boat under way),
-            // with the ship's sailing sound (its m2CE, +0x3E6)
+            // step by every sail; set while it sails at more than a crawl, with the ship's sailing sound (its m2CE, +0x3E6)
             static bool sail_set = false;
-            const double going = helm || speed > 0.2 ? speed : anchored ? 0 : std::fabs(ldf32(korl + 0x370));
+            const double going = helm || speed > 0.2 ? speed : 0;
             if (going > 12) sail_set = true;
             else if (going < 6) sail_set = false;
             st8(GD(0x1046D78E), sail_set), st8(hull + 0x3E6, sail_set);
         }
     }
-    if (fresh) anchored = false;
     // Beedle's ship: the King of Red Lions sails as Beedle's shop ship (made around him at sea, put on him each step
     // by its own execute, hook_02363164), his body and head not drawn (hook_025E2E5C; his sail, the Grid actor, and
     // his cannon, drawn only while it is out, stay). Its deck, a moving BG, is registered as his (cBgS::Release
@@ -1449,7 +1439,7 @@ void step(Cpu* c) {
     if (static double t = 0; hull && now - t >= 1) {  // where Link is about the Big ship, once a second (the trace)
         t = now;
         const V3 l = to_local(hull, link);
-        trace("extras: Big ship: Link proc %#x deck %d swim %d at %.0f %.0f %.0f, anchored %d, cannon %d, bombs %u", proc, deck, swimming, l.x, l.y, l.z, anchored, g_manned, ld8(sv + 0x6A));
+        trace("extras: Big ship: Link proc %#x deck %d swim %d at %.0f %.0f %.0f, cannon %d, bombs %u", proc, deck, swimming, l.x, l.y, l.z, g_manned, ld8(sv + 0x6A));
     }
     // test aid: WWHD_EXTRAS_SPAWN=proc:param:dist:dy[:anglex] (hex) spawns that once, 3 s after Link appears
     static const char* test_spawn = getenv("WWHD_EXTRAS_SPAWN");
