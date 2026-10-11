@@ -1209,6 +1209,10 @@ void step(Cpu* c) {
             }
         }
     }
+    // the event's bosses are kept in Link's room (+0x326): made in the room he was in, they went with it when it unloaded
+    // behind him as he sailed on (Phantom Ganon's event ended "he is gone")
+    for (Single* b : {&g_phantom, &g_leviathan, &g_molgera})
+        if (const uint32_t a = b->actor(c)) st8(a + kRoom, ld8(link + kRoom));
     horror_audio(c, link, now, sea_event || (g_until[kNight] > now && !always(kNight) && night), on<kAudio>());
     // the GamePad since the last step
     static uint32_t pad_prev = 0;
