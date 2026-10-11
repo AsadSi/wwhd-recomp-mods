@@ -37,6 +37,11 @@ static PadState g_pad;
 static float g_values[input_map::kPadCount]={};
 static bool g_touch=false;static float g_tx=0,g_ty=0;
 static std::map<SDL_JoystickID,SDL_Gamepad*> g_controllers;
+// the second player's controller (set_second_player): the second connected, kept apart from the first
+static std::atomic<bool> g_split{false};
+static PadState g_pad2;static bool g_has2=false;
+void set_second_player(bool on){g_split=on;}
+bool read_second(PadState& s){std::lock_guard lk(g_mu);s=g_pad2;return g_has2;}
 static std::set<SDL_JoystickID> g_rumble_controllers;  // the ones that have a rumble motor
 static SDL_Window* g_prompt_window=nullptr;
 static std::function<void(bool,std::u16string)> g_pending,g_done;
@@ -506,10 +511,13 @@ void update(){
   }
  }
  post_test_keys();
- float v[input_map::kPadCount]={};using namespace input_map;
- auto put=[&](int p,float x){v[p]=std::max(v[p],x);};
+ float v[input_map::kPadCount]={},v2[input_map::kPadCount]={};using namespace input_map;
+ int n=0;for(auto [id,pad]:g_controllers)n+=SDL_GamepadConnected(pad);
+ const bool has2=g_split.load()&&n>=2;int index=0;
  for(auto [id,pad]:g_controllers){
   if(!SDL_GamepadConnected(pad))continue;
+  float* into=has2&&index++==1?v2:v;
+  auto put=[&](int p,float x){into[p]=std::max(into[p],x);};
   auto button=[&](SDL_GamepadButton b,int p){put(p,SDL_GetGamepadButton(pad,b)?1.f:0.f);};
   button(SDL_GAMEPAD_BUTTON_SOUTH,kPadA);button(SDL_GAMEPAD_BUTTON_EAST,kPadB);button(SDL_GAMEPAD_BUTTON_WEST,kPadX);button(SDL_GAMEPAD_BUTTON_NORTH,kPadY);
   button(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER,kPadLB);button(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER,kPadRB);
@@ -524,7 +532,8 @@ void update(){
  // + went down: the view may switch to the GamePad screen while the game is paused
  // (not while the settings overlay or the text prompt takes the buttons: Start acts there)
  {static bool plus=false;const bool now=(state.buttons&input::kPlus)!=0;if(now&&!plus&&!overlay::blocks_input())gfx::display_plus_pressed();plus=now;}
- std::lock_guard lk(g_mu);std::copy(std::begin(v),std::end(v),g_values);g_pad=state;
+ const PadState state2=has2?input_map::controller_state(input_map::current(),v2):PadState{};
+ std::lock_guard lk(g_mu);std::copy(std::begin(v),std::end(v),g_values);g_pad=state;g_pad2=state2;g_has2=has2;
  if(!overlay::blocks_input()&&!getenv("WWHD_NO_HOST_INPUT")){motion::poll_recalibrate(v,g_keys);screenshot::poll_controller(v);}
 }
 void prompt_text(const std::u16string& initial,int max_len,std::function<void(bool,std::u16string)> done){std::lock_guard lk(g_mu);g_initial=initial;g_pending_max_len=std::max(0,max_len);if(g_initial.size()>(size_t)g_pending_max_len)g_initial.resize(g_pending_max_len);g_pending=std::move(done);}

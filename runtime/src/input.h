@@ -35,6 +35,10 @@ void release_keys();                // forget held keys (another window took the
 void controller_values(float* v);   // main thread: input_map::kPadCount host controller inputs, 0..1
 void host_controller_values(float* v);  // any thread: the latest controller_values (settings overlay)
 void held_keys(bool* keys);         // 256 entries: keys held for the game (keyboard + WWHD_KEYS script)
+// A second player (mods: the second gunner): while on and two controllers are connected, the second is kept apart from
+// the first (which alone is the game's) and read here; false while there is none
+void set_second_player(bool on);
+bool read_second(PadState& s);
 
 // Ask the user for a line of text (software keyboard). Non-blocking: `done` runs on the
 // main thread with ok = false when cancelled. Text is UTF-16.

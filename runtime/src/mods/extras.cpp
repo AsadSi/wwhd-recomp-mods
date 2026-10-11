@@ -43,7 +43,7 @@
 
 namespace mods::extras {
 namespace {
-enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kAudio, kDeep, kLeviathan, kMolgera, kStalker, kBeedle, kCalm, kPhoto, kCount };  // the catalogue's order
+enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kAudio, kDeep, kLeviathan, kMolgera, kStalker, kBeedle, kCalm, kPhoto, kGunner, kCount };  // the catalogue's order
 std::atomic<bool> g_on[kCount];
 std::atomic<int> g_choice[kCount];
 std::atomic<int> g_often[kCount];
@@ -374,6 +374,10 @@ const std::vector<Mod>& catalogue() {
         {"photo-mode", "Free camera", "Gameplay",
          "F7 lets the camera go: fly it with the left stick (WASD), look with the right stick (arrow keys), L and R (Q, E) "
          "down and up, ZL (Shift) held for speed. Link stands still and the world goes on; F7 again gives the camera back.", {}},
+        {"second-gunner", "Second gunner", "Experimental",
+         "With a second controller connected, player 2 is a gunner on Beedle's ship or the Big ship: the gun Link is not "
+         "at is theirs. Left stick turns and raises it, ZL locks it on the nearest monster (and off again), A or ZR "
+         "fires, from the same Bomb Bag. Player 1 sails and plays on as ever on the first controller.", {}},
     };
     return mods;
 }
@@ -660,6 +664,8 @@ constexpr double kShotSpeed = 160;
 constexpr int kDown = 0x1C71;
 Single g_cannon[2];
 int g_manned = -1;  // the cannon Link stands at
+int g_p2_gun = -1;  // and the second gunner's, and its aim
+int16_t g_p2_yaw = 0, g_p2_up = 0;
 uint32_t g_deck_shots = 0;  // deck cannon shots so far: cannon boats answer them as the boat's own (hook_023C68B8)
 std::vector<uint32_t> monsters_out() {
     std::vector<uint32_t> v = g_sea.ids;
@@ -685,6 +691,60 @@ void cannon_hits(Cpu* c, double now) {
         }
         return true;
     });
+}
+// the nearest monster out within 9000 of `from`, by process id (0xFFFFFFFF none)
+uint32_t nearest_monster(Cpu* c, V3 from) {
+    uint32_t best_id = 0xFFFFFFFF;
+    double best = 9000;
+    for (uint32_t id : monsters_out())
+        if (const uint32_t a = guest_call(c, GC(0x025DE50C), {id}))
+            if (const double d = std::hypot(ldf32(a + kPos) - from.x, ldf32(a + kPos + 8) - from.z); d < best) best = d, best_id = id;
+    return best_id;
+}
+// a gun at `from` laid on monster `a`: at its eyes (eyePos +0x37C) where they will be when the shot gets there (led by
+// how fast they moved since the last step, `m`), on the shot's low arc (speed v kShotSpeed, gravity g 2.5): tan e =
+// (v^2 - sqrt(v^4 - g (g x^2 + 2 y v^2))) / (g x), x the distance and y the height to it; out of reach, 45 degrees
+struct Lay { V3 last{}; uint32_t id = 0xFFFFFFFF; };
+void lay_on(uint32_t a, uint32_t id, V3 from, Lay& m, int16_t& yaw, int16_t& up) {
+    V3 eye{ldf32(a + 0x37C), ldf32(a + 0x37C + 4), ldf32(a + 0x37C + 8)};
+    if (const V3 p = pos_of(a); std::hypot(eye.x - p.x, eye.z - p.z) > 3000) eye = p;  // Molgera never sets its eyes
+    const V3 vel = m.id == id ? V3{eye.x - m.last.x, eye.y - m.last.y, eye.z - m.last.z} : V3{};
+    m.last = eye, m.id = id;
+    constexpr double v = kShotSpeed, v2 = v * v, g = 2.5;
+    double e = M_PI / 8, dx = 0, dz = 0;
+    for (int pass = 0; pass < 3; pass++) {  // the flight time depends on the aim, the aim on where it will be
+        const double t = std::hypot(eye.x - from.x, eye.z - from.z) / (v * cos(e));
+        dx = eye.x + vel.x * t - from.x, dz = eye.z + vel.z * t - from.z;
+        const double x = std::max(1.0, std::hypot(dx, dz)), y = eye.y + vel.y * t - from.y;
+        const double root = v2 * v2 - g * (g * x * x + 2 * y * v2);
+        e = root < 0 ? M_PI / 4 : atan((v2 - std::sqrt(root)) / (g * x));
+    }
+    yaw = (int16_t)(atan2(dx, dz) * 32768 / M_PI);
+    up = (int16_t)std::clamp(e * 32768 / M_PI, (double)-kDown, (double)0x2AAA);
+}
+// a shot from a gun whose pivot is `from`, from over its barrel, clear of the gunner and of the cannon's own cylinder (a
+// shot bursts on anything it touches); `target` only for the trace
+void fire(Cpu* c, uint32_t sv, uint32_t link, V3 from, int16_t yaw, int16_t up, uint32_t locked) {
+    if (!ld8(sv + 0x6A)) { guest_call(c, GC(0x025E1988), {0x0883}); return; }
+    st8(sv + 0x6A, ld8(sv + 0x6A) - 1);
+    const double e = up * M_PI / 32768, t = yaw * M_PI / 32768;
+    static const uint32_t buf = mem::host_alloc(0x20);  // pos at +0, angle at +0x10
+    st32(buf, u32_bits((float)(from.x + sin(t) * cos(e) * 230)));
+    st32(buf + 4, u32_bits((float)(from.y + sin(e) * 230)));
+    st32(buf + 8, u32_bits((float)(from.z + cos(t) * cos(e) * 230)));
+    st16(buf + 0x10, (uint16_t)(int16_t)-up), st16(buf + 0x12, (uint16_t)yaw), st16(buf + 0x14, 0);
+    const uint32_t layer = guest_call(c, GC(0x025DED64));
+    guest_call(c, GC(0x025DEAB4), {ld32(link + 0x2C)});
+    st32(c->r[1] - 0x40 + 8, 0);  // the 9th argument, on the stack
+    const uint32_t ball = guest_call(c, GC(0x025D5928), {0x126, 0x80020004, buf, (uint32_t)(int8_t)ld8(link + kRoom), buf + 0x10, 0, 0xFFFFFFFF, 0});
+    guest_call(c, GC(0x025DEAB4), {layer});
+    if (!in_mem2(ball)) return;
+    g_balls.push_back({ld32(ball + 4), pos_of(ball)});
+    guest_call(c, GC(0x020CB89C), {ball, 8});
+    st32(ball + 0x370, u32_bits((float)(kShotSpeed * cos(e)))), st32(ball + 0x340, u32_bits((float)(kShotSpeed * sin(e)))), st32(ball + 0x374, u32_bits(-2.5f));
+    guest_call(c, GC(0x025E1988), {0x2852});
+    g_deck_shots++;
+    trace("extras: deck cannon fires (yaw %d, up %d, %u bombs left)%s", yaw, up, ld8(sv + 0x6A), locked == 0xFFFFFFFF ? ", aimed by hand" : ", locked on");
 }
 // the gun Link stands by on `ship` (by the deck spot it is manned from, for one up on a roof), or -1
 int gun_by(uint32_t ship, const Gun* guns, uint32_t link) {
@@ -736,9 +796,9 @@ void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, const Gun* 
         }
         const V3 w = to_world(pos_of(hull), hull_yaw, {guns[i].at.x, floor_y[i], guns[i].at.z});
         st32(a + kPos, u32_bits((float)w.x)), st32(a + kPos + 4, u32_bits((float)w.y)), st32(a + kPos + 8, u32_bits((float)w.z));
-        const bool mine = g_manned == i;
-        st16(a + kAngleY, (uint16_t)(mine ? yaw : (int16_t)(hull_yaw + guns[i].face)));
-        st16(a + 0x328, (uint16_t)(mine ? 0x4000 - up : 0x3400));
+        const bool mine = g_manned == i, p2 = !mine && g_p2_gun == i;
+        st16(a + kAngleY, (uint16_t)(mine ? yaw : p2 ? g_p2_yaw : (int16_t)(hull_yaw + guns[i].face)));
+        st16(a + 0x328, (uint16_t)(mine ? 0x4000 - up : p2 ? 0x4000 - g_p2_up : 0x3400));
         st32(a + 0x39C, 0);
     }
     if (!deck) { g_cannon_btn = 0; return; }
@@ -761,34 +821,11 @@ void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, const Gun* 
         return;
     }
     // aiming: the stick (3/4 of a turn a second at full tilt, 40 degrees down to 60 up), or the locked monster
-    if (pressed & input::kZL) {
-        locked = 0xFFFFFFFF;
-        double best = 9000;
-        for (uint32_t id : monsters_out())
-            if (const uint32_t a = guest_call(c, GC(0x025DE50C), {id}))
-                if (const double d = std::hypot(ldf32(a + kPos) - ldf32(link + kPos), ldf32(a + kPos + 8) - ldf32(link + kPos + 8)); d < best) best = d, locked = id;
-    }
+    const V3 from{ldf32(link + kPos), ldf32(link + kPos + 4) + 100, ldf32(link + kPos + 8)};
+    if (pressed & input::kZL) locked = nearest_monster(c, from);
+    static Lay lay;
     if (const uint32_t a = locked == 0xFFFFFFFF ? 0 : guest_call(c, GC(0x025DE50C), {locked})) {
-        // at its eyes (eyePos +0x37C) where they will be when the shot gets there (led by how fast they moved since
-        // the last step), on the shot's low arc (speed v kShotSpeed, gravity g 2.5): tan e = (v^2 - sqrt(v^4 - g (g x^2 +
-        // 2 y v^2))) / (g x), x the distance and y the height to it from the muzzle; out of reach, 45 degrees
-        static V3 last{};
-        static uint32_t last_id = 0xFFFFFFFF;
-        V3 eye{ldf32(a + 0x37C), ldf32(a + 0x37C + 4), ldf32(a + 0x37C + 8)};
-        if (const V3 p = pos_of(a); std::hypot(eye.x - p.x, eye.z - p.z) > 3000) eye = p;  // Molgera never sets its eyes
-        const V3 vel = last_id == locked ? V3{eye.x - last.x, eye.y - last.y, eye.z - last.z} : V3{};
-        last = eye, last_id = locked;
-        constexpr double v = kShotSpeed, v2 = v * v, g = 2.5;
-        double e = M_PI / 8, dx = 0, dz = 0;
-        for (int pass = 0; pass < 3; pass++) {  // the flight time depends on the aim, the aim on where it will be
-            const double t = std::hypot(eye.x - ldf32(link + kPos), eye.z - ldf32(link + kPos + 8)) / (v * cos(e));
-            dx = eye.x + vel.x * t - ldf32(link + kPos), dz = eye.z + vel.z * t - ldf32(link + kPos + 8);
-            const double x = std::max(1.0, std::hypot(dx, dz)), y = eye.y + vel.y * t - ldf32(link + kPos + 4) - 100;
-            const double root = v2 * v2 - g * (g * x * x + 2 * y * v2);
-            e = root < 0 ? M_PI / 4 : atan((v2 - std::sqrt(root)) / (g * x));
-        }
-        yaw = (int16_t)(atan2(dx, dz) * 32768 / M_PI);
-        up = (int16_t)std::clamp(e * 32768 / M_PI, (double)-kDown, (double)0x2AAA);
+        lay_on(a, locked, from, lay, yaw, up);
     } else {
         locked = 0xFFFFFFFF;
         yaw = (int16_t)(yaw - g_pad_lx.load() * 0x2A0);
@@ -801,37 +838,44 @@ void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, const Gun* 
         put_link(link, w);
         st32(link + 0x340, 0);
     }
-    g_cannon_x = (float)ldf32(link + kPos), g_cannon_y = (float)ldf32(link + kPos + 4) + 100, g_cannon_z = (float)ldf32(link + kPos + 8);
+    g_cannon_x = (float)from.x, g_cannon_y = (float)from.y, g_cannon_z = (float)from.z;
     g_cannon_yaw = yaw, g_cannon_up = up, g_cannon_cam = true;
     if (!(pressed & (g_cannon_btn.load() | input::kA)) || now < fired + 1) return;
     fired = now;
-    if (!ld8(sv + 0x6A)) { guest_call(c, GC(0x025E1988), {0x0883}); return; }
-    st8(sv + 0x6A, ld8(sv + 0x6A) - 1);
-    const double e = up * M_PI / 32768, t = yaw * M_PI / 32768;
-    static const uint32_t buf = mem::host_alloc(0x20);  // pos at +0, angle at +0x10
-    // from over the barrel, clear of Link and of the cannon's own cylinder (a shot bursts on anything it touches)
-    st32(buf, u32_bits((float)(ldf32(link + kPos) + sin(t) * cos(e) * 230)));
-    st32(buf + 4, u32_bits((float)(ldf32(link + kPos + 4) + 100 + sin(e) * 230)));
-    st32(buf + 8, u32_bits((float)(ldf32(link + kPos + 8) + cos(t) * cos(e) * 230)));
-    st16(buf + 0x10, (uint16_t)(int16_t)-up), st16(buf + 0x12, (uint16_t)yaw), st16(buf + 0x14, 0);
-    const uint32_t layer = guest_call(c, GC(0x025DED64));
-    guest_call(c, GC(0x025DEAB4), {ld32(link + 0x2C)});
-    st32(c->r[1] - 0x40 + 8, 0);  // the 9th argument, on the stack
-    const uint32_t ball = guest_call(c, GC(0x025D5928), {0x126, 0x80020004, buf, (uint32_t)(int8_t)ld8(link + kRoom), buf + 0x10, 0, 0xFFFFFFFF, 0});
-    guest_call(c, GC(0x025DEAB4), {layer});
-    if (!in_mem2(ball)) return;
-    g_balls.push_back({ld32(ball + 4), pos_of(ball)});
-    guest_call(c, GC(0x020CB89C), {ball, 8});
-    st32(ball + 0x370, u32_bits((float)(kShotSpeed * cos(e)))), st32(ball + 0x340, u32_bits((float)(kShotSpeed * sin(e)))), st32(ball + 0x374, u32_bits(-2.5f));
-    guest_call(c, GC(0x025E1988), {0x2852});
-    const uint32_t target = locked == 0xFFFFFFFF ? 0 : guest_call(c, GC(0x025DE50C), {locked});
-    g_deck_shots++;
-    trace("extras: deck cannon fires (yaw %d, up %d, %u bombs left)%s", yaw, up, ld8(sv + 0x6A), target ? "" : ", aimed by hand");
-    if (target) {
-        V3 at{ldf32(target + 0x37C), ldf32(target + 0x37C + 4), ldf32(target + 0x37C + 8)};
-        if (const V3 p = pos_of(target); std::hypot(at.x - p.x, at.z - p.z) > 3000) at = p;  // as aimed (Molgera's eyes)
-        trace("extras: at proc %#x %.0f off, %.0f up", ld16(target + 8), std::hypot(at.x - ldf32(link + kPos), at.z - ldf32(link + kPos + 8)), at.y - ldf32(link + kPos + 4));
+    fire(c, sv, link, from, yaw, up, locked);
+}
+// The second gunner: with a second controller (kept apart from the first, input::set_second_player), player 2 has the
+// gun Link is not at: its left stick turns and raises it, ZL locks it on the nearest monster (and off), A or ZR fires,
+// from the same Bomb Bag. Player 1 sails or plays on as ever; the camera stays his
+void second_gunner(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, const Gun* guns, double now) {
+    static int16_t yaw = 0, up = 0x0C00;
+    static uint32_t locked = 0xFFFFFFFF, prev = 0;
+    static double fired = 0;
+    static int gun = -1;
+    static Lay lay;
+    input::PadState p2;
+    if (!hull || !input::read_second(p2)) { g_p2_gun = -1, gun = -1; return; }
+    const int want = g_manned == 1 ? 0 : 1;
+    const int16_t hull_yaw = (int16_t)ld16(hull + kAngleY);
+    if (gun != want) gun = want, yaw = (int16_t)(hull_yaw + guns[gun].face), up = 0x0C00, locked = 0xFFFFFFFF;
+    const uint32_t a = g_cannon[gun].actor(c);
+    if (!a) { g_p2_gun = -1; return; }
+    const uint32_t pressed = p2.buttons & ~prev;
+    prev = p2.buttons;
+    const V3 from{ldf32(a + kPos), ldf32(a + kPos + 4) + 100, ldf32(a + kPos + 8)};
+    if (pressed & input::kZL) locked = locked == 0xFFFFFFFF ? nearest_monster(c, from) : 0xFFFFFFFF;
+    if (const uint32_t m = locked == 0xFFFFFFFF ? 0 : guest_call(c, GC(0x025DE50C), {locked})) {
+        lay_on(m, locked, from, lay, yaw, up);
+    } else {
+        locked = 0xFFFFFFFF;
+        yaw = (int16_t)(yaw - p2.lx * 0x2A0);
+        up = (int16_t)std::clamp(up + (int)(p2.ly * 0x100), -kDown, 0x2AAA);
     }
+    g_p2_gun = gun, g_p2_yaw = yaw, g_p2_up = up;
+    if (!(pressed & (input::kA | input::kZR)) || now < fired + 1) return;
+    fired = now;
+    fire(c, sv, link, from, yaw, up, locked);
+    trace("extras: the second gunner fires the %s gun", gun == 0 ? "bow" : "other");
 }
 }  // namespace
 
@@ -1524,8 +1568,14 @@ void step(Cpu* c) {
         guest_call(c, GC(0x025D57E4), {g_beedle.id});  // switched off: it goes
     }
     // the guns of the ship out (not the Big ship deleted above this step: its cannons would be made again on it)
-    if (beedle) deck_cannons(c, sv, link, beedle, kBeedleGuns, kBeedleTop, deck, proc, pressed, now);
-    else deck_cannons(c, sv, link, g_bigship.id == 0xFFFFFFFF ? 0 : hull, kBigShipGuns, kDeckY, deck, proc, pressed, now);
+    {
+        const uint32_t ship = beedle ? beedle : g_bigship.id == 0xFFFFFFFF ? 0 : hull;
+        const Gun* guns = beedle ? kBeedleGuns : kBigShipGuns;
+        deck_cannons(c, sv, link, ship, guns, beedle ? kBeedleTop : kDeckY, deck, proc, pressed, now);
+        input::set_second_player(on<kGunner>());
+        if (on<kGunner>()) second_gunner(c, sv, link, ship, guns, now);
+        else g_p2_gun = -1;
+    }
     if (static double t = 0; hull && now - t >= 1) {  // where Link is about the Big ship, once a second (the trace)
         t = now;
         const V3 l = to_local(hull, link);

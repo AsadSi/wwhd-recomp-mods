@@ -54,14 +54,20 @@ static PadState keyboard_state(bool use_host) {
     return input_map::keyboard_state(input_map::current(), keys);
 }
 
-// every mappable controller input, 0..1, the strongest over all connected controllers
-void controller_values(float* v) {
+// the second player's controller (set_second_player): the second connected, kept apart from the first
+static std::atomic<bool> g_split{false};
+static PadState g_pad2;
+static bool g_has2 = false;
+void set_second_player(bool on) { g_split = on; }
+static bool split_off(NSArray<GCController*>* cs) { return g_split.load() && cs.count >= 2; }
+
+// a controller's mappable inputs, 0..1, into v where stronger than what is there
+static void add_values(GCController* c, float* v) {
     using namespace input_map;
-    for (int i = 0; i < kPadCount; i++) v[i] = 0;
     auto put = [&](int p, float x) { if (x > v[p]) v[p] = x; };
-    for (GCController* c in [GCController controllers]) {
+    {
         GCExtendedGamepad* g = c.extendedGamepad;
-        if (!g) continue;
+        if (!g) return;
         auto b = [&](GCControllerButtonInput* in, int p) {
             if (in) put(p, in.isPressed ? std::max(in.value, 0.51f) : std::min(in.value, 0.5f));
         };
@@ -79,6 +85,14 @@ void controller_values(float* v) {
         stick(g.leftThumbstick, kPadLSUp, kPadLSDown, kPadLSLeft, kPadLSRight);
         stick(g.rightThumbstick, kPadRSUp, kPadRSDown, kPadRSLeft, kPadRSRight);
     }
+}
+
+// every mappable controller input, 0..1, the strongest over all connected controllers (but a second player's)
+void controller_values(float* v) {
+    for (int i = 0; i < input_map::kPadCount; i++) v[i] = 0;
+    NSArray<GCController*>* cs = [GCController controllers];
+    for (NSUInteger i = 0; i < cs.count; i++)
+        if (!(i == 1 && split_off(cs))) add_values(cs[i], v);
 }
 
 // the latest controller_values (the timer below), for the settings overlay's navigation
@@ -294,9 +308,18 @@ void init() {
         float v[input_map::kPadCount];
         controller_values(v);
         PadState s = input_map::controller_state(input_map::current(), v);
+        NSArray<GCController*>* cs = [GCController controllers];
+        const bool has2 = split_off(cs);
+        PadState s2;
+        if (has2) {
+            float v2[input_map::kPadCount] = {};
+            add_values(cs[1], v2);
+            s2 = input_map::controller_state(input_map::current(), v2);
+        }
         {
             std::lock_guard<std::mutex> lk(g_mu);
             g_pad = s;
+            g_pad2 = s2, g_has2 = has2;
             std::copy(v, v + input_map::kPadCount, g_host_values);
         }
         // gyro: sensors on or off with the source, the recalibrate binding, the mouse gyro's capture
@@ -517,6 +540,11 @@ static void apply_scenario(PadState& s) {
 
 static std::atomic<bool> g_pro{getenv("WWHD_PRO_CONTROLLER") != nullptr};
 bool pro_controller() { return g_pro.load(std::memory_order_relaxed); }
+bool read_second(PadState& s) {
+    std::lock_guard<std::mutex> lk(g_mu);
+    s = g_pad2;
+    return g_has2;
+}
 void set_pro_controller(bool on) { g_pro = on; LOG("[input] keyboard/controller act as %s", on ? "Pro Controller" : "GamePad"); }
 
 PadState read() {
