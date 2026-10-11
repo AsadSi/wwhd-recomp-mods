@@ -1,0 +1,11 @@
+# swimming sideways (SAVE=boat, WWHD_PORTABLE_LOAD=<abs>/save/haunted.wwstate): out of the boat at 24 s, stand-in water
+# 26-30, swim right 30-38, left 38-44
+3-3.2 A
+5-5.2 A
+7-7.2 A
+9-9.2 A
+11-11.2 A
+13-13.2 A
+24-24.2 B
+30-38 STICK 1 0
+38-44 STICK -1 0

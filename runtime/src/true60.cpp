@@ -279,7 +279,7 @@ void init_link_procs() {
 }
 
 // The player camera (camera process; dCamera_c at +0x248) runs at 60 Hz while it uses the follow
-// camera (dCamera_c::followCamera, whose smoothing is converted by tools/true60/sites_camera.txt);
+// camera (dCamera_c::followCamera, whose smoothing is converted by tools/true60/sites_camera.txt) and Link steps at 60 Hz;
 // other camera modes stay at 30 Hz and are interpolated. WWHD_TRUE60_CAMERA=0 keeps it at 30 Hz.
 constexpr uint32_t kCamMtd = 0x228;              // camera_class::mpMtd (GameCube 0x224)
 const uint32_t kCameraExecute = GC(0x024FFA3C);  // camera_execute
@@ -317,6 +317,13 @@ bool is_camera(uint32_t proc) {
     return m >= 0x10000000 && m < 0x50000000 && ld32(m + 8) == kCameraExecute;
 }
 
+// Link steps at 60 Hz: in a converted procedure and not riding 30 Hz collision (mode 2: see true60_link.cpp)
+static bool link_60() {
+    if (!g_link || g_link_ride > 0) return false;
+    uint32_t p = ld32(g_link + kCurProc);
+    return p < 256 && g_link_proc[p];
+}
+
 // step length a process executes with on this pass
 float classify(uint32_t proc) {
     static bool init = (init_link_procs(), true);
@@ -334,16 +341,16 @@ float classify(uint32_t proc) {
                 LOG("[t60dbg] Link header %08X %08X %08X %08X", ld32(proc - 16), ld32(proc - 12), ld32(proc - 8), ld32(proc - 4));
             }
         }
-        uint32_t p = ld32(proc + kCurProc);
         // standing on moving collision of a 30 Hz actor (platform, raft): the platform moves on full
         // passes only and is drawn interpolated, so Link moves with it at 30 Hz
-        if (g_link_ride > 0) return 1.0f;
-        return p < 256 && g_link_proc[p] ? 0.5f : 1.0f;  // (mode 2: see true60_link.cpp)
+        return link_60() ? 0.5f : 1.0f;
     }
     if (is_camera(proc)) {  // checked every time: each scene creates its own camera process
         if (g_camera != proc) LOG("[true60] camera is process %08X", proc);
         g_camera = proc;
-        return camera_enabled() && g_cam_follow ? 0.5f : 1.0f;
+        // while Link steps at 30 Hz (a ship's deck, swimming, any procedure not converted) the camera does too: at 60 Hz
+        // its half pass ran ahead to his next step while he was drawn half way there, a long-short shake every frame pair
+        return camera_enabled() && g_cam_follow && link_60() ? 0.5f : 1.0f;
     }
     return 1.0f;
 }
