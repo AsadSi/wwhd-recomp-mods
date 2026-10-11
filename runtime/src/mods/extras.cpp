@@ -43,7 +43,7 @@
 
 namespace mods::extras {
 namespace {
-enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kAudio, kDeep, kLeviathan, kMolgera, kStalker, kBeedle, kCalm, kPhoto, kGunner, kBlood, kCyclone, kMaelstrom, kArmada, kSiren, kWrongLion, kCount };  // the catalogue's order
+enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kAudio, kDeep, kLeviathan, kMolgera, kStalker, kBeedle, kCalm, kPhoto, kGunner, kBlood, kCyclone, kMaelstrom, kArmada, kSiren, kWrongLion, kDrowned, kBoarding, kCount };  // the catalogue's order
 std::atomic<bool> g_on[kCount];
 std::atomic<int> g_choice[kCount];
 std::atomic<int> g_often[kCount];
@@ -86,7 +86,7 @@ struct Spawner {
         std::erase_if(ids, [c](uint32_t id) { return !guest_call(c, GC(0x025DE50C), {id}); });
     }
 };
-Spawner g_night, g_sea, g_armada;
+Spawner g_night, g_sea, g_armada, g_boarders;
 constexpr Monster kGyCtrl{0xE5, -1, 0x7F00FF01};
 // one actor kept out at a time; a spawn takes a few steps to come to life, so it is not retried before `next`
 struct Single {
@@ -401,6 +401,12 @@ const std::vector<Mod>& catalogue() {
         {"wrong-lion", "Something in the Lion", "Spooky",
          "Very rarely, sailing at night, the King of Red Lions laughs a laugh that is not his, swerves off and races on by "
          "himself for a few seconds, then sails on as if nothing happened.", {}, true},
+        {"drowned", "The drowned", "Spooky",
+         "Now and then, at night on the deck of Beedle's ship or the Big ship, the drowned climb aboard out of the sea: "
+         "ReDeads, one after another, for a couple of minutes.", {}, true},
+        {"boarding", "Boarding party", "Spooky",
+         "Cannon boats that come within 2500 of the ship Link stands on send Bokoblins leaping across onto its deck, two "
+         "from each boat, spoiling for a fight.", {}},
     };
     return mods;
 }
@@ -437,7 +443,7 @@ void set_often(const std::string& id, int o) {
 // land, near an island or after its time, the fog rolling out. Night of the dead is a roll at nightfall for that night;
 // Stormy weather and Thick fog are spells of a few minutes. Rain and fog fade in and out: the rain count
 // (dKyw_rain_set) is ramped, and our fog is blended with the game's by dKy_fog_startendz_set's ratio.
-// Test aid: WWHD_SPOOKY=<sea|giants|phantom|dead|storm|fog|deep|leviathan|molgera|stalker|calm|blood|cyclone|maelstrom|armada|siren|lion>@<game seconds>[;...] starts that event at that time
+// Test aid: WWHD_SPOOKY=<sea|giants|phantom|dead|storm|fog|deep|leviathan|molgera|stalker|calm|blood|cyclone|maelstrom|armada|siren|lion|drowned>@<game seconds>[;...] starts that event at that time
 // (@+<seconds>: that long after Link is first in play).
 namespace {
 constexpr int kAlways = 3;
@@ -502,7 +508,7 @@ void remove_molgera(Cpu* c) {
 }
 void wind(Cpu* c, float power) { c->f[1].ps0 = power; guest_call(c, GC(0x0257E594)); }
 void begin(int k, double now) {
-    g_until[k] = now + (k == kPhantom || k == kLeviathan ? 180 : k == kMolgera ? 150 : k == kStalker ? 120 : k == kSea ? 120 + rand() % 120 : k == kCalm ? 60 + rand() % 90 : k == kCyclone ? 150 : k == kMaelstrom ? 90 : k == kArmada ? 240 : k == kSiren ? 75 : k == kWrongLion ? 6 + rand() % 4 : 180 + rand() % 300);
+    g_until[k] = now + (k == kPhantom || k == kLeviathan ? 180 : k == kMolgera ? 150 : k == kStalker ? 120 : k == kSea ? 120 + rand() % 120 : k == kCalm ? 60 + rand() % 90 : k == kCyclone ? 150 : k == kMaelstrom ? 90 : k == kArmada ? 240 : k == kSiren ? 75 : k == kWrongLion ? 6 + rand() % 4 : k == kDrowned ? 120 : 180 + rand() % 300);
     if (k == kPhantom || k == kStalker) g_phantom = Single{};  // made afresh by their blocks below
     if (k == kLeviathan) g_leviathan = Single{};
     if (k == kMolgera) g_molgera = Single{};
@@ -514,7 +520,7 @@ void begin(int k, double now) {
 void finish(Cpu* c, int k, double now, const char* why) {
     trace("extras: event %s ends (%s)", event_name(k), why);
     g_until[k] = 0;
-    if (k != kNight && k != kStorm && k != kFog && k != kDeep && k != kBlood && k != kWrongLion) g_cool = now + (k == kSea || k == kCalm || k == kCyclone || k == kMaelstrom ? 300 : 600);
+    if (k != kNight && k != kStorm && k != kFog && k != kDeep && k != kBlood && k != kWrongLion && k != kDrowned) g_cool = now + (k == kSea || k == kCalm || k == kCyclone || k == kMaelstrom ? 300 : 600);
     if ((k == kPhantom || k == kStalker) && g_phantom.actor(c)) guest_call(c, GC(0x025D57E4), {g_phantom.id});  // fopAcM_delete_id
     if (k == kLeviathan && g_leviathan.actor(c)) guest_call(c, GC(0x025D57E4), {g_leviathan.id});
     if (k == kMolgera) remove_molgera(c);
@@ -540,7 +546,7 @@ std::vector<Forced> forced_events() {
     std::vector<Forced> v;
     const char* e = getenv("WWHD_SPOOKY");
     static const std::pair<const char*, int> kNames[] = {{"sea", kSea}, {"giants", kGiants}, {"phantom", kPhantom},
-                                                         {"dead", kNight}, {"storm", kStorm}, {"fog", kFog}, {"deep", kDeep}, {"leviathan", kLeviathan}, {"molgera", kMolgera}, {"stalker", kStalker}, {"calm", kCalm}, {"blood", kBlood}, {"cyclone", kCyclone}, {"maelstrom", kMaelstrom}, {"armada", kArmada}, {"siren", kSiren}, {"lion", kWrongLion}};
+                                                         {"dead", kNight}, {"storm", kStorm}, {"fog", kFog}, {"deep", kDeep}, {"leviathan", kLeviathan}, {"molgera", kMolgera}, {"stalker", kStalker}, {"calm", kCalm}, {"blood", kBlood}, {"cyclone", kCyclone}, {"maelstrom", kMaelstrom}, {"armada", kArmada}, {"siren", kSiren}, {"lion", kWrongLion}, {"drowned", kDrowned}};
     for (std::string rest = e ? e : ""; !rest.empty();) {
         const std::string item = rest.substr(0, rest.find(';'));
         rest = item.size() < rest.size() ? rest.substr(item.size() + 1) : "";
@@ -623,6 +629,7 @@ void direct(Cpu* c, uint32_t sv, uint32_t link, double now, bool night, bool wat
     if (now >= g_until[kDeep] && stage == "sea" && !ashore && rolls(kDeep, 0.07 * (night ? 1.5 : 0.8))) begin(kDeep, now);
     if (now >= g_until[kWrongLion] && stage == "sea" && night && boat && g_until[kSiren] == 0 && (always(kWrongLion) ? g_on[kWrongLion].load() : rolls(kWrongLion, 0.02)))
         begin(kWrongLion, now);  // (Always: every minute of the night)
+    if (now >= g_until[kDrowned] && night && boat && rolls(kDrowned, 0.1)) begin(kDrowned, now);
     if (stage != "sea" || ashore || isle < 6000 || now < g_cool || g_warn >= 0 || g_until[kSea] > 0 || g_until[kPhantom] > 0 || g_until[kLeviathan] > 0 || g_until[kMolgera] > 0 || g_until[kCalm] > 0 || g_until[kCyclone] > 0 || g_until[kMaelstrom] > 0 || g_until[kArmada] > 0 || g_until[kSiren] > 0) return;
     const double more = std::min(3.0, 1 + (now - g_out_since) / 600);
     if (boat && rolls(kPhantom, 0.017 * (night ? 2 : 0.4) * more)) g_warn = kPhantom;
@@ -659,6 +666,7 @@ void horror_audio(Cpu* c, uint32_t link, double now, bool event, bool enabled) {
     };
     for (uint32_t id : g_sea.ids) near(id);
     for (uint32_t id : g_night.ids) near(id);
+    for (uint32_t id : g_boarders.ids) near(id);
     near(g_phantom.id);
     near(g_leviathan.id);
     near(g_molgera.id);
@@ -941,7 +949,7 @@ void step(Cpu* c) {
     const uint32_t sv = save();
     static double settle = 0;  // no spawning while a stage is still being entered (the spawns would land in the old one)
     if (fresh) {
-        g_night = Spawner{}, g_sea = Spawner{}, g_armada = Spawner{}, g_gyctrl = 0xFFFFFFFF, g_ghost = g_bigship = g_phantom = g_leviathan = g_molgera = g_beedle = g_tow_rope = g_cyclone = g_whirl = Single{};
+        g_night = Spawner{}, g_sea = Spawner{}, g_armada = Spawner{}, g_boarders = Spawner{}, g_gyctrl = 0xFFFFFFFF, g_ghost = g_bigship = g_phantom = g_leviathan = g_molgera = g_beedle = g_tow_rope = g_cyclone = g_whirl = Single{};
         g_cannon[0] = g_cannon[1] = Single{}, g_manned = -1, g_take_pad = false, g_cannon_btn = 0, g_cannon_cam = false;
         g_balls.clear();
         g_gyorg_ids.clear(), g_giant_ids.clear(), g_big_hits.clear();
@@ -1540,6 +1548,36 @@ void step(Cpu* c) {
             st16(korl + 0x6A0, (uint16_t)swerve);
             st32(korl + 0x6C4, u32_bits(40.f)), st32(korl + 0x370, u32_bits(35.f));
             if (static int every = 0; ++every % 45 == 0) swerve = (int16_t)-swerve;  // weaving
+        }
+    }
+    // The drowned and the Boarding party: monsters made on the deck Link stands on (spawn's ground check finds it, and
+    // nothing over the water), carried by it as he is (their dBgS_Acch rides a moving BG through MoveBgCrrPos too).
+    // The drowned: a ReDead every 12 s, three at most. Boarders: Bokoblins (daBk, proc 0xBD, 0xFFFFFF00: type 0, which
+    // goes for Link, no path or switch), two from each cannon boat that comes within 2500 of the ship, once; told to
+    // attack at once (daBk's search_sp, 1046232D, which each Bokoblin's create sets back to 0)
+    if (const uint32_t ship = beedle ? beedle : hull; ship && deck && settled) {
+        if ((live(kDrowned, now) && night) || g_until[kDrowned] > now) {
+            static double next = 0;
+            g_night.prune(c);
+            if (now >= next && g_night.ids.size() < 3) {
+                spawn(c, g_night, kRedead, link, 350 + rand() % 250, 0, 30, true);
+                next = now + 12;
+            }
+        }
+        if (on<kBoarding>()) {
+            static std::vector<uint32_t> boarded;  // the boats that have sent theirs
+            std::vector<uint32_t> boats = g_sea.ids;
+            boats.insert(boats.end(), g_armada.ids.begin(), g_armada.ids.end());
+            for (uint32_t id : boats)
+                if (const uint32_t a = guest_call(c, GC(0x025DE50C), {id}); a && ld16(a + 8) == kOship.proc &&
+                    std::find(boarded.begin(), boarded.end(), id) == boarded.end() &&
+                    std::hypot(ldf32(a + kPos) - ldf32(ship + kPos), ldf32(a + kPos + 8) - ldf32(ship + kPos + 8)) < 2500) {
+                    boarded.push_back(id);
+                    for (int i = 0; i < 2; i++) spawn(c, g_boarders, Monster{0xBD, -1, 0xFFFFFF00}, link, 300 + rand() % 300, 0, 30, true);
+                    trace("extras: a cannon boat comes alongside and Bokoblins leap aboard");
+                }
+            g_boarders.prune(c);
+            if (!g_boarders.ids.empty()) st8(GD(0x1046232D), 1);
         }
     }
     // the event's bosses are kept in Link's room (+0x326): made in the room he was in, they went with it when it unloaded
