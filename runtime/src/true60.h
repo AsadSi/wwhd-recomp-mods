@@ -21,6 +21,7 @@ bool drawing_60();            // the process being drawn runs at 60 Hz on this p
 void force_draw_60(bool on);  // nested scope: drawing_60() is true (drawing built from 60 Hz state)
 uint32_t link();
 uint64_t link_steps();
+void link_rides(int passes);  // Link counts as riding moving 30 Hz collision for the next passes (a mod's ship deck)
 bool state_loaded();          // a save state was restored since boot        // Link's full-pass executes since the last save-state load (test scenarios)              // Link's process once seen (0 before)
 void ss_reset();              // a save state was loaded: forget processes and histories
 // instruction-level hooks for per-step smoothing (tools/true60/gen_sites.py): the ratio r in

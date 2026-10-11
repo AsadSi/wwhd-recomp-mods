@@ -543,6 +543,7 @@ bool runs_60(uint32_t proc) {
     return it != g_procs.end() && it->second.pass == g_pass && it->second.dt < 1.0f;
 }
 uint32_t link() { return g_link; }
+void link_rides(int passes) { g_link_ride = std::max(g_link_ride, passes); }
 uint64_t link_steps() { return g_link_steps; }
 bool g_state_loaded = false;
 bool state_loaded() { return g_state_loaded; }

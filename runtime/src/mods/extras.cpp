@@ -35,6 +35,7 @@
 #include "mods.h"
 #include "../gx2/gx2.h"
 #include "../input.h"
+#include "../true60.h"
 #include "../overlay/overlay.h"
 #include "../platform/keycodes.h"
 #include "runtime.h"
@@ -845,6 +846,9 @@ void step(Cpu* c) {
     const uint32_t beedle = on<kBeedle>() && stage == "sea" ? g_beedle.actor(c) : 0;
     const uint32_t hull = !beedle && on<kBigShip>() && stage == "sea" ? g_bigship.actor(c) : 0;
     const bool deck = !riding && !swimming && ((hull && on_deck(hull, link)) || (beedle && on_beedle(beedle, link)));
+    // on a ship's deck Link moves with it at 30 Hz throughout (true 60): its bobbing on the waves carries him a little,
+    // now and then, and each carry dropped him to 30 Hz for a few passes and back to 60, a shake
+    if (deck) true60::link_rides(8);
     const bool water = riding || swimming || deck;
     const bool night = hour >= 19 || hour < 5, sea = stage == "sea" && water, boat = riding || deck;
     static const double kEvery[] = {25, 12, 5};  // seconds between spawns: Sometimes, Often, Relentless
@@ -1263,7 +1267,8 @@ void step(Cpu* c) {
             trace("extras: Big ship left far behind: it waits near Link again");
         } else if (!hull) {
             const bool back = left_one && std::hypot(left_at.x - ldf32(link + kPos), left_at.z - ldf32(link + kPos + 8)) < 15000;
-            V3 to = back ? left_at : to_world(pos_of(korl), yaw, {-3500, 0, 0});
+            static const double off = getenv("WWHD_BIGSHIP_OFF") ? atof(getenv("WWHD_BIGSHIP_OFF")) : 3500;  // (test aid)
+            V3 to = back ? left_at : to_world(pos_of(korl), yaw, {-off, 0, 0});
             to.y = ldf32(korl + kPos + 4);
             if ((riding || back) && (back || (isle(to) >= 6000 && !land(to, yaw))) && g_bigship.wanted(c, now)) {
                 Spawner none;
@@ -1274,25 +1279,27 @@ void step(Cpu* c) {
         } else {
             static uint32_t placed = 0;
             if (placed != g_bigship.id) placed = g_bigship.id, put(hull, home, home_yaw), trace("extras: Big ship lies at anchor (%.0f %.0f)", home.x, home.z);
-            // out of the boat beside it: the get-off jump (SHIP_GET_OFF, its jump phase link +0x69C0 1: speed.y +0x340,
-            // mNormalSpeed +0x6A14, gravity +0x374), when its deck lies the way he jumps (his -x) within 1600, is made a
-            // leap up its side and over its gunwale (the deck 400 above the sea, the gunwale's outer lip at 567): up at
-            // 56 (its top about 660), and as fast as lands him 150 inside its side as he comes down to the deck
-            static bool vaulted = false;
-            constexpr double kVault = 56;
-            if (proc != 0x90) vaulted = false;
-            else if (!vaulted && ld32(link + 0x69C0) == 1) {
-                vaulted = true;
-                const double t = yaw * M_PI / 32768, dx = -cos(t), dz = sin(t);  // his -x in the world
-                for (double s = 150; s <= 1600; s += 50)
-                    if (const V3 l = to_local(hull, {ldf32(link + kPos) + dx * s, 0, ldf32(link + kPos + 8) + dz * s}); std::fabs(l.x) < 330 && l.z > -1700 && l.z < 2000) {
-                        const double g = -std::min(-0.5, (double)ldf32(link + 0x374)), up = kDeckY - to_local(hull, link).y;
-                        const double air = (kVault + std::sqrt(std::max(0.0, kVault * kVault - 2 * g * up))) / g;
-                        const double run = std::clamp((s + 150) / air, 4.0, 40.0);
-                        st32(link + 0x340, u32_bits((float)kVault)), st32(link + 0x6A14, u32_bits((float)run));
-                        trace("extras: Link leaps onto the Big ship's deck (%.0f off, run %.1f)", s, run);
-                        break;
-                    }
+            // out of the boat beside it: the get-off jump (SHIP_GET_OFF, its jump phase link +0x69C0 1), with its deck within
+            // 1600 on either side, is made a leap onto it: Link is carried on an arc (every copy of his position, each
+            // step after his own execute) from where he jumps to the nearest spot of its main deck (x +-250), 250 over
+            // the higher end, in 36 steps, then falls the last 30 onto it
+            static int leap = -1;  // steps into the leap
+            static V3 from, onto;
+            if (leap < 0 && proc == 0x90 && ld32(link + 0x69C0) == 1) {
+                const V3 l = to_local(hull, link);
+                const V3 t{std::clamp(l.x, -250.0, 250.0), kDeckY + 30, std::clamp(l.z, -1500.0, 1800.0)};
+                if (std::hypot(t.x - l.x, t.z - l.z) < 1600) {
+                    leap = 0, from = pos_of(link), onto = to_world(pos_of(hull), (int16_t)ld16(hull + kAngleY), t);
+                    trace("extras: Link leaps onto the Big ship's deck (%.0f off)", std::hypot(t.x - l.x, t.z - l.z));
+                }
+            }
+            if (leap >= 0) {
+                constexpr int kSteps = 36;
+                const double k = ++leap / (double)kSteps, top = std::max(from.y, onto.y) + 250;
+                const double y = from.y + (onto.y - from.y) * k + 4 * (top - (from.y + onto.y) / 2) * k * (1 - k);
+                put_link(link, {from.x + (onto.x - from.x) * k, y, from.z + (onto.z - from.z) * k});
+                st32(link + 0x340, 0), st32(link + 0x6A14, 0);
+                if (leap >= kSteps) leap = -1;
             }
             // back into the boat from the deck: A at the gunwale by him, standing or walking (procShipReady_init
             // 023ECA94, the game's own boarding: a hop onto his ledge)

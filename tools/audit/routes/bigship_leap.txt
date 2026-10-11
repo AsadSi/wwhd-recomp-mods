@@ -1,0 +1,9 @@
+# Big ship as its own boat, made 1100 off the left (WWHD_BIGSHIP_OFF=1100): B leaps onto its deck, a walk on it, A back by the boat
+3-3.2 A
+5-5.2 A
+7-7.2 A
+9-9.2 A
+11-11.2 A
+13-13.2 A
+24-24.2 B
+30-31 STICK 0 1
