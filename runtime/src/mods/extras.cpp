@@ -1238,7 +1238,7 @@ void step(Cpu* c) {
     // Big ship: Tetra's ship, a boat of its own. It is made at anchor 3500 off the King of Red Lions' left (his -x) once
     // he is out at sea (not near an island, no land under it), lies where it is left and moves only from its helm; gone
     // (its room unloaded as he sailed away, a stage change) or left more than 20000 behind, it is made at anchor near him
-    // again. Stopped beside it with it on his left, B (SHIP_GET_OFF, which jumps toward his -x) leaps Link onto its deck;
+    // again on his next outing (once he has been ashore), not on this one. Stopped beside it with it on his left, B (SHIP_GET_OFF, which jumps toward his -x) leaps Link onto its deck;
     // A at its rail by him takes him back in the boat; A while swimming by its side climbs aboard. While it sails from its
     // helm, the King of Red Lions comes along beside it (on its +x flank). It floats as the game floats it (its origin at
     // the waterline, the deck 400 above the sea).
@@ -1270,20 +1270,29 @@ void step(Cpu* c) {
         static V3 left_at;    // where it was last seen, and its heading: remade there when its room's unloading took it
         static int16_t left_yaw = 0;
         static bool left_one = false;
+        static bool made = false;  // made on this outing: left behind or gone, it waits for the next (after Link is ashore)
         if (fresh) left_one = false;
+        if (fresh || !water) made = false;
         const double away = hull ? std::hypot(ldf32(hull + kPos) - ldf32(link + kPos), ldf32(hull + kPos + 8) - ldf32(link + kPos + 8)) : 0;
         if (hull && away < 15000)  // kept in Link's room while he is near, so the room it was made in can unload
             st8(hull + kRoom, ld8(link + kRoom)), left_at = pos_of(hull), left_yaw = (int16_t)ld16(hull + kAngleY), left_one = true;
         if (hull && riding && away > 20000) {
+            // with its children, which its delete leaves (Psail, its flag, the catapult Touseki, the wheel Kaji, the
+            // door: their ids at +0x478..+0x498, decomp +0x2E8..+0x308): the sail and the catapult read the ship
+            // through a static pointer every step and crashed with it gone; and our deck cannons
+            for (uint32_t o = 0x478; o <= 0x498; o += 8) guest_call(c, GC(0x025D57E4), {ld32(hull + o)});
             guest_call(c, GC(0x025D57E4), {g_bigship.id});
+            for (Single& s : g_cannon)
+                if (s.actor(c)) guest_call(c, GC(0x025D57E4), {s.id}), s = Single{};
             g_bigship = Single{}, left_one = false;
-            trace("extras: Big ship left far behind: it waits near Link again");
+            trace("extras: Big ship left far behind: it waits for his next outing");
         } else if (!hull) {
             const bool back = left_one && std::hypot(left_at.x - ldf32(link + kPos), left_at.z - ldf32(link + kPos + 8)) < 15000;
             static const double off = getenv("WWHD_BIGSHIP_OFF") ? atof(getenv("WWHD_BIGSHIP_OFF")) : 3500;  // (test aid)
             V3 to = back ? left_at : to_world(pos_of(korl), yaw, {-off, 0, 0});
             to.y = ldf32(korl + kPos + 4);
-            if ((riding || back) && (back || (isle(to) >= 6000 && !land(to, yaw))) && g_bigship.wanted(c, now)) {
+            if ((riding || back) && (back || (!made && isle(to) >= 6000 && !land(to, yaw))) && g_bigship.wanted(c, now)) {
+                made = true;
                 Spawner none;
                 g_bigship.id = spawn(c, none, kPirates, korl, 0, false, 0, false);
                 g_bigship.next = now + 5;
@@ -1459,7 +1468,8 @@ void step(Cpu* c) {
     } else if (const uint32_t a = g_beedle.actor(c); a && !on<kBeedle>()) {
         guest_call(c, GC(0x025D57E4), {g_beedle.id});  // switched off: it goes
     }
-    deck_cannons(c, sv, link, hull, deck, proc, pressed, now);
+    // (not the ship deleted above this step: its cannons would be made again on it)
+    deck_cannons(c, sv, link, g_bigship.id == 0xFFFFFFFF ? 0 : hull, deck, proc, pressed, now);
     if (static double t = 0; hull && now - t >= 1) {  // where Link is about the Big ship, once a second (the trace)
         t = now;
         const V3 l = to_local(hull, link);
