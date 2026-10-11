@@ -43,7 +43,7 @@
 
 namespace mods::extras {
 namespace {
-enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kAudio, kDeep, kLeviathan, kMolgera, kStalker, kBeedle, kCalm, kPhoto, kGunner, kCount };  // the catalogue's order
+enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kAudio, kDeep, kLeviathan, kMolgera, kStalker, kBeedle, kCalm, kPhoto, kGunner, kBlood, kCount };  // the catalogue's order
 std::atomic<bool> g_on[kCount];
 std::atomic<int> g_choice[kCount];
 std::atomic<int> g_often[kCount];
@@ -378,6 +378,9 @@ const std::vector<Mod>& catalogue() {
          "With a second controller connected, player 2 is a gunner on Beedle's ship or the Big ship: the gun Link is not "
          "at is theirs. Left stick turns and raises it, ZL locks it on the nearest monster (and off again), A or ZR "
          "fires, from the same Bomb Bag. Player 1 sails and plays on as ever on the first controller.", {}},
+        {"blood-moon", "Blood moon", "Spooky",
+         "On some nights, most of all at full moon, the moon rises red: the whole world and the sky turn blood red until "
+         "dawn, the music sinks low, and with Night of the dead on the dead rise that night, twice as fast.", {}, true},
     };
     return mods;
 }
@@ -414,7 +417,7 @@ void set_often(const std::string& id, int o) {
 // land, near an island or after its time, the fog rolling out. Night of the dead is a roll at nightfall for that night;
 // Stormy weather and Thick fog are spells of a few minutes. Rain and fog fade in and out: the rain count
 // (dKyw_rain_set) is ramped, and our fog is blended with the game's by dKy_fog_startendz_set's ratio.
-// Test aid: WWHD_SPOOKY=<sea|giants|phantom|dead|storm|fog|deep|leviathan|molgera|stalker|calm>@<game seconds>[;...] starts that event at that time
+// Test aid: WWHD_SPOOKY=<sea|giants|phantom|dead|storm|fog|deep|leviathan|molgera|stalker|calm|blood>@<game seconds>[;...] starts that event at that time
 // (@+<seconds>: that long after Link is first in play).
 namespace {
 constexpr int kAlways = 3;
@@ -491,7 +494,7 @@ void begin(int k, double now) {
 void finish(Cpu* c, int k, double now, const char* why) {
     trace("extras: event %s ends (%s)", event_name(k), why);
     g_until[k] = 0;
-    if (k != kNight && k != kStorm && k != kFog && k != kDeep) g_cool = now + (k == kSea || k == kCalm ? 300 : 600);
+    if (k != kNight && k != kStorm && k != kFog && k != kDeep && k != kBlood) g_cool = now + (k == kSea || k == kCalm ? 300 : 600);
     if ((k == kPhantom || k == kStalker) && g_phantom.actor(c)) guest_call(c, GC(0x025D57E4), {g_phantom.id});  // fopAcM_delete_id
     if (k == kLeviathan && g_leviathan.actor(c)) guest_call(c, GC(0x025D57E4), {g_leviathan.id});
     if (k == kMolgera) remove_molgera(c);
@@ -509,7 +512,7 @@ std::vector<Forced> forced_events() {
     std::vector<Forced> v;
     const char* e = getenv("WWHD_SPOOKY");
     static const std::pair<const char*, int> kNames[] = {{"sea", kSea}, {"giants", kGiants}, {"phantom", kPhantom},
-                                                         {"dead", kNight}, {"storm", kStorm}, {"fog", kFog}, {"deep", kDeep}, {"leviathan", kLeviathan}, {"molgera", kMolgera}, {"stalker", kStalker}, {"calm", kCalm}};
+                                                         {"dead", kNight}, {"storm", kStorm}, {"fog", kFog}, {"deep", kDeep}, {"leviathan", kLeviathan}, {"molgera", kMolgera}, {"stalker", kStalker}, {"calm", kCalm}, {"blood", kBlood}};
     for (std::string rest = e ? e : ""; !rest.empty();) {
         const std::string item = rest.substr(0, rest.find(';'));
         rest = item.size() < rest.size() ? rest.substr(item.size() + 1) : "";
@@ -574,6 +577,9 @@ void direct(Cpu* c, uint32_t sv, uint32_t link, double now, bool night, bool wat
     static bool was_night = false;
     if (night && !was_night && sailor && rolls(kNight, 1 / 3.0)) begin(kNight, now), g_until[kNight] = 1e18;
     if (!night && g_until[kNight] > 0) finish(c, kNight, now, "dawn");
+    // Blood moon: a roll as night falls too, twice the chance at full moon (dKy_moon_type_chk 02560828: 0 full, 3 new)
+    if (night && !was_night && sailor && rolls(kBlood, guest_call(c, GC(0x02560828)) == 0 ? 0.5 : 0.2)) begin(kBlood, now), g_until[kBlood] = 1e18;
+    if (!night && g_until[kBlood] > 0) finish(c, kBlood, now, "dawn");
     was_night = night;
 
     static double last_roll = 0;
@@ -997,12 +1003,22 @@ void step(Cpu* c) {
         const double isle = std::hypot(x - std::round(x / 1e5) * 1e5, z - std::round(z / 1e5) * 1e5);
         const float to = live(kDeep, now) && stage == "sea" ? (float)std::clamp((isle - 15000) / 25000, 0.0, 1.0) : 0.f;
         deep = to > deep ? std::min(to, deep + 1 / 600.f) : std::max(to, deep - 1 / 600.f);
-        if (deep > 0) {
-            c->f[1].ps0 = 1 - 0.45 * deep;
-            guest_call(c, GC(0x02560444));
-            c->f[1].ps0 = 1 - 0.55 * deep;
-            guest_call(c, GC(0x0255A51C));
-        }
+    }
+    // Blood moon: eased in and out over 20 s, the environment's add colours (g_env_light's, which the game adds before
+    // its clamp and never clears: dKy_actor_addcol_set 025553B8 for actors and the BG, dKy_vrbox_addcol_set 02556B38
+    // for sky, haze and fog; r, g, b and a factor) red, set to 0 once as it ends; and the picture a little darker
+    static float blood = 0;
+    {
+        const float to = live(kBlood, now) && night ? 1.f : 0.f, was = blood;
+        blood = to > blood ? std::min(to, blood + 1 / 600.f) : std::max(to, blood - 1 / 600.f);
+        if (blood > 0 || was > 0)
+            for (uint32_t f : {0x025553B8u, 0x02556B38u}) c->f[1].ps0 = blood, guest_call(c, GC(f), {90, (uint32_t)-110, (uint32_t)-110});
+    }
+    if (deep > 0 || blood > 0) {
+        c->f[1].ps0 = (1 - 0.45 * deep) * (1 - 0.2 * blood);
+        guest_call(c, GC(0x02560444));
+        c->f[1].ps0 = 1 - 0.55 * deep;
+        guest_call(c, GC(0x0255A51C));
     }
     static float fog = 0;
     const bool sea_event = g_warn >= 0 || (g_until[kSea] > now && !always(kSea)) || (g_until[kPhantom] > now && !always(kPhantom)) ||
@@ -1025,13 +1041,13 @@ void step(Cpu* c) {
     // endless swimming: the air meter (dComIfG_play_c::mAirMeter, 900 = full, +0x5B4C) kept full while Link swims
     if (on<kSwim>() && (ld32(link + 0x6A70) & 0x40000)) st32(kPlay + 0x5B4C, 900);
     // Night of the dead: on land at night (the sea stage's islands count)
-    if (live(kNight, now) && night && !water && settled) {
+    if ((live(kNight, now) || (on<kNight>() && live(kBlood, now))) && night && !water && settled) {
         const int level = g_choice[kNight].load();
         g_night.prune(c);
         static const Monster kDead[] = {kRedead, kRedead, kStalfos, kPoe};
         if (now >= g_night.next && g_night.ids.size() < kMax[level]) {
             spawn(c, g_night, kDead[rand() % 4], link, 450 + rand() % 350, true, 30, true);
-            g_night.next = now + kEvery[level] * (0.6 + rand() / (double)RAND_MAX * 0.8);
+            g_night.next = now + kEvery[level] * (live(kBlood, now) ? 0.5 : 1) * (0.6 + rand() / (double)RAND_MAX * 0.8);
         }
     }
     // Haunted sea: on the open sea, more often at night
@@ -1341,7 +1357,7 @@ void step(Cpu* c) {
     // behind him as he sailed on (Phantom Ganon's event ended "he is gone")
     for (Single* b : {&g_phantom, &g_leviathan, &g_molgera})
         if (const uint32_t a = b->actor(c)) st8(a + kRoom, ld8(link + kRoom));
-    horror_audio(c, link, now, sea_event || (g_until[kNight] > now && !always(kNight) && night), on<kAudio>());
+    horror_audio(c, link, now, sea_event || (night && ((g_until[kNight] > now && !always(kNight)) || (g_until[kBlood] > now && !always(kBlood)))), on<kAudio>());
     // the GamePad since the last step
     static uint32_t pad_prev = 0;
     const uint32_t pad_hold = g_pad_hold.load(), pressed = g_pad_seen.exchange(0) & ~pad_prev;
