@@ -99,6 +99,7 @@ uint32_t g_phantom_actor = 0;                          // Phantom Ganon, and his
 // Beedle's ship as the King of Red Lions' hull (below), for its hooks: the ship, the boat, the ship's BG matrix, and
 // the boat's body and head models, which are not drawn
 uint32_t g_beedle_actor = 0, g_beedle_lion = 0, g_beedle_mtx = 0, g_hide_body = 0, g_hide_head = 0;
+bool g_beedle_aboard = false;  // Link on its deck: its hut's door (an exit only where Beedle's own ship lies) does nothing
 float g_phantom_size = 1, g_fx_size = 1;               // g_fx_size: his size while his execute runs (particle hook)
 // the Leviathan and Molgera can be killed, by any weapon (a cannonball or bomb 4, an arrow 2, the sword its power):
 // what is left of their health, and the Leviathan's death as its hit test saw it (loot and the event's end follow)
@@ -783,7 +784,7 @@ void step(Cpu* c) {
     const bool fresh = link != last_link;  // a file loaded, a stage entered: start over
     last_link = link;
     std::string stage((const char*)mem::ptr(kStage), strnlen((const char*)mem::ptr(kStage), 8));
-    g_beedle_actor = g_beedle_lion = g_hide_body = g_hide_head = 0;  // (set again below while Beedle's ship sails)
+    g_beedle_actor = g_beedle_lion = g_hide_body = g_hide_head = 0, g_beedle_aboard = false;  // (set again below while Beedle's ship sails)
     if (!in_mem2(link) || stage.empty() || stage == "sea_T" || stage == "Name" || stage == "ENDumi") {  // title, file select
         g_manned = -1, g_take_pad = false, g_cannon_btn = 0, g_cannon_cam = false;
         return;
@@ -1394,7 +1395,7 @@ void step(Cpu* c) {
                 g_beedle.next = now + 5;
             }
         } else {
-            g_beedle_actor = beedle, g_beedle_lion = korl;
+            g_beedle_actor = beedle, g_beedle_lion = korl, g_beedle_aboard = deck;
             if (const uint32_t body = ld32(korl + 0x3B4), head = ld32(korl + 0x3B8); in_mem2(body) && in_mem2(head))
                 g_hide_body = ld32(body + 0x90), g_hide_head = ld32(head + 0x90);
             static uint32_t owned = 0;  // the ship whose BG is his
@@ -1691,4 +1692,12 @@ extern "C" void hook_025E2E5C(Cpu* c) {
     using namespace mods::extras;
     if (const uint32_t m = c->r[3]; m && (m == g_hide_body || m == g_hide_head)) return;
     f_025E2E5C_orig(c);
+}
+// dBgS::GetExitId (024EECC8; r4 the polygon): no exit while Link is aboard Beedle's ship. Its hut's floor is a door into
+// Beedle's shop, an exit of the sea room the game's own Beedle's ship lies in: from ours it would load a room that is
+// not there (d_s_room.cpp "fileList != 0", a halt)
+extern "C" void f_024EECC8_orig(Cpu* c);
+extern "C" void hook_024EECC8(Cpu* c) {
+    f_024EECC8_orig(c);
+    if (mods::extras::g_beedle_aboard) c->r[3] = 0x3F;
 }
