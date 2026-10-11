@@ -78,6 +78,7 @@
 @023FD35C # posMoveFromFootPos: speed.y += gravity -> gravity x dt
 @023FD39C # posMoveFromFootPos: current.pos += speed -> speed x dt (+ exact-arc term)
 023FB230  # daPy_lk_c::checkItemAction: full passes only (true60_link.cpp)
+023FE224  # daPy_lk_c::setWaterY: a preview's water height half a step on (true60_link.cpp)
 # preview fences (true60_link.cpp): nothing lasting is decided or created on a half pass
 023F695C  # daPy_lk_c::changeDemoProc
 023F7820  # daPy_lk_c::changeDeadProc
@@ -101,6 +102,8 @@
 @0240D6D8 # daPy_lk_c::execute: procedure call (bctrl, plain member function)
 @0240D6F8 # daPy_lk_c::execute: procedure call (bctrl, virtual)
 @0240D6FC # daPy_lk_c::execute: after the procedure call
+@023FDD58 # daPy_lk_c::posMove: the collision push, dt of it in a preview (true60_link.cpp)
+@023FDDAC # daPy_lk_c::posMove: the water's current, dt of it in a preview
 025028B8  # dCamera_c::followCamera: the camera runs at 60 Hz while it follows
 0282167C  # JPAEmitterManager::calc: particles step on full passes only (both 60 fps modes)
 @025B00B0 # dScnPly_Draw: world systems (grass, magma, moving collision, particles, counter) on full passes only

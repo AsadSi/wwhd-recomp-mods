@@ -1,0 +1,12 @@
+# swimming in open water (SAVE=boat, WWHD_PORTABLE_LOAD=<abs>/save/haunted.wwstate): out of the boat at 24 s, tread
+# water 26-28, swim forward away from the boat 28-36, then right 36-41, then left 41-46
+3-3.2 A
+5-5.2 A
+7-7.2 A
+9-9.2 A
+11-11.2 A
+13-13.2 A
+24-24.2 B
+28-36 STICK 0 1
+36-41 STICK 1 0
+41-46 STICK -1 0

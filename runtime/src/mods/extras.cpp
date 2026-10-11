@@ -28,6 +28,7 @@
 #include <cstring>
 #include <ctime>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -619,6 +620,7 @@ constexpr double kShotSpeed = 160;
 constexpr int kDown = 0x1C71;
 Single g_cannon[2];
 int g_manned = -1;  // the cannon Link stands at
+uint32_t g_deck_shots = 0;  // deck cannon shots so far: cannon boats answer them as the boat's own (hook_023C68B8)
 std::vector<uint32_t> monsters_out() {
     std::vector<uint32_t> v = g_sea.ids;
     for (uint32_t id : {g_leviathan.id, g_molgera.id, g_phantom.id}) if (id != 0xFFFFFFFF) v.push_back(id);
@@ -764,6 +766,7 @@ void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, bool deck, 
     st32(ball + 0x370, u32_bits((float)(kShotSpeed * cos(e)))), st32(ball + 0x340, u32_bits((float)(kShotSpeed * sin(e)))), st32(ball + 0x374, u32_bits(-2.5f));
     guest_call(c, GC(0x025E1988), {0x2852});
     const uint32_t target = locked == 0xFFFFFFFF ? 0 : guest_call(c, GC(0x025DE50C), {locked});
+    g_deck_shots++;
     trace("extras: deck cannon fires (yaw %d, up %d, %u bombs left)%s", yaw, up, ld8(sv + 0x6A), target ? "" : ", aimed by hand");
     if (target) {
         V3 at{ldf32(target + 0x37C), ldf32(target + 0x37C + 4), ldf32(target + 0x37C + 8)};
@@ -848,9 +851,17 @@ void step(Cpu* c) {
     const uint32_t beedle = on<kBeedle>() && stage == "sea" ? g_beedle.actor(c) : 0;
     const uint32_t hull = !beedle && on<kBigShip>() && stage == "sea" ? g_bigship.actor(c) : 0;
     const bool deck = !riding && !swimming && ((hull && on_deck(hull, link)) || (beedle && on_beedle(beedle, link)));
-    // on a ship's deck Link moves with it at 30 Hz throughout (true 60): its bobbing on the waves carries him a little,
-    // now and then, and each carry dropped him to 30 Hz for a few passes and back to 60, a shake
-    if (deck) true60::link_rides(8);
+    // on a ship's deck Link moves with it at 30 Hz while it moves (true 60), and for a second after: its bobbing carries
+    // him a little, now and then, and each carry dropped him to 30 Hz for a few passes and back to 60, a shake (at 60 Hz
+    // he is drawn half a step ahead of the 30 Hz world). On a deck at rest (at anchor) he is at 60 Hz, as on land.
+    static uint32_t ship_was[6];
+    static double ship_moved = -1;
+    if (const uint32_t ship = beedle ? beedle : hull) {
+        const uint32_t now_at[6] = {ld32(ship + kPos), ld32(ship + kPos + 4), ld32(ship + kPos + 8), ld16(ship + kAngleY),
+                                    ld16(ship + 0x328), ld16(ship + 0x32C)};  // (and its rocking: shape_angle x, z)
+        if (memcmp(now_at, ship_was, sizeof now_at)) ship_moved = now, memcpy(ship_was, now_at, sizeof now_at);
+    }
+    if (deck && now - ship_moved < 1) true60::link_rides(8);
     const bool water = riding || swimming || deck;
     const bool night = hour >= 19 || hour < 5, sea = stage == "sea" && water, boat = riding || deck;
     static const double kEvery[] = {25, 12, 5};  // seconds between spawns: Sometimes, Often, Relentless
@@ -1651,6 +1662,38 @@ static void seahat_rides(Cpu* c, int reg) {
 extern "C" void site_023CC7F0(Cpu* c) { seahat_rides(c, 5); }
 extern "C" void site_023CC984(Cpu* c) { seahat_rides(c, 4); }
 extern "C" void site_023CCC88(Cpu* c) { seahat_rides(c, 9); }
+
+// daOship_c's execute (023C68B8; r3 the cannon boat): a deck cannon shot counts as the King of Red Lions' cannon firing
+// back, which its plFireRepeat (023C7CA8) reads only from him (+0x644 bit 0x20000): it fires back 10-30 steps later and
+// its aim, short of Link by 500 a shot until he has fired back 6 times (modeAttackInit), closes in by one (+0xE88, the
+// count; +0xE98, the timer). Without this, from the deck it never hit him (44 shots).
+extern "C" void f_023C68B8_orig(Cpu* c);
+extern "C" void hook_023C68B8(Cpu* c) {
+    using namespace mods::extras;
+    static std::unordered_map<uint32_t, uint32_t> answered;  // by boat: the deck shots it has answered
+    const uint32_t a = c->r[3];
+    auto [it, fresh] = answered.try_emplace(a, g_deck_shots);
+    if (!fresh && it->second != g_deck_shots) {
+        st32(a + 0xE88, ld32(a + 0xE88) + 1);
+        st32(a + 0xE98, 10 + rand() % 20);
+        it->second = g_deck_shots;
+    }
+    f_023C68B8_orig(c);
+}
+
+// daOship_c::modeAttackInit (023C6DB4; r3 the cannon boat): its aim (x +0xE0C, z +0xE14) is put short of Link on
+// purpose, 300 + 500 a shot he has not fired back (3000 more while he sails or swims); a third of that miss taken off
+extern "C" void f_023C6DB4_orig(Cpu* c);
+extern "C" void hook_023C6DB4(Cpu* c) {
+    using namespace mods::extras;
+    const uint32_t a = c->r[3], link = true60::link();
+    f_023C6DB4_orig(c);
+    if (!link) return;
+    for (uint32_t o : {0xE0Cu, 0xE14u}) {
+        const float at = ldf32(link + kPos + (o - 0xE0C));
+        st32(a + o, u32_bits(at + (ldf32(a + o) - at) * 2.f / 3));
+    }
+}
 
 // daObj_Ikada's execute (02363164; r3 the actor): Beedle's ship as the King of Red Lions' hull is put around him before
 // it runs (its execute floats it on the water and moves its BG from where it is), his way, 1.5x, his speed its own for

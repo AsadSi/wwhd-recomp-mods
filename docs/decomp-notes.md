@@ -171,6 +171,14 @@ move at 60 Hz on screen, and then **taken back**: at the start of the next full 
 full pass runs the whole 30 Hz step with dt = 1. Game state after each full pass is therefore
 bit-identical to the 30 fps game's state after the same step.
 
+**The camera, since 2026-10-11, takes two real half steps instead** (dt = 0.5 on both passes, not
+taken back): a preview's smoothing toward Link's half step is not half of the whole step's (the
+game's smoothing chases a target that jumps each step), so the previewed camera drew long-short
+against Link (its centre 6.4 / 10.6 a frame walking on Outset; with two half steps Link against
+the camera is as even as Link alone). It runs at 60 Hz only while Link does; while he steps at
+30 Hz (a ship's deck, swimming, any procedure not converted) it is a 30 Hz camera, blended. The
+gate runs below need `WWHD_TRUE60_CAMERA_EXACT=1` (the preview camera) for the camera to match.
+
 What a preview does not do (fences, `true60_link.cpp`):
 - **No decisions.** Link's procedure is not called (the bctrl at execute 0240D6D8/0240D6F8 gets a
   no-op), nor the decision functions before it (changeDemoProc, changeDeadProc,

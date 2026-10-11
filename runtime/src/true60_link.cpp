@@ -69,6 +69,20 @@ extern "C" void site_023FD39C(Cpu* c) {
     c->r[4] = v;
 }
 
+// posMove after the movement: `current.pos += *mStts.GetCCMoveP()` (PSVECAdd(pos, this + 0x7620, pos) at 023FDD58), the
+// push out of what he collided with on the last full pass, and the water's current `pos.xz += m3644 * (sin, cos)(m3640)`
+// (fmadds at 023FDDAC / 023FDDC0, f9 = m3644): per step, so dt of each in a preview (swimming along the boat's hull the
+// whole push against half the speed drew him 5 out from it on every half pass)
+extern "C" void site_023FDD58(Cpu* c) {
+    if (!link60()) return;
+    const uint32_t v = scratch_vec();
+    for (int i = 0; i < 3; i++) st32(v + 4 * i, f32_as_u32(u32_as_f32(ld32(c->r[4] + 4 * i)) * true60::dt()));
+    c->r[4] = v;
+}
+extern "C" void site_023FDDAC(Cpu* c) {
+    if (link60()) c->f[9].ps0 = (float)(c->f[9].ps0 * true60::dt());
+}
+
 // ---- daPy_lk_c::setNormalSpeedF(f32 accel, f32 scale, f32 maxStep, f32 minStep) (02416230;
 // GameCube :2300): `mNormalSpeed += accel` per step, or cLib_addCalc (scaled in true60.cpp) ----
 extern "C" void hook_02416230(Cpu* c) {
@@ -115,11 +129,13 @@ extern "C" void hook_025AAE08(Cpu* c) { if (!calc_timer_held<4>(c)) f_025AAE08_o
 namespace {
 constexpr uint32_t kCurProc = 0x65F0;  // daPy_lk_c::mCurProc (GameCube 0x31D8)
 constexpr uint32_t kM34C2 = 0x68DE;    // u8 (GameCube 0x34C2); execute 0240D370
+constexpr uint32_t kAngleY[2] = {0x322, 0x32A};  // current.angle.y, shape_angle.y
+constexpr uint32_t kM35C4 = 0x6A1C;    // f32 (GameCube 0x35C4): the model's height offset (swimming's bob)
 constexpr uint32_t kResetFlg0 = 0x3C0;  // u32 mResetFlg0 (cleared at 0240D300)
 constexpr uint32_t kReplayFlg0 = 0x2;
 uint32_t g_noop = 0;  // guest address of a stand-in that does nothing
 void noop_proc(Cpu* c) { c->r[3] = 1; }
-struct ProcOut { uint64_t pass = ~0ull; uint32_t link = 0, flg0_pre = 0, flg0_set = 0; uint8_t m34c2 = 0; } g_out;
+struct ProcOut { uint64_t pass = ~0ull; uint32_t link = 0, flg0_pre = 0, flg0_set = 0; uint8_t m34c2 = 0; float bob[2] = {}; int16_t ang[2][2] = {}; } g_out;
 bool t_full_call = false;
 void proc_call(Cpu* c) {
     uint32_t l = c->r[31];  // this (r3 = this + member delta)
@@ -132,6 +148,17 @@ void proc_call(Cpu* c) {
             m = m == 3 ? 1 : (m == 4 || m == 7) ? 5 : m;
             if (ld8(l + kM34C2) == 0 && m) st8(l + kM34C2, m);
             st32(l + kResetFlg0, ld32(l + kResetFlg0) | (g_out.flg0_set & kReplayFlg0));
+            // swimming: what the procedure turns or sets each step goes half a step on along its last change, the model's
+            // height offset m35C4 (+0x6A1C, the bob), the heading and the facing (current.angle.y, shape_angle.y), or he
+            // bobbed and turned at 30 Hz and moved along the old heading on half passes
+            if (const uint32_t p = ld32(l + kCurProc); p == 0x36 || p == 0x37) {
+                const float k = 1.0f - true60::dt();
+                if (const float d = g_out.bob[1] - g_out.bob[0]; std::fabs(d) < 2.0f)  // (not its jump between the two)
+                    st32(l + kM35C4, f32_as_u32(g_out.bob[1] + d * k));
+                for (int i = 0; i < 2; i++)  // (not a snap: a turn about, stick back, is made in one step)
+                    if (const int16_t d = (int16_t)(g_out.ang[i][1] - g_out.ang[i][0]); std::abs(d) < 0x1000)
+                        st16(l + kAngleY[i], (uint16_t)(g_out.ang[i][1] + (int16_t)(int)(d * k)));
+            }
         }
         return;
     }
@@ -152,6 +179,21 @@ extern "C" void site_0240D6FC(Cpu* c) {
     g_out.pass = true60::pass();
     g_out.flg0_set = ld32(l + kResetFlg0) & ~g_out.flg0_pre;
     g_out.m34c2 = ld8(l + kM34C2);
+    g_out.bob[0] = g_out.bob[1], g_out.bob[1] = u32_as_f32(ld32(l + kM35C4));
+    for (int i = 0; i < 2; i++) g_out.ang[i][0] = g_out.ang[i][1], g_out.ang[i][1] = (int16_t)ld16(l + kAngleY[i]);
+}
+
+// daPy_lk_c::setWaterY (023FE224; execute, after posMove): mWaterY (+0x6A28) is the sea's wave height under him, and
+// a swimming Link (mModeFlg +0x6A70, ModeFlg_SWIM) at the surface is put at it right after. The sea steps at 30 Hz, so in a preview it is still the last
+// step's: there it goes half a step on along its last change, or he rose and sank on full passes only.
+extern "C" void f_023FE224_orig(Cpu* c);
+extern "C" void hook_023FE224(Cpu* c) {
+    static float w0 = 0, w1 = 0;  // the last two full passes' water heights
+    const uint32_t l = c->r[3];
+    f_023FE224_orig(c);
+    if (!true60::enabled() || l != true60::link()) return;
+    if (!true60::half_pass()) w0 = w1, w1 = u32_as_f32(ld32(l + 0x6A28));
+    else if (link60() && (ld32(l + 0x6A70) & 0x40000)) st32(l + 0x6A28, f32_as_u32(w1 + (w1 - w0) * (1.0f - true60::dt())));
 }
 
 // daPy_lk_c::checkItemAction (023FB230; GameCube d_a_player_main.cpp, called from execute right

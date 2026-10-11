@@ -28,6 +28,8 @@
 @023CC7F0 # ph_class Execute: the Haunted sea's Seahats attack a Link who does not ride the boat too (extras.cpp)
 @023CC984 # the same
 @023CCC88 # the same
+023C6DB4  # daOship::modeAttackInit: a third of the cannon boat's deliberate miss taken off (extras.cpp)
+023C68B8  # daOship execute: a deck cannon shot counts as the boat's cannon firing back (extras.cpp)
 02363164  # daObj_Ikada execute: Beedle's ship put around the King of Red Lions (extras.cpp)
 02360420  # daObj_Ikada::setMtx: Beedle's ship's deck as big as its model, and lowered
 025E2E5C  # mDoExt_modelEntryDL: the King of Red Lions' body and head not drawn under Beedle's ship

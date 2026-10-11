@@ -157,7 +157,7 @@ uint32_t actor_execute_fn(uint32_t proc) {
 // default; a list without +/- replaces the default ("all", "none" also work). Names: kGroupNames.
 // Only groups that passed the gates (docs/decomp-notes.md, "True 60 fps") are on by default.
 const char* const kGroupNames[kNumGroups] = {"loco", "camera", "sword", "items", "swim", "sail", "bk", "mo2", "cc", "ki"};
-constexpr uint32_t kGroupDefault = (1u << kGrpLoco) | (1u << kGrpCamera) | (1u << kGrpSword);
+constexpr uint32_t kGroupDefault = (1u << kGrpLoco) | (1u << kGrpCamera) | (1u << kGrpSword) | (1u << kGrpSwim);
 uint32_t g_groups = [] {
     uint32_t m = kGroupDefault;
     const char* e = getenv("WWHD_TRUE60_GROUPS");
@@ -242,6 +242,11 @@ const ProcGroup kLinkGroups[] = {
         0x4A,                    // CUT_KESA
         0x55, 0x58, 0x59,        // CUT_TURN (spin attack), CUT_TURN_CHARGE, CUT_TURN_MOVE
         0x5A,                    // CUT_REVERSE (sword bounces off a wall)
+    }},
+    // swimming: treading water and swimming, the procedure on every pass (each step puts him at the water's height,
+    // mWaterY, so the preview does too); not SWIM_UP (surfacing: 27.5 steps instead of 35 when measured)
+    {kGrpSwim, 1, {
+        0x36, 0x37,              // SWIM_WAIT SWIM_MOVE
     }},
     // items (the item actors themselves stay at 30 Hz): aiming, throwing, shooting, catching
     {kGrpItems, 2, {
@@ -348,6 +353,12 @@ float classify(uint32_t proc) {
     if (is_camera(proc)) {  // checked every time: each scene creates its own camera process
         if (g_camera != proc) LOG("[true60] camera is process %08X", proc);
         g_camera = proc;
+        // a full pass takes the rest of the step: its second half if the half pass took the first, else all of it (so a
+        // change of rate within a step neither skips nor repeats half a step)
+        if (!half_pass()) {
+            auto it = g_procs.find(proc);
+            return it != g_procs.end() && it->second.pass + 1 == g_pass && it->second.dt < 1.0f ? 0.5f : 1.0f;
+        }
         // while Link steps at 30 Hz (a ship's deck, swimming, any procedure not converted) the camera does too: at 60 Hz
         // its half pass ran ahead to his next step while he was drawn half way there, a long-short shake every frame pair
         return camera_enabled() && g_cam_follow && link_60() ? 0.5f : 1.0f;
@@ -507,8 +518,10 @@ void link_preview_restore() {
 // next full pass starts again from the camera as it was before that half pass (pass_begin) and takes
 // a whole step. So at full passes the camera is the 30 fps game's camera (Link reads it to steer;
 // what is in view, and so the draw-time random numbers of the scene lighting, stays the same).
-// WWHD_TRUE60_CAMERA_EXACT=0 keeps two half steps (debug).
-const bool g_cam_exact = !getenv("WWHD_TRUE60_CAMERA_EXACT") || atoi(getenv("WWHD_TRUE60_CAMERA_EXACT")) != 0;
+// Only with WWHD_TRUE60_CAMERA_EXACT=1 (comparison runs against the 30 fps game): a preview's smoothing toward Link's
+// half step is not half of the whole step's (the game's smoothing chases a target that jumps each step), so the camera
+// drew long-short against Link, 6.4 / 10.6 a frame walking on Outset. By default it takes two half steps.
+const bool g_cam_exact = getenv("WWHD_TRUE60_CAMERA_EXACT") && atoi(getenv("WWHD_TRUE60_CAMERA_EXACT")) != 0;
 std::vector<uint8_t> g_cam_half;
 // the camera's execute also writes the play state's camera data (dComIfGp: 1047E720.., 104846B0..,
 // eye/center/up of the camera slots, read by the next pass's draws before its own camera_draw):
@@ -716,7 +729,7 @@ extern "C" void hook_025DF940(Cpu* c) {
     // the full pass starts again from the camera as it was before that half pass and takes a whole
     // step. So at full passes the camera is the 30 fps game's camera (what is in view, and so the
     // draw-time random numbers of the scene lighting, stay those of the 30 fps game).
-    // WWHD_TRUE60_CAMERA_EXACT=0 keeps two half steps (debug).
+    // (WWHD_TRUE60_CAMERA_EXACT=1 only; by default two half steps)
     bool cam_preview = false;
     if (g_cam_exact && proc == g_camera && dt < 1.0f) {
         if (half_pass()) {

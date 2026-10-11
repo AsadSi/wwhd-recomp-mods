@@ -544,6 +544,11 @@ extern "C" void hook_027F55FC(Cpu* c) {
     using namespace interp;
     static const bool off = getenv("WWHD_INTERP_MODELS") && !atoi(getenv("WWHD_INTERP_MODELS"));  // debug
     if (!enabled() || off || (!g_hold && (true60::drawing_60() || g_exact_step))) {
+        static const bool trace = getenv("WWHD_INTERP_MODEL_TRACE");  // also the 60 Hz draws (Link in true 60)
+        if (trace && enabled()) {
+            uint32_t jnt = ld32(c->r[3] + kMdlJoints), mtx = jnt ? ld32(jnt + kJntMtx) : 0, n = jnt ? ld16(jnt + kJntNum) : 0;
+            if (mtx && n && n <= kMaxJoints) trace_model("sixty", jnt, n, (const uint32_t*)ppc_ptr(mtx));
+        }
         f_027F55FC_orig(c);
         return;
     }

@@ -57,7 +57,7 @@ Sail toward Outset (south-west): the ship drops anchor by itself before the isla
 own: it lands short at first and closes in as you fire the boat's cannon back (or hit it)." ;;
   cannon-boat-deck) ON=(BIG_SHIP); EXTRA="WWHD_EXTRAS_SPAWN=B3:00FFFF00:DAC:0:FF WWHD_BIGSHIP_OFF=1100"; NOTE="$SHIP
 A cannon boat appears about 3500 away 4 s after the file loads; the Big ship lies right beside you (B to leap on).
-Fight it from the deck: in a test run its shots never reached the deck (the deck cannons don't count as firing back)."  ;;
+Fight it from the deck: its aim lands short at first and closes in as you fire the deck cannons back, as from the boat."  ;;
   seahats-swim) ON=(HAUNTED_SEA); EVENT="sea@+20"; NOTE="Haunted sea at about 20 s: get out of the boat (B) and swim.
 The Seahats should now swoop at you while you swim instead of drifting off." ;;
   all) ON=(BIG_SHIP HAUNTED_SEA GIANT_SEAHATS LEVIATHAN MOLGERA PHANTOM_GANON HORROR_AUDIO); EVENT="leviathan@+60;molgera@+260;phantom@+460;sea@+640"
@@ -69,7 +69,7 @@ Everything at once. The first minute is yours: get on the deck, try the helm and
   *) echo "Usage: tools/try.sh <plain|beedle|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim|cannon-boat|cannon-boat-deck>"; exit 2 ;;
 esac
 for m in "${SPOOKY[@]}"; do export WWHD_MOD_$m=0; done
-for m in "${ON[@]}"; do export WWHD_MOD_$m=1; done
+for m in ${ON[@]+"${ON[@]}"}; do export WWHD_MOD_$m=1; done
 [ -n "$EVENT" ] && export WWHD_SPOOKY="$EVENT"
 echo "$NOTE"
 echo
