@@ -66,10 +66,14 @@ The Seahats should now swoop at you while you swim instead of drifting off." ;;
 Everything at once. The first minute is yours: get on the deck, try the helm and a cannon. Then, one after another:
   at 1 min the Leviathan (48 health), at about 4.5 min Molgera (80 health), at about 8 min Titanic Phantom Ganon, at about
   11 min Haunted sea. Each ends when you kill it, outrun it or after its time. Kills give rupees and a blue potion." ;;
-  *) echo "Usage: tools/try.sh <plain|beedle|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim|cannon-boat|cannon-boat-deck>"; exit 2 ;;
+  soak) ON=(NIGHT_DEAD HAUNTED_SEA STORM FOG GIANT_SEAHATS PHANTOM_GANON HORROR_AUDIO DEEP LEVIATHAN MOLGERA PHANTOM_STALKER BIG_SHIP)
+  OFTEN=2; NOTE="$SHIP
+The long soak, played: every spooky mod on, How often at Often, nothing forced. Sail out into open sea (away from
+islands) and keep going; the events come by chance, a roll a minute (none within reach of an island). Play as you like." ;;
+  *) echo "Usage: tools/try.sh <soak|plain|beedle|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim|cannon-boat|cannon-boat-deck>"; exit 2 ;;
 esac
 for m in "${SPOOKY[@]}"; do export WWHD_MOD_$m=0; done
-for m in ${ON[@]+"${ON[@]}"}; do export WWHD_MOD_$m=1; done
+for m in ${ON[@]+"${ON[@]}"}; do export WWHD_MOD_$m=1; [ -n "${OFTEN:-}" ] && export WWHD_MOD_${m}_OFTEN=$OFTEN; done
 [ -n "$EVENT" ] && export WWHD_SPOOKY="$EVENT"
 echo "$NOTE"
 echo
