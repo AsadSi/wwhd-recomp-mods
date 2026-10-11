@@ -7,7 +7,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 pgrep -fl "wwhd " >/dev/null && { echo "The game is already running; close it first."; exit 1; }
 [ -f "$ROOT/save/haunted.wwstate" ] || { echo "save/haunted.wwstate is missing."; exit 1; }
 SPOOKY=(NIGHT_DEAD HAUNTED_SEA STORM FOG GIANT_SEAHATS PHANTOM_GANON HORROR_AUDIO DEEP LEVIATHAN MOLGERA PHANTOM_STALKER BIG_SHIP BEEDLE_SHIP)
-ON=(); EVENT=; NOTE=
+ON=(); EVENT=; NOTE=; EXTRA=
 SHIP="Big ship (keys: move WASD, A = K/Space, B = J, ZL = Left Shift, pause/items = Return):
   Tetra's ship is a boat of its own: once you are out at sea it waits at anchor a little way off your left.
   Sail up beside it so it is on your left, stop, and press B (Get Out) to leap onto its deck. Walk it, climb its castles.
@@ -53,6 +53,11 @@ Set sail (A) and sail full speed to get away; it circles you like a Gyorg, charg
   NOTE="Titanic (12x) Phantom Ganon at about 20 s: his dark balls, their bursts and the sparks of hits are his size now." ;;
   anchor-island) ON=(BIG_SHIP); NOTE="$SHIP
 Sail toward Outset (south-west): the ship drops anchor by itself before the island; take the boat in, then come back." ;;
+  cannon-boat) EXTRA="WWHD_EXTRAS_SPAWN=B3:00FFFF00:DAC:0:FF"; NOTE="A cannon boat appears about 3500 away 4 s after the file loads and bombards you. Its aim is the game's
+own: it lands short at first and closes in as you fire the boat's cannon back (or hit it)." ;;
+  cannon-boat-deck) ON=(BIG_SHIP); EXTRA="WWHD_EXTRAS_SPAWN=B3:00FFFF00:DAC:0:FF WWHD_BIGSHIP_OFF=1100"; NOTE="$SHIP
+A cannon boat appears about 3500 away 4 s after the file loads; the Big ship lies right beside you (B to leap on).
+Fight it from the deck: in a test run its shots never reached the deck (the deck cannons don't count as firing back)."  ;;
   seahats-swim) ON=(HAUNTED_SEA); EVENT="sea@+20"; NOTE="Haunted sea at about 20 s: get out of the boat (B) and swim.
 The Seahats should now swoop at you while you swim instead of drifting off." ;;
   all) ON=(BIG_SHIP HAUNTED_SEA GIANT_SEAHATS LEVIATHAN MOLGERA PHANTOM_GANON HORROR_AUDIO); EVENT="leviathan@+60;molgera@+260;phantom@+460;sea@+640"
@@ -61,7 +66,7 @@ The Seahats should now swoop at you while you swim instead of drifting off." ;;
 Everything at once. The first minute is yours: get on the deck, try the helm and a cannon. Then, one after another:
   at 1 min the Leviathan (48 health), at about 4.5 min Molgera (80 health), at about 8 min Titanic Phantom Ganon, at about
   11 min Haunted sea. Each ends when you kill it, outrun it or after its time. Kills give rupees and a blue potion." ;;
-  *) echo "Usage: tools/try.sh <plain|beedle|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim>"; exit 2 ;;
+  *) echo "Usage: tools/try.sh <plain|beedle|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim|cannon-boat|cannon-boat-deck>"; exit 2 ;;
 esac
 for m in "${SPOOKY[@]}"; do export WWHD_MOD_$m=0; done
 for m in "${ON[@]}"; do export WWHD_MOD_$m=1; done
@@ -70,4 +75,4 @@ echo "$NOTE"
 echo
 TRACE="$ROOT/build/try/${1}-$(date +%H%M%S).txt"; mkdir -p "$ROOT/build/try"
 echo "Pick Quest Log 1. Trace: $TRACE"
-cd "$ROOT" && WWHD_PORTABLE_LOAD="$ROOT/save/haunted.wwstate" WWHD_MODS_TRACE="$TRACE" ./build/cmake/wwhd
+cd "$ROOT" && env $EXTRA WWHD_PORTABLE_LOAD="$ROOT/save/haunted.wwstate" WWHD_MODS_TRACE="$TRACE" ./build/cmake/wwhd
