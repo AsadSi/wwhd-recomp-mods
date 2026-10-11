@@ -43,7 +43,7 @@
 
 namespace mods::extras {
 namespace {
-enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kAudio, kDeep, kLeviathan, kMolgera, kStalker, kBeedle, kCalm, kPhoto, kGunner, kBlood, kCyclone, kMaelstrom, kArmada, kCount };  // the catalogue's order
+enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kAudio, kDeep, kLeviathan, kMolgera, kStalker, kBeedle, kCalm, kPhoto, kGunner, kBlood, kCyclone, kMaelstrom, kArmada, kSiren, kCount };  // the catalogue's order
 std::atomic<bool> g_on[kCount];
 std::atomic<int> g_choice[kCount];
 std::atomic<int> g_often[kCount];
@@ -394,6 +394,10 @@ const std::vector<Mod>& catalogue() {
          "Now and then, far out at sea, four cannon boats come over the horizon in formation, close in, heave to and open "
          "fire, following if Link sails off. Sink them all (with the boat's cannon, bombs or a ship's deck cannons) for "
          "200 rupees and a blue potion.", {}, true},
+        {"siren", "Siren song", "Spooky",
+         "Now and then, far out at sea and mostly at night, a sad little melody drifts over the water and the boat begins "
+         "to turn toward it on its own. Steer against it until the song fades; sail all the way to it and something "
+         "waits there.", {}, true},
     };
     return mods;
 }
@@ -430,7 +434,7 @@ void set_often(const std::string& id, int o) {
 // land, near an island or after its time, the fog rolling out. Night of the dead is a roll at nightfall for that night;
 // Stormy weather and Thick fog are spells of a few minutes. Rain and fog fade in and out: the rain count
 // (dKyw_rain_set) is ramped, and our fog is blended with the game's by dKy_fog_startendz_set's ratio.
-// Test aid: WWHD_SPOOKY=<sea|giants|phantom|dead|storm|fog|deep|leviathan|molgera|stalker|calm|blood|cyclone|maelstrom|armada>@<game seconds>[;...] starts that event at that time
+// Test aid: WWHD_SPOOKY=<sea|giants|phantom|dead|storm|fog|deep|leviathan|molgera|stalker|calm|blood|cyclone|maelstrom|armada|siren>@<game seconds>[;...] starts that event at that time
 // (@+<seconds>: that long after Link is first in play).
 namespace {
 constexpr int kAlways = 3;
@@ -495,7 +499,7 @@ void remove_molgera(Cpu* c) {
 }
 void wind(Cpu* c, float power) { c->f[1].ps0 = power; guest_call(c, GC(0x0257E594)); }
 void begin(int k, double now) {
-    g_until[k] = now + (k == kPhantom || k == kLeviathan ? 180 : k == kMolgera ? 150 : k == kStalker ? 120 : k == kSea ? 120 + rand() % 120 : k == kCalm ? 60 + rand() % 90 : k == kCyclone ? 150 : k == kMaelstrom ? 90 : k == kArmada ? 240 : 180 + rand() % 300);
+    g_until[k] = now + (k == kPhantom || k == kLeviathan ? 180 : k == kMolgera ? 150 : k == kStalker ? 120 : k == kSea ? 120 + rand() % 120 : k == kCalm ? 60 + rand() % 90 : k == kCyclone ? 150 : k == kMaelstrom ? 90 : k == kArmada ? 240 : k == kSiren ? 75 : 180 + rand() % 300);
     if (k == kPhantom || k == kStalker) g_phantom = Single{};  // made afresh by their blocks below
     if (k == kLeviathan) g_leviathan = Single{};
     if (k == kMolgera) g_molgera = Single{};
@@ -533,7 +537,7 @@ std::vector<Forced> forced_events() {
     std::vector<Forced> v;
     const char* e = getenv("WWHD_SPOOKY");
     static const std::pair<const char*, int> kNames[] = {{"sea", kSea}, {"giants", kGiants}, {"phantom", kPhantom},
-                                                         {"dead", kNight}, {"storm", kStorm}, {"fog", kFog}, {"deep", kDeep}, {"leviathan", kLeviathan}, {"molgera", kMolgera}, {"stalker", kStalker}, {"calm", kCalm}, {"blood", kBlood}, {"cyclone", kCyclone}, {"maelstrom", kMaelstrom}, {"armada", kArmada}};
+                                                         {"dead", kNight}, {"storm", kStorm}, {"fog", kFog}, {"deep", kDeep}, {"leviathan", kLeviathan}, {"molgera", kMolgera}, {"stalker", kStalker}, {"calm", kCalm}, {"blood", kBlood}, {"cyclone", kCyclone}, {"maelstrom", kMaelstrom}, {"armada", kArmada}, {"siren", kSiren}};
     for (std::string rest = e ? e : ""; !rest.empty();) {
         const std::string item = rest.substr(0, rest.find(';'));
         rest = item.size() < rest.size() ? rest.substr(item.size() + 1) : "";
@@ -570,9 +574,9 @@ void direct(Cpu* c, uint32_t sv, uint32_t link, double now, bool night, bool wat
         }
     }
     // the sea events end on land, near an island, after their time, or (Phantom Ganon) once he is gone
-    for (int k : {kSea, kPhantom, kLeviathan, kMolgera, kStalker, kCalm, kCyclone, kMaelstrom, kArmada})  // set to Always or switched off mid-event
+    for (int k : {kSea, kPhantom, kLeviathan, kMolgera, kStalker, kCalm, kCyclone, kMaelstrom, kArmada, kSiren})  // set to Always or switched off mid-event
         if (g_until[k] > 0 && (always(k) || !g_on[k].load())) finish(c, k, now, "its setting changed");
-    for (int k : {kSea, kPhantom, kLeviathan, kMolgera, kCalm, kCyclone, kMaelstrom, kArmada})
+    for (int k : {kSea, kPhantom, kLeviathan, kMolgera, kCalm, kCyclone, kMaelstrom, kArmada, kSiren})
         if (g_until[k] > 0) {
             if (ashore || isle < 3500) finish(c, k, now, ashore ? "Link is off the water" : "near an island");
             else if (now >= g_until[k]) finish(c, k, now, "time");
@@ -614,7 +618,7 @@ void direct(Cpu* c, uint32_t sv, uint32_t link, double now, bool night, bool wat
     if (stage == "sea" && ashore && night && now >= g_cool && g_until[kStalker] == 0 && rolls(kStalker, 0.03))
         begin(kStalker, now);
     if (now >= g_until[kDeep] && stage == "sea" && !ashore && rolls(kDeep, 0.07 * (night ? 1.5 : 0.8))) begin(kDeep, now);
-    if (stage != "sea" || ashore || isle < 6000 || now < g_cool || g_warn >= 0 || g_until[kSea] > 0 || g_until[kPhantom] > 0 || g_until[kLeviathan] > 0 || g_until[kMolgera] > 0 || g_until[kCalm] > 0 || g_until[kCyclone] > 0 || g_until[kMaelstrom] > 0 || g_until[kArmada] > 0) return;
+    if (stage != "sea" || ashore || isle < 6000 || now < g_cool || g_warn >= 0 || g_until[kSea] > 0 || g_until[kPhantom] > 0 || g_until[kLeviathan] > 0 || g_until[kMolgera] > 0 || g_until[kCalm] > 0 || g_until[kCyclone] > 0 || g_until[kMaelstrom] > 0 || g_until[kArmada] > 0 || g_until[kSiren] > 0) return;
     const double more = std::min(3.0, 1 + (now - g_out_since) / 600);
     if (boat && rolls(kPhantom, 0.017 * (night ? 2 : 0.4) * more)) g_warn = kPhantom;
     else if (rolls(kLeviathan, 0.012 * (night ? 1.5 : 0.7) * more)) g_warn = kLeviathan;
@@ -624,6 +628,7 @@ void direct(Cpu* c, uint32_t sv, uint32_t link, double now, bool night, bool wat
     else if (boat && rolls(kCyclone, 0.04 * more)) begin(kCyclone, now);
     else if (boat && rolls(kMaelstrom, 0.03 * more)) begin(kMaelstrom, now);
     else if (boat && rolls(kArmada, 0.03 * more)) begin(kArmada, now);
+    else if (boat && rolls(kSiren, 0.03 * (night ? 2 : 0.5) * more)) begin(kSiren, now);
     if (g_warn >= 0) {
         g_warn_end = now + 8;
         wind(c, 0.05f);
@@ -937,7 +942,7 @@ void step(Cpu* c) {
         g_gyorg_ids.clear(), g_giant_ids.clear(), g_big_hits.clear();
         settle = game_time() + 2;
         if (g_warn >= 0) wind(c, 0), g_warn = -1;  // a sea event does not outlive its stage
-        g_until[kSea] = g_until[kPhantom] = g_until[kLeviathan] = g_until[kMolgera] = g_until[kStalker] = g_until[kCalm] = g_until[kCyclone] = g_until[kMaelstrom] = g_until[kArmada] = 0;
+        g_until[kSea] = g_until[kPhantom] = g_until[kLeviathan] = g_until[kMolgera] = g_until[kStalker] = g_until[kCalm] = g_until[kCyclone] = g_until[kMaelstrom] = g_until[kArmada] = g_until[kSiren] = 0;
         remove_molgera(c);
     }
     // nor while the next stage is asked for (dComIfGp's next stage enabled, play +0x514C): through the Big ship's
@@ -1479,6 +1484,41 @@ void step(Cpu* c) {
                 st32(a + 0x370, u32_bits(hove_to ? 0.f : 8.f));
                 st8(a + kRoom, ld8(link + kRoom));
             }
+    }
+    // Siren song: a melody of Medli's harp notes (CM_MD_HARP_*, 0x5940-0x5944, global one-shots) from a point 7000 off
+    // to one side of a sailing Link, toward which the boat turns by itself: its yaw rate m03B8 (+0x6A0, s16), which its
+    // execute adds to its heading every step after easing it 0x80 toward 0, set after each execute to pull toward the
+    // point (at most 0x200 a step); he steers against it. Within 800 of the point the song stops, and Gyorgs are there
+    if (const uint32_t korl = ld32(kPlay + 0x5B3C); live(kSiren, now) && in_mem2(korl) && settled) {
+        static double sung_for = -1, note_at = 0;
+        static V3 siren;
+        static int note = 0;
+        if (sung_for != g_until[kSiren]) {
+            sung_for = g_until[kSiren];
+            const double side = (int16_t)ld16(korl + kAngleY) * M_PI / 32768 + (rand() % 2 ? 1 : -1) * (M_PI / 2.5);
+            siren = {ldf32(korl + kPos) + sin(side) * 7000, 0, ldf32(korl + kPos + 8) + cos(side) * 7000};
+            trace("extras: a song drifts over the water");
+        }
+        static constexpr uint16_t kTune[] = {0x5944, 0x5943, 0x5941, 0x5942, 0x5940, 0, 0x5943, 0x5942, 0x5940, 0, 0};
+        if (now >= note_at) {
+            if (const uint16_t id = kTune[note++ % std::size(kTune)]) guest_call(c, GC(0x025E1988), {id});
+            note_at = now + 0.7;
+        }
+        const double dx = siren.x - ldf32(korl + kPos), dz = siren.z - ldf32(korl + kPos + 8);
+        if (riding) {
+            const int16_t off = (int16_t)((int16_t)(atan2(dx, dz) * 32768 / M_PI) - (int16_t)ld16(korl + kAngleY));
+            st16(korl + 0x6A0, (uint16_t)(int16_t)std::clamp(off / 16, -0x200, 0x200));
+        }
+        if (std::hypot(dx, dz) < 800) {
+            finish(c, kSiren, now, "Link reached the song");
+            if (g_gyctrl == 0xFFFFFFFF || !guest_call(c, GC(0x025DE50C), {g_gyctrl})) {
+                Spawner none;
+                g_gyctrl = spawn(c, none, kGyCtrl, link, 0, false, 0, false);
+                g_gyorg_ids.push_back(g_gyctrl);
+            }
+            for (int i = 0; i < 3; i++)
+                if (const uint32_t id = spawn(c, g_sea, kGyorg, link, 900 + rand() % 400, 0, -40, false, g_gyctrl, true); id != 0xFFFFFFFF) g_gyorg_ids.push_back(id);
+        }
     }
     // the event's bosses are kept in Link's room (+0x326): made in the room he was in, they went with it when it unloaded
     // behind him as he sailed on (Phantom Ganon's event ended "he is gone")
