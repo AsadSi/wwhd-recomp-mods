@@ -43,11 +43,11 @@
 
 namespace mods::extras {
 namespace {
-enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kAudio, kDeep, kLeviathan, kMolgera, kStalker, kBeedle, kCount };  // the catalogue's order
+enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kAudio, kDeep, kLeviathan, kMolgera, kStalker, kBeedle, kCalm, kCount };  // the catalogue's order
 std::atomic<bool> g_on[kCount];
 std::atomic<int> g_choice[kCount];
-std::atomic<int> g_often[kCount] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};  // How often: Now and then
-static_assert(kCount == 18, "one How often per mod above");
+std::atomic<int> g_often[kCount];
+[[maybe_unused]] const bool g_often_set = [] { for (auto& o : g_often) o = 1; return true; }();  // How often: Now and then
 
 const uint32_t kPlay = GD(0x1046F0B0);
 const uint32_t kLinkPtr = kPlay + 0x5B34;  // daPy_lk_c
@@ -363,6 +363,10 @@ const std::vector<Mod>& catalogue() {
          "out to leap back onto its deck, walk it and fight from it with its two cannons (one at the bow, one up on the "
          "hut's roof, manned from before the hut); A at its bow leaps Link forward into the boat. Fall in, and A by its "
          "side climbs back aboard.", {}},
+        {"dead-calm", "Dead calm", "Spooky",
+         "Now and then, far out at sea, the wind dies away altogether and a still fog settles: the sail hangs slack, the "
+         "Wind Waker can turn the wind but not wake it, and the music fades. Drift on, wait it out, or reach an island.",
+         {}, true},
     };
     return mods;
 }
@@ -399,7 +403,7 @@ void set_often(const std::string& id, int o) {
 // land, near an island or after its time, the fog rolling out. Night of the dead is a roll at nightfall for that night;
 // Stormy weather and Thick fog are spells of a few minutes. Rain and fog fade in and out: the rain count
 // (dKyw_rain_set) is ramped, and our fog is blended with the game's by dKy_fog_startendz_set's ratio.
-// Test aid: WWHD_SPOOKY=<sea|giants|phantom|dead|storm|fog|deep|leviathan|molgera|stalker>@<game seconds>[;...] starts that event at that time
+// Test aid: WWHD_SPOOKY=<sea|giants|phantom|dead|storm|fog|deep|leviathan|molgera|stalker|calm>@<game seconds>[;...] starts that event at that time
 // (@+<seconds>: that long after Link is first in play).
 namespace {
 constexpr int kAlways = 3;
@@ -420,7 +424,7 @@ bool giant_spell() {
     const int o = g_often[kGiants].load();
     return g_on[kGiants].load() && (o >= kAlways || chance(kGiantShare[o]));
 }
-const char* kEventName[kCount] = {"", "", "", "", "Night of the dead", "Haunted sea", "storm", "fog", "", "giants", "Phantom Ganon", "", "", "the deep", "Leviathan", "Molgera", "Phantom stalker", ""};
+const char* event_name(int k) { return catalogue()[k].name.c_str(); }
 // Molgera (bwd_class, proc 0xD9; HD fields = decomp + 0x284 up to +0x1B5C): its l_HIO (10462A68) holds the head's
 // scale (+0x1C, 1.3, also its 9 spheres' radii), the push on Link while it waits (+0x0C, 6.0) and its bite's reach
 // (+0x14, 700), set while it is out
@@ -464,19 +468,19 @@ void remove_molgera(Cpu* c) {
 }
 void wind(Cpu* c, float power) { c->f[1].ps0 = power; guest_call(c, GC(0x0257E594)); }
 void begin(int k, double now) {
-    g_until[k] = now + (k == kPhantom || k == kLeviathan ? 180 : k == kMolgera ? 150 : k == kStalker ? 120 : k == kSea ? 120 + rand() % 120 : 180 + rand() % 300);
+    g_until[k] = now + (k == kPhantom || k == kLeviathan ? 180 : k == kMolgera ? 150 : k == kStalker ? 120 : k == kSea ? 120 + rand() % 120 : k == kCalm ? 60 + rand() % 90 : 180 + rand() % 300);
     if (k == kPhantom || k == kStalker) g_phantom = Single{};  // made afresh by their blocks below
     if (k == kLeviathan) g_leviathan = Single{};
     if (k == kMolgera) g_molgera = Single{};
     if (k == kSea) g_giant_spell = giant_spell();
     // a boss at sea: the Bomb Bag filled up (its count +0x6A to what it holds +0x70), for the deck cannons
     if (const uint32_t sv = save(); k == kPhantom || k == kLeviathan || k == kMolgera) st8(sv + 0x6A, ld8(sv + 0x70));
-    trace("extras: event %s begins (%.0f s)%s", kEventName[k], g_until[k] - now, k == kSea && g_giant_spell ? ", giants" : "");
+    trace("extras: event %s begins (%.0f s)%s", event_name(k), g_until[k] - now, k == kSea && g_giant_spell ? ", giants" : "");
 }
 void finish(Cpu* c, int k, double now, const char* why) {
-    trace("extras: event %s ends (%s)", kEventName[k], why);
+    trace("extras: event %s ends (%s)", event_name(k), why);
     g_until[k] = 0;
-    if (k != kNight && k != kStorm && k != kFog && k != kDeep) g_cool = now + (k == kSea ? 300 : 600);
+    if (k != kNight && k != kStorm && k != kFog && k != kDeep) g_cool = now + (k == kSea || k == kCalm ? 300 : 600);
     if ((k == kPhantom || k == kStalker) && g_phantom.actor(c)) guest_call(c, GC(0x025D57E4), {g_phantom.id});  // fopAcM_delete_id
     if (k == kLeviathan && g_leviathan.actor(c)) guest_call(c, GC(0x025D57E4), {g_leviathan.id});
     if (k == kMolgera) remove_molgera(c);
@@ -494,7 +498,7 @@ std::vector<Forced> forced_events() {
     std::vector<Forced> v;
     const char* e = getenv("WWHD_SPOOKY");
     static const std::pair<const char*, int> kNames[] = {{"sea", kSea}, {"giants", kGiants}, {"phantom", kPhantom},
-                                                         {"dead", kNight}, {"storm", kStorm}, {"fog", kFog}, {"deep", kDeep}, {"leviathan", kLeviathan}, {"molgera", kMolgera}, {"stalker", kStalker}};
+                                                         {"dead", kNight}, {"storm", kStorm}, {"fog", kFog}, {"deep", kDeep}, {"leviathan", kLeviathan}, {"molgera", kMolgera}, {"stalker", kStalker}, {"calm", kCalm}};
     for (std::string rest = e ? e : ""; !rest.empty();) {
         const std::string item = rest.substr(0, rest.find(';'));
         rest = item.size() < rest.size() ? rest.substr(item.size() + 1) : "";
@@ -531,9 +535,9 @@ void direct(Cpu* c, uint32_t sv, uint32_t link, double now, bool night, bool wat
         }
     }
     // the sea events end on land, near an island, after their time, or (Phantom Ganon) once he is gone
-    for (int k : {kSea, kPhantom, kLeviathan, kMolgera, kStalker})  // set to Always or switched off mid-event
+    for (int k : {kSea, kPhantom, kLeviathan, kMolgera, kStalker, kCalm})  // set to Always or switched off mid-event
         if (g_until[k] > 0 && (always(k) || !g_on[k].load())) finish(c, k, now, "its setting changed");
-    for (int k : {kSea, kPhantom, kLeviathan, kMolgera})
+    for (int k : {kSea, kPhantom, kLeviathan, kMolgera, kCalm})
         if (g_until[k] > 0) {
             if (ashore || isle < 3500) finish(c, k, now, ashore ? "Link is off the water" : "near an island");
             else if (now >= g_until[k]) finish(c, k, now, "time");
@@ -572,16 +576,17 @@ void direct(Cpu* c, uint32_t sv, uint32_t link, double now, bool night, bool wat
     if (stage == "sea" && ashore && night && now >= g_cool && g_until[kStalker] == 0 && rolls(kStalker, 0.03))
         begin(kStalker, now);
     if (now >= g_until[kDeep] && stage == "sea" && !ashore && rolls(kDeep, 0.07 * (night ? 1.5 : 0.8))) begin(kDeep, now);
-    if (stage != "sea" || ashore || isle < 6000 || now < g_cool || g_warn >= 0 || g_until[kSea] > 0 || g_until[kPhantom] > 0 || g_until[kLeviathan] > 0 || g_until[kMolgera] > 0) return;
+    if (stage != "sea" || ashore || isle < 6000 || now < g_cool || g_warn >= 0 || g_until[kSea] > 0 || g_until[kPhantom] > 0 || g_until[kLeviathan] > 0 || g_until[kMolgera] > 0 || g_until[kCalm] > 0) return;
     const double more = std::min(3.0, 1 + (now - g_out_since) / 600);
     if (boat && rolls(kPhantom, 0.017 * (night ? 2 : 0.4) * more)) g_warn = kPhantom;
     else if (rolls(kLeviathan, 0.012 * (night ? 1.5 : 0.7) * more)) g_warn = kLeviathan;
     else if (rolls(kMolgera, 0.008 * (night ? 1.5 : 0.7) * more)) g_warn = kMolgera;
     else if (rolls(kSea, 0.08 * (night ? 1.5 : 0.7) * more)) g_warn = kSea;
+    else if (boat && rolls(kCalm, 0.04 * more)) begin(kCalm, now);  // no warning: the calm is the event
     if (g_warn >= 0) {
         g_warn_end = now + 8;
         wind(c, 0.05f);
-        trace("extras: the calm before %s (%.0f m from the island, x%.1f)", kEventName[g_warn], isle, more);
+        trace("extras: the calm before %s (%.0f m from the island, x%.1f)", event_name(g_warn), isle, more);
     }
 }
 
@@ -850,7 +855,7 @@ void step(Cpu* c) {
         g_gyorg_ids.clear(), g_giant_ids.clear(), g_big_hits.clear();
         settle = game_time() + 2;
         if (g_warn >= 0) wind(c, 0), g_warn = -1;  // a sea event does not outlive its stage
-        g_until[kSea] = g_until[kPhantom] = g_until[kLeviathan] = g_until[kMolgera] = g_until[kStalker] = 0;
+        g_until[kSea] = g_until[kPhantom] = g_until[kLeviathan] = g_until[kMolgera] = g_until[kStalker] = g_until[kCalm] = 0;
         remove_molgera(c);
     }
     // nor while the next stage is asked for (dComIfGp's next stage enabled, play +0x514C): through the Big ship's
@@ -914,6 +919,14 @@ void step(Cpu* c) {
     static const double kEvery[] = {25, 12, 5};  // seconds between spawns: Sometimes, Often, Relentless
     static const size_t kMax[] = {2, 4, 7};      // monsters out at once
     direct(c, sv, link, now, night, water, boat, settled, stage);
+    // Dead calm: the wind held all but still (dKyw_custom_windpower) on the sea, set again every 2 s in case the Wind
+    // Waker's song puts it back, and handed back (0) as it ends; not while the calm before another event holds it
+    {
+        static bool calmed = false;
+        static int every = 0;
+        const bool calm = live(kCalm, now) && sea && g_warn < 0;
+        if (calm != calmed || (calm && ++every % 60 == 0)) wind(c, calm ? 0.02f : 0), calmed = calm;
+    }
     // stormy weather: the rain count (dKyw_rain_set, 0257E7C0; 250 is a downpour) set every step while it rains, eased
     // up and down over 30 s, and 0 once at the end
     static float rain = 0;
@@ -943,7 +956,7 @@ void step(Cpu* c) {
     static float fog = 0;
     const bool sea_event = g_warn >= 0 || (g_until[kSea] > now && !always(kSea)) || (g_until[kPhantom] > now && !always(kPhantom)) ||
                            (g_until[kLeviathan] > now && !always(kLeviathan)) || (g_until[kMolgera] > now && !always(kMolgera)) ||
-                           (g_until[kStalker] > now && !always(kStalker));
+                           (g_until[kStalker] > now && !always(kStalker)) || (g_until[kCalm] > now && !always(kCalm));
     static bool fogged = false;
     const float to = (live(kFog, now) && (night || g_choice[kFog].load() == 1)) || sea_event ? 1.f : 0.f;
     fog = to > fog ? std::min(to, fog + 1 / 600.f) : std::max(to, fog - 1 / 600.f);
