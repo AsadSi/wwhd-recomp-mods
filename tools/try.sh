@@ -6,7 +6,7 @@ set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 pgrep -fl "wwhd " >/dev/null && { echo "The game is already running; close it first."; exit 1; }
 [ -f "$ROOT/save/haunted.wwstate" ] || { echo "save/haunted.wwstate is missing."; exit 1; }
-SPOOKY=(NIGHT_DEAD HAUNTED_SEA STORM FOG GIANT_SEAHATS PHANTOM_GANON HORROR_AUDIO DEEP LEVIATHAN MOLGERA PHANTOM_STALKER BIG_SHIP)
+SPOOKY=(NIGHT_DEAD HAUNTED_SEA STORM FOG GIANT_SEAHATS PHANTOM_GANON HORROR_AUDIO DEEP LEVIATHAN MOLGERA PHANTOM_STALKER BIG_SHIP BEEDLE_SHIP)
 ON=(); EVENT=; NOTE=
 SHIP="Big ship (keys: move WASD, A = K/Space, B = J, ZL = Left Shift, pause/items = Return):
   Stop the boat beside the ship and press B (Get Out) to jump onto its deck. Walk it, climb its castles, use weapons.
@@ -17,7 +17,14 @@ SHIP="Big ship (keys: move WASD, A = K/Space, B = J, ZL = Left Shift, pause/item
   Sail off alone in the boat and the ship waits at anchor; sail up alongside it, slowly, to hitch it on again.
 Deck cannons (bow and stern): stand by one and press A (or your Bomb Bag's button) to man it. Stick aims, ZL locks on
   the nearest monster (again to unlock), A fires (one bomb a shot), B leaves."
+BEEDLE="Beedle's ship (keys: move WASD, A = K/Space, B = J, pause/items = Return):
+  The King of Red Lions sails as Beedle's shop ship: sail as always (his sail, his cannon). Stop and press B to hop onto
+  its deck; walk it, climb the hut, use weapons. A by the boat's seat sits you back down. Fall in: swim to its side and
+  press A to climb aboard."
 case "${1:-}" in
+  beedle) ON=(BEEDLE_SHIP); NOTE="$BEEDLE" ;;
+  beedle-bosses) ON=(BEEDLE_SHIP MOLGERA PHANTOM_GANON); EVENT="molgera@+40;phantom@+45"; export WWHD_MOD_PHANTOM_GANON_CHOICE=1; NOTE="$BEEDLE
+Molgera and Titanic Phantom Ganon together from about 40 s: fight them from its deck or from the boat's cannon." ;;
   deck) ON=(BIG_SHIP); NOTE="$SHIP" ;;
   cannon|sea-deck) ON=(BIG_SHIP HAUNTED_SEA); EVENT="sea@+20"; NOTE="$SHIP
 Haunted sea comes at about 20 s: get onto the deck and shoot the Seahats, Gyorgs and cannon boats." ;;
@@ -52,7 +59,7 @@ The Seahats should now swoop at you while you swim instead of drifting off." ;;
 Everything at once. The first minute is yours: get on the deck, try the helm and a cannon. Then, one after another:
   at 1 min the Leviathan (48 health), at about 4.5 min Molgera (80 health), at about 8 min Titanic Phantom Ganon, at about
   11 min Haunted sea. Each ends when you kill it, outrun it or after its time. Kills give rupees and a blue potion." ;;
-  *) echo "Usage: tools/try.sh <all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim>"; exit 2 ;;
+  *) echo "Usage: tools/try.sh <beedle|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim>"; exit 2 ;;
 esac
 for m in "${SPOOKY[@]}"; do export WWHD_MOD_$m=0; done
 for m in "${ON[@]}"; do export WWHD_MOD_$m=1; done

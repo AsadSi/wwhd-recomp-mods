@@ -1,0 +1,14 @@
+# title -> Quest Log 1 with Beedle's ship on: out onto its deck (B), back toward the hut, off the bow, swim back, climb aboard (A), and back in the boat (A)
+3-3.2 A
+5-5.2 A
+7-7.2 A
+9-9.2 A
+11-11.2 A
+13-13.2 A
+24-24.2 B
+27-27.5 STICK 0 -1
+29-30.2 STICK 0 1
+32-33.2 STICK 0 -1
+35-35.2 A
+38-38.6 STICK 0 -1
+40-40.2 A

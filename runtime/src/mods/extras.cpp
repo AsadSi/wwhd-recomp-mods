@@ -41,11 +41,11 @@
 
 namespace mods::extras {
 namespace {
-enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kAudio, kDeep, kLeviathan, kMolgera, kStalker, kCount };  // the catalogue's order
+enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kAudio, kDeep, kLeviathan, kMolgera, kStalker, kBeedle, kCount };  // the catalogue's order
 std::atomic<bool> g_on[kCount];
 std::atomic<int> g_choice[kCount];
-std::atomic<int> g_often[kCount] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};  // How often: Now and then
-static_assert(kCount == 17, "one How often per mod above");
+std::atomic<int> g_often[kCount] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};  // How often: Now and then
+static_assert(kCount == 18, "one How often per mod above");
 
 const uint32_t kPlay = GD(0x1046F0B0);
 const uint32_t kLinkPtr = kPlay + 0x5B34;  // daPy_lk_c
@@ -72,7 +72,9 @@ constexpr Monster kRedead{0xE0, 0, 0xFFFFFFFF}, kStalfos{0xBE, -1, 0xFFFFFFFF}, 
                   // until Link comes within byte 1 x 10 of where he was made (2550), then descends and fights (flies, fires,
                   // spin attacks, and makes his own short-lived copies). HD fganon_class: mAction +0x5BA, mMode +0x5BC,
                   // materialized +0x8C1 (GameCube + 0x234 from there; the first fields are + 0x11C)
-                  kFganon{0xF1, -1, 0x00FFFF03};
+                  kFganon{0xF1, -1, 0x00FFFF03},
+                  // Beedle's Shop Ship (daObj_Ikada type 1, IkadaH vtsp): no path (angle.x bits 8..15 0xFF); a moving BG
+                  kBeedleShip{0x44, -1, 0x00000001, (int16_t)0xFF00};
 
 // the monsters a spawner has out, by process id; forgotten when they die or the stage changes
 struct Spawner {
@@ -91,9 +93,12 @@ struct Single {
     uint32_t actor(Cpu* c) { return id == 0xFFFFFFFF ? 0 : guest_call(c, GC(0x025DE50C), {id}); }
     bool wanted(Cpu* c, double now) { return !actor(c) && now >= next; }
 };
-Single g_ghost, g_bigship, g_phantom, g_leviathan, g_molgera;
+Single g_ghost, g_bigship, g_phantom, g_leviathan, g_molgera, g_beedle;
 uint32_t g_leviathan_actor = 0, g_molgera_actor = 0;  // for the hooks below, which must not call into the game
 uint32_t g_phantom_actor = 0;                          // Phantom Ganon, and his size, for the same
+// Beedle's ship as the King of Red Lions' hull (below), for its hooks: the ship, the boat, the ship's BG matrix, and
+// the boat's body and head models, which are not drawn
+uint32_t g_beedle_actor = 0, g_beedle_lion = 0, g_beedle_mtx = 0, g_hide_body = 0, g_hide_head = 0;
 float g_phantom_size = 1, g_fx_size = 1;               // g_fx_size: his size while his execute runs (particle hook)
 // the Leviathan and Molgera can be killed, by any weapon (a cannonball or bomb 4, an arrow 2, the sword its power):
 // what is left of their health, and the Leviathan's death as its hit test saw it (loot and the event's end follow)
@@ -177,10 +182,27 @@ V3 to_world(V3 o, int16_t yaw, V3 l) {
     return {o.x + l.x * cos(t) + l.z * sin(t), o.y + l.y, o.z - l.x * sin(t) + l.z * cos(t)};
 }
 V3 pos_of(uint32_t a) { return {ldf32(a + kPos), ldf32(a + kPos + 4), ldf32(a + kPos + 8)}; }
+// Link put somewhere by a mod: every copy of his position (current +0x314, old +0x300, his collision's +0x84C, +0x68B0,
+// +0x7350) and the one d_a_player keeps (1046CD48), which his next execute reads back (without it he is back where he
+// was; without his collision's he falls through the floor he is put above)
+void put_link(uint32_t link, V3 w) {
+    for (uint32_t a : {link + kPos, link + 0x300, link + 0x84C, link + 0x68B0, link + 0x7350, GD(0x1046CD48)})
+        st32(a, u32_bits((float)w.x)), st32(a + 4, u32_bits((float)w.y)), st32(a + 8, u32_bits((float)w.z));
+}
 constexpr double kDeckY = 400;
 bool on_deck(uint32_t hull, uint32_t link) {  // anywhere on board: the main deck, the castles, the crow's nest
     const V3 l = to_local(hull, link);
     return std::fabs(l.x) < 720 && l.z > -1800 && l.z < 2250 && l.y > kDeckY - 30 && l.y < 2500;
+}
+// Beedle's ship (IkadaH vtsp), 1.5x and lowered 60 so the King of Red Lions' seat is near its deck: its deck (found
+// with the ground check, in its frame) a strip x +-300 from z 0 to 900 (y 50..130, the bow rising to 170), Beedle's hut
+// over z -300..300 (its floor 520); the King of Red Lions at its local z +600, forward of the hut
+constexpr float kBeedleScale = 1.5f;
+constexpr double kBeedleLionZ = 600, kBeedleDy = -60, kBeedleTop = 130 * kBeedleScale + kBeedleDy;
+constexpr double kBeedleHalfX = 575 * kBeedleScale, kBeedleHalfZ = 635 * kBeedleScale;
+bool on_beedle(uint32_t ship, uint32_t link) {  // anywhere on board, the hut's roof too
+    const V3 l = to_local(ship, link);
+    return std::fabs(l.x) < kBeedleHalfX && std::fabs(l.z) < kBeedleHalfZ && l.y > -40 && l.y < 1200;
 }
 // the GamePad as the game reads it (filter_pad, below): what was held at the last read and everything pressed since
 // the last step; while a deck cannon is manned its stick, A, B and ZL are the cannon's, not the game's
@@ -311,6 +333,10 @@ const std::vector<Mod>& catalogue() {
         {"phantom-stalker", "Phantom stalker", "Spooky",
          "Rarely, on an island at night, fog rolls in and Phantom Ganon comes down behind Link and hunts him across the "
          "island, until Link takes to the sea, beats him, or he fades back into the fog.", {}, true},
+        {"beedle-ship", "Beedle's ship", "Experimental",
+         "The King of Red Lions sails as Beedle's shop ship, a size bigger, with his own sail and cannon. Stop and get "
+         "out to stand on its deck, walk it and fight from it; A by him sits Link back down to sail on. Fall in, and A by "
+         "its side climbs back aboard.", {}},
     };
     return mods;
 }
@@ -368,7 +394,7 @@ bool giant_spell() {
     const int o = g_often[kGiants].load();
     return g_on[kGiants].load() && (o >= kAlways || chance(kGiantShare[o]));
 }
-const char* kEventName[kCount] = {"", "", "", "", "Night of the dead", "Haunted sea", "storm", "fog", "", "giants", "Phantom Ganon", "", "", "the deep", "Leviathan", "Molgera", "Phantom stalker"};
+const char* kEventName[kCount] = {"", "", "", "", "Night of the dead", "Haunted sea", "storm", "fog", "", "giants", "Phantom Ganon", "", "", "the deep", "Leviathan", "Molgera", "Phantom stalker", ""};
 // Molgera (bwd_class, proc 0xD9; HD fields = decomp + 0x284 up to +0x1B5C): its l_HIO (10462A68) holds the head's
 // scale (+0x1C, 1.3, also its 9 spheres' radii), the push on Link while it waits (+0x0C, 6.0) and its bite's reach
 // (+0x14, 700), set while it is out
@@ -708,8 +734,7 @@ void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, bool deck, 
     // held at the gun: put back on his spot (position and old position) if a hit knocked him off it
     if (const V3 l = to_local(hull, link); std::hypot(l.x - stand.x, l.z - stand.z) > 20) {
         const V3 w = to_world(pos_of(hull), hull_yaw, stand);
-        for (uint32_t base : {(uint32_t)kPos, 0x300u})
-            st32(link + base, u32_bits((float)w.x)), st32(link + base + 4, u32_bits((float)w.y)), st32(link + base + 8, u32_bits((float)w.z));
+        put_link(link, w);
         st32(link + 0x340, 0);
     }
     g_cannon_x = (float)ldf32(link + kPos), g_cannon_y = (float)ldf32(link + kPos + 4) + 100, g_cannon_z = (float)ldf32(link + kPos + 8);
@@ -758,6 +783,7 @@ void step(Cpu* c) {
     const bool fresh = link != last_link;  // a file loaded, a stage entered: start over
     last_link = link;
     std::string stage((const char*)mem::ptr(kStage), strnlen((const char*)mem::ptr(kStage), 8));
+    g_beedle_actor = g_beedle_lion = g_hide_body = g_hide_head = 0;  // (set again below while Beedle's ship sails)
     if (!in_mem2(link) || stage.empty() || stage == "sea_T" || stage == "Name" || stage == "ENDumi") {  // title, file select
         g_manned = -1, g_take_pad = false, g_cannon_btn = 0, g_cannon_cam = false;
         return;
@@ -765,7 +791,7 @@ void step(Cpu* c) {
     const uint32_t sv = save();
     static double settle = 0;  // no spawning while a stage is still being entered (the spawns would land in the old one)
     if (fresh) {
-        g_night = Spawner{}, g_sea = Spawner{}, g_gyctrl = 0xFFFFFFFF, g_ghost = g_bigship = g_phantom = g_leviathan = g_molgera = Single{};
+        g_night = Spawner{}, g_sea = Spawner{}, g_gyctrl = 0xFFFFFFFF, g_ghost = g_bigship = g_phantom = g_leviathan = g_molgera = g_beedle = Single{};
         g_cannon[0] = g_cannon[1] = Single{}, g_manned = -1, g_take_pad = false, g_cannon_btn = 0, g_cannon_cam = false;
         g_balls.clear();
         g_gyorg_ids.clear(), g_giant_ids.clear(), g_big_hits.clear();
@@ -814,8 +840,9 @@ void step(Cpu* c) {
     // stage also holds the islands
     const int proc = (int)ld32(link + 0x65F0);
     const bool riding = proc >= 0x86 && proc <= 0x91 && proc != 0x90, swimming = ld32(link + 0x6A70) & 0x40000;
-    const uint32_t hull = on<kBigShip>() && stage == "sea" ? g_bigship.actor(c) : 0;
-    const bool deck = hull && !riding && !swimming && on_deck(hull, link);
+    const uint32_t beedle = on<kBeedle>() && stage == "sea" ? g_beedle.actor(c) : 0;
+    const uint32_t hull = !beedle && on<kBigShip>() && stage == "sea" ? g_bigship.actor(c) : 0;
+    const bool deck = !riding && !swimming && ((hull && on_deck(hull, link)) || (beedle && on_beedle(beedle, link)));
     const bool water = riding || swimming || deck;
     const bool night = hour >= 19 || hour < 5, sea = stage == "sea" && water, boat = riding || deck;
     static const double kEvery[] = {25, 12, 5};  // seconds between spawns: Sometimes, Often, Relentless
@@ -1194,7 +1221,7 @@ void step(Cpu* c) {
     // It floats as the game floats it (its origin at the waterline, the deck 400 above the sea).
     static bool anchored = false;
     static int joining = 0;  // steps left of easing back into its place beside him
-    if (const uint32_t korl = ld32(kPlay + 0x5B3C); on<kBigShip>() && stage == "sea" && in_mem2(korl) && settled) {
+    if (const uint32_t korl = ld32(kPlay + 0x5B3C); on<kBigShip>() && !on<kBeedle>() && stage == "sea" && in_mem2(korl) && settled) {
         // his place in the hull's frame, by the main deck on its +x flank, where his get-off jump (toward his own -x)
         // goes into the hull, clear of its side (out to x 700 at the waterline; at 900 it still pushed him out a
         // little when the hull rode low)
@@ -1284,8 +1311,7 @@ void step(Cpu* c) {
                 const V3 l = to_local(hull, link);
                 if (std::fabs(l.x) > 380 && std::fabs(l.x) < 1000 && l.z > -1100 && l.z < 950) {
                     const V3 w = to_world(pos_of(hull), (int16_t)ld16(hull + kAngleY), {l.x > 0 ? 300.0 : -300.0, kDeckY + 40, l.z});
-                    for (uint32_t base : {(uint32_t)kPos, 0x300u})
-                        st32(link + base, u32_bits((float)w.x)), st32(link + base + 4, u32_bits((float)w.y)), st32(link + base + 8, u32_bits((float)w.z));
+                    put_link(link, w);
                     st32(link + 0x340, 0), st32(link + 0x6A48, u32_bits((float)w.y)), st32(link + 0x6A4C, u32_bits((float)w.y));
                     c->f[1].ps0 = 0;
                     guest_call(c, GC(0x023F6564), {link, 1});
@@ -1354,6 +1380,70 @@ void step(Cpu* c) {
         }
     }
     if (fresh) anchored = false;
+    // Beedle's ship: the King of Red Lions sails as Beedle's shop ship (made around him at sea, put on him each step
+    // by its own execute, hook_02363164), his body and head not drawn (hook_025E2E5C; his sail, the Grid actor, and
+    // his cannon, drawn only while it is out, stay). Its deck, a moving BG, is registered as his (cBgS::Release
+    // 020087EC, Regist 020086D4 on dComIfG_Bgsp, 025200D4() + 0x12A0, with his process id): his own ground and wall
+    // checks pass through it as through himself, Link's do not. Stopped, B (SHIP_GET_OFF) jumps Link up onto its deck;
+    // A by him there sits him back down (procShipReady_init 023ECA94); A while swimming by its side climbs aboard
+    if (const uint32_t korl = ld32(kPlay + 0x5B3C); on<kBeedle>() && stage == "sea" && in_mem2(korl) && settled) {
+        if (!beedle) {
+            if (riding && g_beedle.wanted(c, now)) {
+                Spawner none;
+                g_beedle.id = spawn(c, none, kBeedleShip, korl, 0, false, 0, false);
+                g_beedle.next = now + 5;
+            }
+        } else {
+            g_beedle_actor = beedle, g_beedle_lion = korl;
+            if (const uint32_t body = ld32(korl + 0x3B4), head = ld32(korl + 0x3B8); in_mem2(body) && in_mem2(head))
+                g_hide_body = ld32(body + 0x90), g_hide_head = ld32(head + 0x90);
+            static uint32_t owned = 0;  // the ship whose BG is his
+            if (const uint32_t bgw = ld32(beedle + 0x6E4); owned != g_beedle.id && in_mem2(bgw)) {
+                owned = g_beedle.id, g_beedle_mtx = 0;
+                const uint32_t bgs = guest_call(c, GC(0x025200D4)) + 0x12A0;
+                guest_call(c, GC(0x020087EC), {bgs, bgw});
+                const uint32_t failed = guest_call(c, GC(0x020086D4), {bgs, bgw, ld32(korl + 4), beedle});
+                trace("extras: Beedle's ship made around the boat (its deck his%s)", failed & 0xFF ? ": regist failed" : "");
+            }
+            // out of the boat: the get-off jump made a hop up onto its deck (speed.y +0x340 at its jump phase,
+            // link +0x69C0 1, enough to clear the deck's top by 50)
+            static bool hopped = false;
+            if (proc != 0x90) hopped = false;
+            else if (!hopped && ld32(link + 0x69C0) == 1) {
+                hopped = true;
+                const double g = -std::min(-0.5, (double)ldf32(link + 0x374)), up = kBeedleTop + 50 - to_local(beedle, link).y;
+                st32(link + 0x340, u32_bits((float)std::sqrt(2 * g * std::max(0.0, up))));
+                trace("extras: Link hops onto Beedle's ship");
+            }
+            // back in the boat: A on its deck within 500 of him, standing or walking
+            if (deck && (proc == 0x4 || proc == 0x6) && (pressed & input::kA) &&
+                std::hypot(ldf32(link + kPos) - ldf32(korl + kPos), ldf32(link + kPos + 8) - ldf32(korl + kPos + 8)) < 500) {
+                guest_call(c, GC(0x023ECA94), {link});
+                trace("extras: Link sits back down in the boat");
+            }
+            // out of the water: A while swimming by its side puts him just inside it, falling onto its deck
+            // (procFall_init 023F6564 (1, 0)): position, old position (+0x300) and the fall's start (+0x6A48/C)
+            if (swimming && (pressed & input::kA)) {
+                const V3 l = to_local(beedle, link);
+                if (std::fabs(l.x) < kBeedleHalfX + 300 && std::fabs(l.z) < kBeedleHalfZ + 300) {
+                    const V3 w = to_world(pos_of(beedle), (int16_t)ld16(beedle + kAngleY),
+                                          {std::clamp(l.x, -200.0, 200.0), kBeedleTop + 60, std::clamp(l.z, 100.0, 800.0)});
+                    put_link(link, w);
+                    st32(link + 0x340, 0), st32(link + 0x6A48, u32_bits((float)w.y)), st32(link + 0x6A4C, u32_bits((float)w.y));
+                    c->f[1].ps0 = 0;
+                    guest_call(c, GC(0x023F6564), {link, 1});
+                    trace("extras: Link climbs out of the water onto Beedle's ship");
+                }
+            }
+            if (static double t = 0; now - t >= 1) {  // where Link is about it, once a second (the trace)
+                t = now;
+                const V3 l = to_local(beedle, link);
+                trace("extras: Beedle's ship: Link proc %#x deck %d swim %d at %.0f %.0f %.0f", proc, deck, swimming, l.x, l.y, l.z);
+            }
+        }
+    } else if (const uint32_t a = g_beedle.actor(c); a && !on<kBeedle>()) {
+        guest_call(c, GC(0x025D57E4), {g_beedle.id});  // switched off: it goes
+    }
     deck_cannons(c, sv, link, hull, deck, proc, pressed, now);
     if (static double t = 0; hull && now - t >= 1) {  // where Link is about the Big ship, once a second (the trace)
         t = now;
@@ -1557,3 +1647,48 @@ static void seahat_rides(Cpu* c, int reg) {
 extern "C" void site_023CC7F0(Cpu* c) { seahat_rides(c, 5); }
 extern "C" void site_023CC984(Cpu* c) { seahat_rides(c, 4); }
 extern "C" void site_023CCC88(Cpu* c) { seahat_rides(c, 9); }
+
+// daObj_Ikada's execute (02363164; r3 the actor): Beedle's ship as the King of Red Lions' hull is put around him before
+// it runs (its execute floats it on the water and moves its BG from where it is), his way, 1.5x, his speed its own for
+// its wake (it makes one above speedF 2)
+extern "C" void f_02363164_orig(Cpu* c);
+extern "C" void hook_02363164(Cpu* c) {
+    using namespace mods::extras;
+    if (const uint32_t a = c->r[3], k = g_beedle_lion; a && a == g_beedle_actor && in_mem2(k)) {
+        const int16_t yaw = (int16_t)ld16(k + kAngleY);
+        const V3 at = to_world(pos_of(k), yaw, {0, 0, -kBeedleLionZ});
+        st32(a + kPos, u32_bits((float)at.x)), st32(a + kPos + 8, u32_bits((float)at.z));
+        st16(a + 0x322, (uint16_t)yaw), st16(a + kAngleY, (uint16_t)yaw);
+        for (int i = 0; i < 3; i++) st32(a + 0x330 + 4 * i, u32_bits(kBeedleScale));
+        st32(a + 0x370, u32_bits(std::fabs((float)ldf32(k + 0x370))));
+    }
+    f_02363164_orig(c);
+}
+// daObj_Ikada::setMtx (02360420): its model takes the actor's scale, but its BG's matrix (mMtx, which its dBgW points
+// at) is position and rotation only: for Beedle's ship it is scaled after, so its deck is as big as it looks; and it
+// sits kBeedleDy lower (its execute sets its height on the water just before)
+extern "C" void f_02360420_orig(Cpu* c);
+extern "C" void hook_02360420(Cpu* c) {
+    using namespace mods::extras;
+    const uint32_t a = c->r[3];
+    const bool ours = a && a == g_beedle_actor;
+    if (ours) st32(a + kPos + 4, u32_bits((float)(ldf32(a + kPos + 4) + kBeedleDy)));
+    f_02360420_orig(c);
+    if (!ours) return;
+    if (const uint32_t bgw = ld32(a + 0x6E4); !g_beedle_mtx && in_mem2(bgw))  // the matrix in the ship its BG points at
+        for (uint32_t o = 0; o < 0x200 && !g_beedle_mtx; o += 4)
+            if (const uint32_t m = ld32(bgw + o); m >= a && m < a + 0x2000 && std::fabs(ldf32(m + 0xC) - ldf32(a + kPos)) < 0.5 &&
+                std::fabs(ldf32(m + 0x1C) - ldf32(a + kPos + 4)) < 0.5 && std::fabs(ldf32(m + 0x2C) - ldf32(a + kPos + 8)) < 0.5)
+                g_beedle_mtx = m;
+    if (const uint32_t m = g_beedle_mtx)
+        for (uint32_t r = 0; r < 3; r++)
+            for (uint32_t k = 0; k < 3; k++) st32(m + 16 * r + 4 * k, u32_bits((float)ldf32(m + 16 * r + 4 * k) * kBeedleScale));
+}
+// mDoExt_modelEntryDL (025E2E5C; r3 the J3DModel): the King of Red Lions' body and head are not drawn while he sails
+// as Beedle's ship (still animated: his sail and cannon hang on his joints)
+extern "C" void f_025E2E5C_orig(Cpu* c);
+extern "C" void hook_025E2E5C(Cpu* c) {
+    using namespace mods::extras;
+    if (const uint32_t m = c->r[3]; m && (m == g_hide_body || m == g_hide_head)) return;
+    f_025E2E5C_orig(c);
+}
