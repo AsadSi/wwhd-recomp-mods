@@ -193,7 +193,7 @@ bool shop_draw(const float* pad) {
     return close;
 }
 // Tetra's ship for sale: the Bomb Shop's panel, as the shop's (above)
-std::atomic<bool> g_ship_buy{false};
+std::atomic<bool> g_ship_buy{false}, g_ship_sold{false};  // asked for; hers already (told by the game step)
 bool ship_sale_draw(const float* pad) {
     const input::PadState st = input_map::controller_state(input_map::current(), pad);
     const uint32_t now = st.buttons | input::live_buttons();
@@ -217,7 +217,7 @@ bool ship_sale_draw(const float* pad) {
     if (ImGui::Begin("##ship_sale", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav)) {
         ImGui::TextUnformatted("For sale, no questions asked");
         ImGui::Separator();
-        ImGui::Selectable(g_shop_news.load()[0] == 'S' ? "Tetra's ship   SOLD" : "Tetra's ship   2500 rupees", true);
+        ImGui::Selectable(g_ship_sold ? "Tetra's ship   SOLD" : "Tetra's ship   2500 rupees", true);
         ImGui::Separator();
         ImGui::Text("You have %d rupees", g_shop_rupees.load());
         if (const char* news = g_shop_news; *news) ImGui::TextUnformatted(news);
@@ -2636,7 +2636,7 @@ void step(Cpu* c) {
                 trace("extras: Tetra's ship bought for %d rupees", kShipPrice);
             }
         }
-        if (stage == "Obombh") g_shop_rupees = wallet();
+        if (stage == "Obombh") g_shop_rupees = wallet(), g_ship_sold = owns_ship();
     }
     // Warp: F9 (the toggle on) opens the places; the one picked is made the next stage change, Link on his boat (or
     // test aid: WWHD_TEST_WARP=<place, part of its name> once, 5 s after a file loads). Going on to a stall: once
