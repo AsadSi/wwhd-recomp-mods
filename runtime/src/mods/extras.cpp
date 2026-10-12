@@ -752,7 +752,7 @@ void omens(Cpu* c, int k, double now, double t) {
     if (k == kArmada && rand() % 3 == 0) guest_call(c, GC(0x025E1988), {0x2852});
 }
 // the events that come with warning signs, and their place: 7000 ahead of Link (the drowned's where he is: they come
-// for the ship, and leave it be once he has sailed off)
+// for the ship, which sails on with him, so only making land escapes them)
 bool warned(int k) {
     return k == kSea || k == kPhantom || k == kLeviathan || k == kMolgera || k == kCalm || k == kCyclone || k == kMaelstrom ||
            k == kArmada || k == kOcto || k == kDrowned;
@@ -813,7 +813,7 @@ void direct(Cpu* c, uint32_t sv, uint32_t link, double now, bool night, bool wat
     // they are (2500 further off than when they began); sailing on toward it (or waiting) brings it
     if (g_warn >= 0) {
         const double d = std::hypot(x - g_warn_x, z - g_warn_z);
-        const bool fled = d > g_warn_far + 2500, landed = ashore || isle < 3500;
+        const bool fled = g_warn != kDrowned && d > g_warn_far + 2500, landed = ashore || isle < 3500;
         if (fled || landed || !g_on[g_warn].load()) {
             trace("extras: the signs of %s fade (%s)", event_name(g_warn), landed ? "Link made land" : fled ? "Link sailed away" : "switched off");
             if (fled) g_cool = std::max(g_cool, now + quiet() / 3);
