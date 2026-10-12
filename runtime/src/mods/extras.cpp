@@ -2269,6 +2269,12 @@ void step(Cpu* c) {
         if (on<kWarp>() && keys[kVK_F9] && !f9_was && !overlay::captures()) g_warp_sel = 0, g_warp_go = -1, overlay::show_panel(warp_draw);
         f9_was = keys[kVK_F9];
         if (fresh && test_warp && test_at == -1) test_at = now + 5;
+        // (and a test driver's: live pad bit 29 warps to the first open-sea place)
+        static bool live_was = false;
+        if (const bool live_now = input::live_buttons() & 0x20000000u; live_now && !live_was)
+            for (int i = 0; i < (int)std::size(kPlaces); i++)
+                if (strstr(kPlaces[i].name, "Open sea")) { g_warp_go = i; break; }
+        live_was = input::live_buttons() & 0x20000000u;
         if (test_at > 0 && now >= test_at) {
             test_at = -2;
             for (int i = 0; i < (int)std::size(kPlaces); i++)
