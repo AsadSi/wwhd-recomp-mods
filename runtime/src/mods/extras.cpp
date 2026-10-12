@@ -774,10 +774,10 @@ void direct(Cpu* c, uint32_t sv, uint32_t link, double now, bool night, bool wat
     // Night of the dead: a roll as night falls (or, arriving at night, 2 minutes in), for that night
     static bool was_night = false;
     const bool dusk = night && !was_night && now - g_file_at >= 120;
-    if (dusk && sailor && rolls(kNight, 1 / 3.0)) begin(kNight, now), g_until[kNight] = 1e18;
+    if (dusk && sailor && g_until[kNight] <= now && rolls(kNight, 1 / 3.0)) begin(kNight, now), g_until[kNight] = 1e18;
     if (!night && g_until[kNight] > 0) finish(c, kNight, now, "dawn");
     // Blood moon: a roll as night falls too, twice the chance at full moon (dKy_moon_type_chk 02560828: 0 full, 3 new)
-    if (dusk && sailor && rolls(kBlood, guest_call(c, GC(0x02560828)) == 0 ? 0.5 : 0.2)) begin(kBlood, now), g_until[kBlood] = 1e18;
+    if (dusk && sailor && g_until[kBlood] <= now && rolls(kBlood, guest_call(c, GC(0x02560828)) == 0 ? 0.5 : 0.2)) begin(kBlood, now), g_until[kBlood] = 1e18;
     if (!night && g_until[kBlood] > 0) finish(c, kBlood, now, "dawn");
     if (now - g_file_at >= 120) was_night = night;
 
@@ -911,8 +911,7 @@ void cannon_hits(Cpu* c, double now) {
             if (const double d = m ? std::hypot(b.second.x - ldf32(m + kPos), b.second.y - ldf32(m + kPos + 4), b.second.z - ldf32(m + kPos + 8)) : 1e9;
                 d < (m == lev ? 500 : 350) * shot && d < best)
                 best = d, on = m;
-        if (on && shot > 1) {
-            int& pool = on == lev ? g_leviathan_pool : g_molgera_pool;
+        if (int& pool = on == lev ? g_leviathan_pool : g_molgera_pool; on && shot > 1 && pool > 0) {
             pool -= (int)std::lround(4 * (shot - 1));
             if (on == lev && pool <= 0) g_leviathan_slain = true;
             trace("extras: a bigger shot bursts on %s (%d left)", on == lev ? "the Leviathan" : "Molgera", pool);
@@ -975,7 +974,9 @@ void fire(Cpu* c, uint32_t sv, uint32_t link, V3 from, int16_t yaw, int16_t up, 
     guest_call(c, GC(0x025DEAB4), {layer});
     if (!in_mem2(ball)) return;
     g_balls.push_back({ld32(ball + 4), pos_of(ball)});
-    for (int i = 0; i < 3; i++) st32(ball + 0x330 + 4 * i, u32_bits(kShot[upgrade(kUpShot)]));  // (Bigger shots: bigger balls)
+    // (Bigger shots: bigger balls, at most 1.5x to look at: its burst's effects take the ball's size, and at 3x they
+    // filled the screen; the harm is the full size's, cannon_hits)
+    for (int i = 0; i < 3; i++) st32(ball + 0x330 + 4 * i, u32_bits(std::min(1.5f, kShot[upgrade(kUpShot)])));
     guest_call(c, GC(0x020CB89C), {ball, 8});
     st32(ball + 0x370, u32_bits((float)(kShotSpeed * cos(e)))), st32(ball + 0x340, u32_bits((float)(kShotSpeed * sin(e)))), st32(ball + 0x374, u32_bits(-2.5f));
     guest_call(c, GC(0x025E1988), {0x2852});
@@ -1685,12 +1686,10 @@ void step(Cpu* c) {
         static uint32_t placed = 0;
         static double caught_at = -1, wrench = 0;
         static float lx = 0, ly = 0;
-        if (!riding) {
-            if (!always(kMaelstrom) && g_until[kMaelstrom] > 0) finish(c, kMaelstrom, now, "Link left the boat");
-        } else if (g_whirl_fading) {
-        } else if (g_whirl.wanted(c, now)) {
+        if (g_whirl_fading) {
+        } else if (g_whirl.wanted(c, now)) {  // (beside the boat, wherever Link is: on the craft in tow it holds them both)
             Spawner none;
-            g_whirl.id = spawn(c, none, Monster{0x11B, -1, 0x001100FF}, link, 3000, 0, 0, false, 0, true);
+            g_whirl.id = spawn(c, none, Monster{0x11B, -1, 0x001100FF}, korl, 3000, 0, 0, false, 0, true);
             g_whirl.next = now + 10;
         } else if (const uint32_t w = g_whirl.actor(c)) {
             if (placed != g_whirl.id) placed = g_whirl.id, caught_at = -1, wrench = 0, trace("extras: the sea begins to turn: a whirlpool opens");
@@ -1819,7 +1818,7 @@ void step(Cpu* c) {
         if (live(kDrowned, now) && (night || g_until[kDrowned] > now)) {
             static double next = 0;
             g_night.prune(c);
-            if (now >= next && g_night.ids.size() < 3) {
+            if (now >= next && g_night.ids.size() < (beedle && g_craft == &kRaftCraft ? 2u : 3u)) {  // (the raft: two at most)
                 spawn(c, g_night, kRedead, link, 200 + rand() % 250, 1, 30, true, 0, false, true);  // behind him: over the rail unseen
                 next = now + 12;
             }
