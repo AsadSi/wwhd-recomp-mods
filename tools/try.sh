@@ -8,7 +8,7 @@ pgrep -x wwhd >/dev/null && { echo "The game is already running; close it first.
 [ -f "$ROOT/save/haunted.wwstate" ] || { echo "save/haunted.wwstate is missing."; exit 1; }
 SPOOKY=(NIGHT_DEAD HAUNTED_SEA STORM FOG GIANT_SEAHATS PHANTOM_GANON HORROR_AUDIO DEEP LEVIATHAN MOLGERA PHANTOM_STALKER BIG_SHIP BEEDLE_SHIP
         DEAD_CALM PHOTO_MODE SECOND_GUNNER BLOOD_MOON CYCLONES MAELSTROM ARMADA BIG_OCTO WRONG_LION DROWNED BOARDING TIME
-        RAFT FAIR_WIND SCARE_PACING SHIP_UPGRADES)
+        RAFT FAIR_WIND SCARE_PACING SHIP_UPGRADES WARP)
 ON=(); EVENT=; NOTE=; EXTRA=
 SHIP="Big ship (keys: move WASD, A = K/Space, B = J, ZL = Left Shift, pause/items = Return):
   Tetra's ship is a boat of its own: once you are out at sea it waits at anchor a little way off your left.
@@ -83,6 +83,8 @@ mans the other). Molgera 80 health; Phantom 18 shots drive him off." ;;
 maelstrom, Molgera, Titanic Phantom and the Lion all within the first ~2 minutes; the cyclone at 7 min. Upgrades:
 sailing 3, guns 3, shots 3 (no shop). Claude drives;
 take the controller any time." ;;
+  windfall) ON=(SHIP_UPGRADES WARP FAIR_WIND); export WWHD_TEST_WARP="Zunari"; NOTE="Warps to Windfall 5 s in, then on foot beside Zunari's stall: talk to him and his ship fittings open after.
+F9 opens the warp list any time (Warp on)." ;;
   octo-phantom) ON=(BIG_OCTO PHANTOM_GANON HORROR_AUDIO RAFT FAIR_WIND SHIP_UPGRADES SECOND_GUNNER); EVENT="octo@+30;phantom@+240"
   AT_NIGHT=1; RECORD=1; export WWHD_TEST_UPGRADES=3F WWHD_MOD_PHANTOM_GANON_CHOICE=1
   NOTE="At night, the big raft in tow, upgrades maxed. About 30 s in, the sea goes still and dark; at 1 min a whirlpool opens
@@ -153,7 +155,7 @@ Everything at once. The first minute is yours: get on the deck, try the helm and
   OFTEN=2; NOTE="$SHIP
 The long soak, played: every spooky mod on, How often at Often, nothing forced. Sail out into open sea (away from
 islands) and keep going; the events come by chance, a roll a minute (none within reach of an island). Play as you like." ;;
-  *) echo "Usage: tools/try.sh <octo-phantom|chaos|full|raft|shop|raft-bosses|tour|tour-rest|long|beedle|beedle-guns|gunner|crew|boarding|drowned|calm|photo|blood|cyclone|maelstrom|armada|octo|lion|soak|plain|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim|cannon-boat|cannon-boat-deck>"; exit 2 ;;
+  *) echo "Usage: tools/try.sh <windfall|octo-phantom|chaos|full|raft|shop|raft-bosses|tour|tour-rest|long|beedle|beedle-guns|gunner|crew|boarding|drowned|calm|photo|blood|cyclone|maelstrom|armada|octo|lion|soak|plain|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim|cannon-boat|cannon-boat-deck>"; exit 2 ;;
 esac
 for m in "${SPOOKY[@]}"; do export WWHD_MOD_$m=0; done
 for m in ${ON[@]+"${ON[@]}"}; do export WWHD_MOD_$m=1; [ -n "${OFTEN:-}" ] && export WWHD_MOD_${m}_OFTEN=$OFTEN; done

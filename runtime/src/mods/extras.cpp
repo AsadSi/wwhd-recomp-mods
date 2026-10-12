@@ -39,6 +39,7 @@
 #include "../input_map.h"
 #include "../true60.h"
 #include "../overlay/overlay.h"
+#include "../savestate.h"
 #include "../screenshot.h"
 #include "../platform/keycodes.h"
 #include "imgui.h"
@@ -46,7 +47,7 @@
 
 namespace mods::extras {
 namespace {
-enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kAudio, kDeep, kLeviathan, kMolgera, kStalker, kBeedle, kCalm, kPhoto, kGunner, kBlood, kCyclone, kMaelstrom, kArmada, kOcto, kWrongLion, kDrowned, kBoarding, kRaft, kFairWind, kPacing, kUpgrades, kCount };  // the catalogue's order
+enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kAudio, kDeep, kLeviathan, kMolgera, kStalker, kBeedle, kCalm, kPhoto, kGunner, kBlood, kCyclone, kMaelstrom, kArmada, kOcto, kWrongLion, kDrowned, kBoarding, kRaft, kFairWind, kPacing, kUpgrades, kWarp, kCount };  // the catalogue's order
 std::atomic<bool> g_on[kCount];
 std::atomic<int> g_choice[kCount];
 std::atomic<int> g_often[kCount];
@@ -143,7 +144,7 @@ bool shop_draw(const float* pad) {
     // the controller as the game sees it (the player's controls: on a Nintendo layout A is the right-hand button), its
     // stick as up and down; and the keyboard's own keys
     const input::PadState st = input_map::controller_state(input_map::current(), pad);
-    const uint32_t now = st.buttons | (st.ly > 0.5f ? input::kUp : 0) | (st.ly < -0.5f ? input::kDown : 0);
+    const uint32_t now = st.buttons | input::live_buttons() | (st.ly > 0.5f ? input::kUp : 0) | (st.ly < -0.5f ? input::kDown : 0);
     static uint32_t prev = 0;
     static bool keys_prev[256], fresh = true;
     bool keys[256];
@@ -179,6 +180,51 @@ bool shop_draw(const float* pad) {
         ImGui::Text("You have %d rupees", g_shop_rupees.load());
         if (const char* news = g_shop_news; *news) ImGui::TextUnformatted(news);
         ImGui::TextDisabled("A buy    B leave");
+    }
+    ImGui::End();
+    return close;
+}
+// Warp: places on the sea stage, by the sea's 7x7 grid of 100000 squares (room = row * 7 + column + 1, the centre
+// square room 25 at the origin): Link arrives there on his boat; with `near` (an actor's process name, e.g. Zunari's
+// daNpc_Rsh1_c 0x160) he then goes on, on foot, to beside it once its room has made it (a second stage change)
+struct Place { const char* name; float x, z; int16_t near; };
+constexpr Place kPlaces[] = {
+    {"Windfall: Zunari's stall", 0, -191000, 0x160}, {"Windfall, by boat", 0, -191000, 0}, {"Outset, by boat", -200000, 291000, 0},
+    {"Open sea, south-west", -160000, 240000, 0},    {"Open sea, north-east", 150000, -250000, 0},
+};
+int sea_room(float x, float z) { return (int)std::lround(z / 1e5 + 3) * 7 + (int)std::lround(x / 1e5 + 3) + 1; }
+std::atomic<int> g_warp_sel{0}, g_warp_go{-1};
+bool warp_draw(const float* pad) {
+    const input::PadState st = input_map::controller_state(input_map::current(), pad);
+    const uint32_t now = st.buttons | input::live_buttons() | (st.ly > 0.5f ? input::kUp : 0) | (st.ly < -0.5f ? input::kDown : 0);
+    static uint32_t prev = 0;
+    static bool keys_prev[256], fresh = true;
+    bool keys[256];
+    input::held_keys(keys);
+    if (fresh) prev = now, std::copy(keys, keys + 256, keys_prev), fresh = false;
+    auto hit = [&](uint32_t b, std::initializer_list<int> ks) {
+        bool k = false;
+        for (int c : ks) k |= keys[c] && !keys_prev[c];
+        return (now & b && !(prev & b)) || k;
+    };
+    constexpr int n = (int)std::size(kPlaces);
+    int sel = g_warp_sel;
+    if (hit(input::kDown, {kVK_ANSI_S, kVK_DownArrow})) sel = (sel + 1) % n;
+    if (hit(input::kUp, {kVK_ANSI_W, kVK_UpArrow})) sel = (sel + n - 1) % n;
+    g_warp_sel = sel;
+    const bool go = hit(input::kA, {kVK_ANSI_K, kVK_Space, kVK_Return}), close = go || hit(input::kB, {kVK_ANSI_J, kVK_Escape, kVK_F9});
+    if (go) g_warp_go = sel;
+    prev = now, std::copy(keys, keys + 256, keys_prev);
+    if (close) fresh = true;
+    const ImGuiIO& io = ImGui::GetIO();
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowBgAlpha(0.85f);
+    if (ImGui::Begin("##warp", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav)) {
+        ImGui::TextUnformatted("Warp to");
+        ImGui::Separator();
+        for (int i = 0; i < n; i++) ImGui::Selectable(kPlaces[i].name, i == sel);
+        ImGui::Separator();
+        ImGui::TextDisabled("A go    B back");
     }
     ImGui::End();
     return close;
@@ -517,6 +563,9 @@ const std::vector<Mod>& catalogue() {
          "Zunari on Windfall (who sells the sail) also fits out your ship: after you talk to him, buy faster sailing, faster "
          "guns and bigger shots, three levels each (500, 900 and 1500 rupees). They are kept in your Quest Log when you save.",
          {}},
+        {"warp", "Warp", "Gameplay",
+         "F9 opens a list of places (Zunari's stall on Windfall, Outset, open sea far from land); pick one and Link is "
+         "there, on his boat or, at a stall, on foot beside it. Not during a cutscene or with a menu open.", {}},
     };
     return mods;
 }
@@ -2204,6 +2253,51 @@ void step(Cpu* c) {
                 guest_call(c, GC(0x025E1988), {0x836});
                 g_shop_news = "Fitted! Save your game to keep it.";
                 trace("extras: bought %s level %d for %d rupees", kUpName[b], lv + 1, kUpPrice[lv]);
+            }
+        }
+    }
+    // Warp: F9 (the toggle on) opens the places; the one picked is made the next stage change, Link on his boat (or
+    // test aid: WWHD_TEST_WARP=<place, part of its name> once, 5 s after a file loads). Going on to a stall: once
+    // the actor is there (in the room just entered, within 20 s) a second, on foot 250 before it, the boat where it is
+    {
+        static bool f9_was = false;
+        static double test_at = -1, hop_until = -1;
+        static int16_t hop_to = 0;
+        static const char* test_warp = getenv("WWHD_TEST_WARP");
+        bool keys[256];
+        input::held_keys(keys);
+        if (on<kWarp>() && keys[kVK_F9] && !f9_was && !overlay::captures()) g_warp_sel = 0, g_warp_go = -1, overlay::show_panel(warp_draw);
+        f9_was = keys[kVK_F9];
+        if (fresh && test_warp && test_at == -1) test_at = now + 5;
+        if (test_at > 0 && now >= test_at) {
+            test_at = -2;
+            for (int i = 0; i < (int)std::size(kPlaces); i++)
+                if (strstr(kPlaces[i].name, test_warp)) { g_warp_go = i; break; }
+        }
+        if (const int i = g_warp_go.exchange(-1); i >= 0) {
+            const Place& p = kPlaces[i];
+            const float at[3] = {p.x, 0, p.z};
+            std::string why;
+            if (ss::warp(c, "sea", sea_room(p.x, p.z), at, (int16_t)0x8000, at, true, why)) {
+                hop_to = p.near, hop_until = p.near ? now + 25 : -1;
+                trace("extras: warp to %s (room %d)", p.name, sea_room(p.x, p.z));
+            } else {
+                ss::notice("Warp: " + why);
+                trace("extras: no warp to %s: %s", p.name, why.c_str());
+            }
+        }
+        if (hop_until > 0 && now < hop_until && settled && !fresh) {
+            static const uint32_t out = mem::host_alloc(4);
+            st32(out, 0);
+            guest_call(c, GC(0x025D5578), {(uint32_t)(uint16_t)hop_to, out});
+            const uint32_t a = ld32(out), korl = ld32(kPlay + 0x5B3C);
+            std::string why;
+            if (in_mem2(a) && in_mem2(korl)) {
+                const double t = (int16_t)ld16(a + kAngleY) * M_PI / 32768;
+                const float at[3] = {(float)(ldf32(a + kPos) + sin(t) * 250), (float)ldf32(a + kPos + 4), (float)(ldf32(a + kPos + 8) + cos(t) * 250)};
+                const float boat[3] = {(float)ldf32(korl + kPos), (float)ldf32(korl + kPos + 4), (float)ldf32(korl + kPos + 8)};
+                if (ss::warp(c, "sea", (int8_t)ld8(a + kRoom), at, (int16_t)(ld16(a + kAngleY) + 0x8000), boat, false, why))
+                    hop_until = -1, trace("extras: on to beside it (proc %#x at %.0f %.0f)", hop_to, at[0], at[2]);
             }
         }
     }

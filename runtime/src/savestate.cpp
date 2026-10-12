@@ -851,6 +851,43 @@ void apply_hd_sections(Cpu* c, const pstate::State& s) {
     }
 }
 
+// Link's place, by a stage change: the void-out restart (dStage_restartRoom / dStage_playerInit point -1)
+// at `pos`, or with the boat (`ship_pos`) the restart the Song of Passing uses (daPy_lk_c tact,
+// dStage_turnRestart: point -3, the boat at its position by dStage_setShipPos, Link on it with start mode 2
+// or standing beside it)
+void place_link(Cpu* c, const std::string& stage, int room, int layer, const float pos[3], int16_t angle, const float* ship_pos,
+                int16_t ship_angle, bool on_ship) {
+    const uint32_t sv = ld32(kSaveInfoPtr), rs = sv + kRestart, buf = scratch();
+    st8(rs + 0, (uint8_t)room);
+    st16(rs + 0x16, (uint16_t)angle);
+    for (int i = 0; i < 3; i++) stf32(rs + 0x18 + 4 * i, pos[i]);
+    // player parameters (daPy_lk_c::setParamData): room, start mode 0 (standing), no start event
+    st32(rs + 0x24, (uint32_t)(room & 0x3F) | 0xFF000000u);
+    stf32(rs + 0x28, 0.0);  // last scene speed and mode: a plain start
+    st32(rs + 0x2C, 0);
+    char name[8] = {};
+    memcpy(name, stage.data(), std::min<size_t>(stage.size(), 7));
+    for (int i = 0; i < 8; i++) st8(kNextStage + i, (uint8_t)name[i]);
+    uint16_t point = 0xFFFF;  // point -1: the restart position
+    if (ship_pos) {
+        // daPy_lk_c::getDayNightParamData without the Wind Waker parts (event 0xCC, flag 0x40: the
+        // conducting animation): room, start mode 2 on the boat / 0 beside it, no event, boat flag 0x100
+        uint32_t param = (uint32_t)(room & 0x3F) | (uint32_t)(on_ship ? 2 : 0) << 12 | 0xFF000000u | 0x100u;
+        for (int i = 0; i < 3; i++) {
+            stf32(buf + 4 * i, pos[i]);
+            stf32(buf + 0x10 + 4 * i, ship_pos[i]);
+        }
+        guest_call(c, fn_turnRestartSet, {sv + kTurnRestart, buf, (uint32_t)(uint16_t)angle, (uint32_t)(uint8_t)room, param,
+                                          buf + 0x10, (uint32_t)(uint16_t)ship_angle, 1});
+        point = 0xFFFD;  // -3: the turn restart
+    }
+    st16(kNextStage + 8, point);
+    st8(kNextStage + 10, (uint8_t)room);
+    st8(kNextStage + 11, (uint8_t)layer);
+    st8(kNextStage + 13, 0);  // wipe: fade
+    st8(kNextStage + 12, 1);  // enabled
+}
+
 // puts a portable state into the running game; false + retry when the game is not ready yet
 bool apply_portable(Cpu* c, const pstate::State& s, std::string& why, bool& retry) {
     if (!gameplay_ready(why, retry)) return false;
@@ -864,39 +901,8 @@ bool apply_portable(Cpu* c, const pstate::State& s, std::string& why, bool& retr
     guest_call(c, fn_eventInit, {info + 0x1158});             // dSv_info_c::mTmp (temporary flags)
     apply_hd_sections(c, s);
     guest_call(c, fn_refreshGame, {0});  // SaveMgr: item buttons and equipment from the loaded data (does not use its object)
-    // Link's place: the void-out restart (dStage_restartRoom / dStage_playerInit point -1), or with the
-    // boat the restart the Song of Passing uses (daPy_lk_c tact, dStage_turnRestart: point -3, the
-    // boat back at its position by dStage_setShipPos, Link on it with start mode 2)
-    const uint32_t rs = sv + kRestart;
-    st8(rs + 0, (uint8_t)s.room);
-    st16(rs + 0x16, (uint16_t)s.angle_y);
-    for (int i = 0; i < 3; i++) stf32(rs + 0x18 + 4 * i, s.pos[i]);
-    // player parameters (daPy_lk_c::setParamData): room, start mode 0 (standing), no start event
-    st32(rs + 0x24, (uint32_t)(s.room & 0x3F) | 0xFF000000u);
-    stf32(rs + 0x28, 0.0);  // last scene speed and mode: a plain start
-    st32(rs + 0x2C, 0);
-    char name[8] = {};
-    memcpy(name, s.stage.data(), std::min<size_t>(s.stage.size(), 7));
-    for (int i = 0; i < 8; i++) st8(kNextStage + i, (uint8_t)name[i]);
-    uint16_t point = 0xFFFF;  // point -1: the restart position
-    if (s.has_ship) {
-        // daPy_lk_c::getDayNightParamData without the Wind Waker parts (event 0xCC, flag 0x40: the
-        // conducting animation): room, start mode 2 on the boat / 0 beside it, no event, boat flag 0x100
-        uint32_t param = (uint32_t)(s.room & 0x3F) | (uint32_t)(s.on_ship ? 2 : 0) << 12 | 0xFF000000u | 0x100u;
-        for (int i = 0; i < 3; i++) {
-            stf32(buf + 4 * i, s.pos[i]);
-            stf32(buf + 0x10 + 4 * i, s.ship_pos[i]);
-        }
-        guest_call(c, fn_turnRestartSet, {sv + kTurnRestart, buf, (uint32_t)(uint16_t)s.angle_y, (uint32_t)(uint8_t)s.room, param,
-                                          buf + 0x10, (uint32_t)(uint16_t)s.ship_angle_y, 1});
-        point = 0xFFFD;  // -3: the turn restart
-    }
-    st16(kNextStage + 8, point);
-    st8(kNextStage + 10, (uint8_t)s.room);
-    st8(kNextStage + 11, (uint8_t)s.layer);
-    st8(kNextStage + 13, 0);  // wipe: fade
     if (s.controller) input::set_pro_controller(restored_pro_controller(s.controller, input::pro_controller()));
-    st8(kNextStage + 12, 1);  // enabled
+    place_link(c, s.stage, s.room, s.layer, s.pos, (int16_t)s.angle_y, s.has_ship ? s.ship_pos : nullptr, (int16_t)s.ship_angle_y, s.on_ship);
     return true;
 }
 
@@ -1118,6 +1124,15 @@ std::vector<Timed> parse_timed(const char* var) {
 }
 
 }  // namespace
+
+bool warp(Cpu* c, const std::string& stage, int room, const float pos[3], int16_t angle, const float* ship_pos, bool on_ship,
+          std::string& why) {
+    bool retry;
+    if (!gameplay_ready(why, retry) || !player_has_control(c, why)) return false;
+    CallScope scope(c);
+    place_link(c, stage, room, -1, pos, angle, ship_pos, angle, on_ship);
+    return true;
+}
 
 uint32_t snap_ld32(uint32_t ea) {
     if (!g_check) return ld32(ea);

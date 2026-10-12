@@ -97,6 +97,10 @@ std::string states_dir();               // where slots live (created on first us
 std::string last_message();             // short status for the title bar ("" when stale)
 // a short notice shown the same way (overlay toast, title bar) for a few seconds: screenshots
 void notice(const std::string& text);
+// a mod's warp: Link to `pos` in `stage`/`room` by a stage change (the portable state's), with the boat at `ship_pos`
+// (he on it, or standing beside it) or without; false with `why` when he is not free to go (an event, a menu...)
+bool warp(Cpu* c, const std::string& stage, int room, const float pos[3], int16_t angle, const float* ship_pos, bool on_ship,
+          std::string& why);
 
 // ---- game thread: call at the frame boundary (top of the per-frame function) ----
 void service(Cpu* c);

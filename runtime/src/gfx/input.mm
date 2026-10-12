@@ -555,6 +555,9 @@ bool read_second(PadState& s) {
 }
 void set_pro_controller(bool on) { g_pro = on; LOG("[input] keyboard/controller act as %s", on ? "Pro Controller" : "GamePad"); }
 
+std::atomic<uint32_t> g_live_buttons{0};
+uint32_t live_buttons() { return g_live_buttons.load(); }
+
 PadState read() {
     static const std::vector<Press> script = scripted();
     static const std::vector<Stick> sticks = scripted_stick();
@@ -583,6 +586,7 @@ PadState read() {
     static const char* live = getenv("WWHD_LIVE_PAD");
     if (live) {
         static PadState lp;
+        g_live_buttons = lp.buttons;  // (for the mods' panels, which have the input while the game has none)
         static timespec seen{};
         struct stat st;
         if (stat(live, &st) == 0 && (st.st_mtimespec.tv_sec != seen.tv_sec || st.st_mtimespec.tv_nsec != seen.tv_nsec))

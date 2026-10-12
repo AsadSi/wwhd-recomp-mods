@@ -701,6 +701,7 @@ static void apply_scenario(PadState& s) {
 
 static std::atomic<bool> g_pro{getenv("WWHD_PRO_CONTROLLER") != nullptr};
 bool pro_controller() { return g_pro.load(std::memory_order_relaxed); }
+uint32_t live_buttons() { return 0; }  // (the live pad test aid is the Mac input's)
 void set_pro_controller(bool on) { g_pro = on; LOG("[input] keyboard/controller act as %s", on ? "Pro Controller" : "GamePad"); }
 
 PadState read() {

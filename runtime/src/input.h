@@ -27,6 +27,7 @@ void set_touch(bool down, float x, float y);  // mouse on the GamePad window
 // Which Wii U controller the keyboard and host controllers act as. In Pro Controller mode the
 // GamePad stays connected (its screen and touch still work) but its buttons and sticks are idle.
 bool pro_controller();
+uint32_t live_buttons();  // what a test driver holds through WWHD_LIVE_PAD (the mods' panels read it)
 void set_pro_controller(bool on);
 
 void init();       // main thread, after NSApplication exists
