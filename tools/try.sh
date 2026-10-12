@@ -57,6 +57,22 @@ Then let it take you there (about 7000 off) to see what waits." ;;
   lion) ON=(WRONG_LION); EVENT="lion@+20;lion@+40;lion@+60"; AT_NIGHT=1; NOTE="It is night. Set sail (A). At about 20, 40 and 60 s the King of Red Lions laughs and swerves off by himself
 for a few seconds." ;;
   wrecks) ON=(WRECKS); EVENT="wrecks@+20"; AT_NIGHT=1; NOTE="It is night. At about 20 s fog rolls in over a graveyard of ships ahead: sail among the sunken hulks (Poes about)." ;;
+  tour) ON=(BEEDLE_SHIP SECOND_GUNNER CREW BOARDING PHOTO_MODE DROWNED ARMADA WRONG_LION DEAD_CALM SIREN WRECKS MAELSTROM CYCLONES BLOOD_MOON NIGHT_DEAD HORROR_AUDIO)
+  EVENT="drowned@+60;armada@+190;lion@+440;lion@+455;lion@+470;calm@+490;siren@+640;wrecks@+725;maelstrom@+910;cyclone@+1010;blood@+1170"; AT_NIGHT=1
+  NOTE="$BEEDLE
+Every new mod in one run, at night (about 20 minutes). Times are from when the file loads:
+  0:00  Yours: the tow, get on the deck and back, both guns. F7 = free camera (F7 again to stop). A second controller
+        is player 2 on the roof gun; the ship's crew fires whichever gun nobody mans.
+  1:00  The drowned: be on the deck. ReDeads climb aboard for 2 minutes.
+  3:10  Pirate armada: four cannon boats. On the deck, Bokoblins board from any that come close; sink all four for 200.
+  7:20  Something in the Lion, three times: be in the boat, sailing. He laughs and swerves off by himself.
+  8:10  Dead calm: the wind dies and a still fog settles.
+ 10:40  Siren song: a harp, the boat turns toward it. Steer against it, or let it take you to the Gyorgs.
+ 12:05  Shipwreck graveyard: fog and sunken hulks ahead, Poes about.
+ 15:10  Maelstrom: wrench the stick left-right to break free (or it takes two hearts after 45 s).
+ 16:50  Wandering cyclone: steer round it, then sail into it to be thrown across the sea.
+ 19:30  Blood moon: the world turns red; land on an island and the dead rise twice as fast.
+Stay in open sea until the blood moon: going near an island ends whatever sea event is on." ;;
   beedle-bosses) ON=(BEEDLE_SHIP MOLGERA PHANTOM_GANON); EVENT="molgera@+40;phantom@+45"; export WWHD_MOD_PHANTOM_GANON_CHOICE=1; NOTE="$BEEDLE
 Molgera and Titanic Phantom Ganon together from about 40 s: fight them from its deck or from the boat's cannon." ;;
   deck) ON=(BIG_SHIP); NOTE="$SHIP" ;;
@@ -102,7 +118,7 @@ Everything at once. The first minute is yours: get on the deck, try the helm and
   OFTEN=2; NOTE="$SHIP
 The long soak, played: every spooky mod on, How often at Often, nothing forced. Sail out into open sea (away from
 islands) and keep going; the events come by chance, a roll a minute (none within reach of an island). Play as you like." ;;
-  *) echo "Usage: tools/try.sh <beedle|beedle-guns|gunner|crew|boarding|drowned|calm|photo|blood|cyclone|maelstrom|armada|siren|lion|wrecks|soak|plain|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim|cannon-boat|cannon-boat-deck>"; exit 2 ;;
+  *) echo "Usage: tools/try.sh <tour|beedle|beedle-guns|gunner|crew|boarding|drowned|calm|photo|blood|cyclone|maelstrom|armada|siren|lion|wrecks|soak|plain|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim|cannon-boat|cannon-boat-deck>"; exit 2 ;;
 esac
 for m in "${SPOOKY[@]}"; do export WWHD_MOD_$m=0; done
 for m in ${ON[@]+"${ON[@]}"}; do export WWHD_MOD_$m=1; [ -n "${OFTEN:-}" ] && export WWHD_MOD_${m}_OFTEN=$OFTEN; done
