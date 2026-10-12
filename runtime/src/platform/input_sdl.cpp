@@ -23,7 +23,6 @@
 #include <map>
 #include <mutex>
 #include <set>
-#include <sys/stat.h>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -727,23 +726,6 @@ PadState read() {
     for (auto& p : rsticks)
         if (render::frame_count() >= p.from && render::frame_count() <= p.to) { s.rx = p.x; s.ry = p.y; }
     apply_scenario(s);
-    // debug: WWHD_LIVE_PAD=<file> holds what the file says, "<buttons hex> <lx> <ly> [<rx> <ry>]", read again
-    // whenever it changes (a test driver plays the game live by rewriting it)
-    static const char* live = getenv("WWHD_LIVE_PAD");
-    if (live) {
-        static PadState lp;
-        static timespec seen{};
-        struct stat st;
-        if (stat(live, &st) == 0 && (st.st_mtimespec.tv_sec != seen.tv_sec || st.st_mtimespec.tv_nsec != seen.tv_nsec))
-            if (FILE* f = fopen(live, "r")) {
-                seen = st.st_mtimespec, lp = PadState{};
-                if (fscanf(f, "%x %f %f %f %f", &lp.buttons, &lp.lx, &lp.ly, &lp.rx, &lp.ry) < 1) lp = PadState{};
-                fclose(f);
-            }
-        s.buttons |= lp.buttons;
-        if (lp.lx || lp.ly) { s.lx = lp.lx; s.ly = lp.ly; }
-        if (lp.rx || lp.ry) { s.rx = lp.rx; s.ry = lp.ry; }
-    }
     s.buttons |= k.buttons;
     if (k.lx || k.ly) { s.lx = k.lx; s.ly = k.ly; }
     if (k.rx || k.ry) { s.rx = k.rx; s.ry = k.ry; }

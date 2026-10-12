@@ -31,9 +31,10 @@
 023C6DB4  # daOship::modeAttackInit: a third of the cannon boat's deliberate miss taken off (extras.cpp)
 023C68B8  # daOship execute: a deck cannon shot counts as the boat's cannon firing back (extras.cpp)
 02363164  # daObj_Ikada execute: Beedle's ship in tow behind the King of Red Lions (extras.cpp)
-02360420  # daObj_Ikada::setMtx: Beedle's ship's deck as big as its model, and lowered
+02360420  # daObj_Ikada::setMtx: the towed craft's deck as big as its model, lowered; the giant Lion's hidden back
 024EECC8  # dBgS::GetExitId: Beedle's ship's hut is no door (extras.cpp)
 024C8A58  # daTornado execute: the wandering cyclone takes the boat only from within 3000 (extras.cpp)
 @024C99E0 # daTornado create: Cyclos beaten (event bit 0x2710) does not stop the wandering cyclone
 @024C8F68 # daTornado execute: nor fade it out
 @024C8FF8 # daTornado execute: (the other test)
+@0247915C # daShip execute: body matrix on the stack, before the copy to its models: the giant King of Red Lions (extras.cpp)

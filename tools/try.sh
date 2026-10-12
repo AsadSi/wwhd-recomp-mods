@@ -7,7 +7,8 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 pgrep -fl "wwhd " >/dev/null && { echo "The game is already running; close it first."; exit 1; }
 [ -f "$ROOT/save/haunted.wwstate" ] || { echo "save/haunted.wwstate is missing."; exit 1; }
 SPOOKY=(NIGHT_DEAD HAUNTED_SEA STORM FOG GIANT_SEAHATS PHANTOM_GANON HORROR_AUDIO DEEP LEVIATHAN MOLGERA PHANTOM_STALKER BIG_SHIP BEEDLE_SHIP
-        DEAD_CALM PHOTO_MODE SECOND_GUNNER BLOOD_MOON CYCLONES MAELSTROM ARMADA SIREN WRONG_LION DROWNED BOARDING WRECKS CREW TIME)
+        DEAD_CALM PHOTO_MODE SECOND_GUNNER BLOOD_MOON CYCLONES MAELSTROM ARMADA SIREN WRONG_LION DROWNED BOARDING WRECKS CREW TIME
+        RAFT BIG_LION FAIR_WIND SCARE_PACING)
 ON=(); EVENT=; NOTE=; EXTRA=
 SHIP="Big ship (keys: move WASD, A = K/Space, B = J, ZL = Left Shift, pause/items = Return):
   Tetra's ship is a boat of its own: once you are out at sea it waits at anchor a little way off your left.
@@ -26,6 +27,9 @@ BEEDLE="Beedle's ship (keys: move WASD, A = K/Space, B = J, ZL = Left Shift, pau
   Guns: one at the bow, one on the hut's roof. Stand by the bow gun, or in front of the hut for the roof gun, and press A
   (or your Bomb Bag's button) to man it: stick aims, ZL locks on the nearest monster, A fires (a bomb a shot), B leaves."
 case "${1:-}" in
+  long) ON=(NIGHT_DEAD HAUNTED_SEA STORM FOG GIANT_SEAHATS PHANTOM_GANON HORROR_AUDIO DEEP LEVIATHAN MOLGERA PHANTOM_STALKER BIG_LION RAFT FAIR_WIND
+           DEAD_CALM BLOOD_MOON CYCLONES MAELSTROM ARMADA SIREN WRONG_LION DROWNED BOARDING WRECKS CREW)
+  OFTEN=2; export WWHD_MOD_DAMAGE=1 WWHD_MOD_DAMAGE_CHOICE=4; NOTE="Claude's long run: every spooky mod at Often, nothing forced, no damage; Claude sails it through the live pad." ;;
   plain) NOTE="Every new mod off: plain sailing, to compare (does Link and the boat lag here too?)." ;;
   beedle) ON=(BEEDLE_SHIP); NOTE="$BEEDLE" ;;
   beedle-guns) ON=(BEEDLE_SHIP HAUNTED_SEA); EVENT="sea@+30"; NOTE="$BEEDLE
@@ -57,6 +61,19 @@ Then let it take you there (about 7000 off) to see what waits." ;;
   lion) ON=(WRONG_LION); EVENT="lion@+20;lion@+40;lion@+60"; AT_NIGHT=1; NOTE="It is night. Set sail (A). At about 20, 40 and 60 s the King of Red Lions laughs and swerves off by himself
 for a few seconds." ;;
   wrecks) ON=(WRECKS); EVENT="wrecks@+20"; AT_NIGHT=1; NOTE="It is night. At about 20 s fog rolls in over a graveyard of ships ahead: sail among the sunken hulks (Poes about)." ;;
+  raft) ON=(RAFT FAIR_WIND); NOTE="The King of Red Lions tows a little flagged raft (Fair wind on: the sail is always full). Stop and press B to
+leap onto the raft; walk it, man its guns (A by one); A at its front leaps back into the boat. Fall in: A by its side." ;;
+  lion) ON=(BIG_LION FAIR_WIND); NOTE="The King of Red Lions five times his size (Fair wind on). Sail him as ever; stop and press B to leap out onto
+his back, walk it, man the gun at his bow or stern (A by one), and A by his seat sits Link back down." ;;
+  lion-raft) ON=(BIG_LION RAFT FAIR_WIND CREW); NOTE="The giant King of Red Lions towing the raft (Fair wind, the ship's crew on the raft's guns). B out onto his back; A at
+his stern leaps onto the raft, A at the raft's front leaps back onto him; A by his seat sits Link down." ;;
+  full) ON=(NIGHT_DEAD HAUNTED_SEA GIANT_SEAHATS LEVIATHAN HORROR_AUDIO BIG_LION RAFT FAIR_WIND CREW BOARDING DEAD_CALM BLOOD_MOON
+            CYCLONES MAELSTROM ARMADA SIREN WRONG_LION DROWNED WRECKS SCARE_PACING)
+  EVENT="drowned@+180;armada@+330;lion@+570;calm@+630;siren@+780;wrecks@+900;maelstrom@+1080;sea@+1200;leviathan@+1380;cyclone@+1560;blood@+1710"
+  AT_NIGHT=1; export WWHD_MOD_DAMAGE=1 WWHD_MOD_DAMAGE_CHOICE=4
+  NOTE="The full test, at night, no damage: the giant Lion towing the raft, Fair wind, and every event with its warning signs
+(30 s before each, sail away to escape it): the drowned 3:00, armada + boarding 5:30, the Lion 9:30, dead calm 10:30,
+siren 13:00, wrecks 15:00, maelstrom 18:00, Haunted sea 20:00, Leviathan 23:00, cyclone 26:00, blood moon 28:30." ;;
   tour) ON=(BEEDLE_SHIP SECOND_GUNNER CREW BOARDING PHOTO_MODE DROWNED ARMADA WRONG_LION DEAD_CALM SIREN WRECKS MAELSTROM CYCLONES BLOOD_MOON NIGHT_DEAD HORROR_AUDIO)
   EVENT="drowned@+60;armada@+190;lion@+440;lion@+455;lion@+470;calm@+490;siren@+640;wrecks@+725;maelstrom@+910;cyclone@+1010;blood@+1170"; AT_NIGHT=1
   NOTE="$BEEDLE
@@ -123,7 +140,7 @@ Everything at once. The first minute is yours: get on the deck, try the helm and
   OFTEN=2; NOTE="$SHIP
 The long soak, played: every spooky mod on, How often at Often, nothing forced. Sail out into open sea (away from
 islands) and keep going; the events come by chance, a roll a minute (none within reach of an island). Play as you like." ;;
-  *) echo "Usage: tools/try.sh <tour|tour-rest|beedle|beedle-guns|gunner|crew|boarding|drowned|calm|photo|blood|cyclone|maelstrom|armada|siren|lion|wrecks|soak|plain|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim|cannon-boat|cannon-boat-deck>"; exit 2 ;;
+  *) echo "Usage: tools/try.sh <full|raft|lion|lion-raft|tour|tour-rest|long|beedle|beedle-guns|gunner|crew|boarding|drowned|calm|photo|blood|cyclone|maelstrom|armada|siren|lion|wrecks|soak|plain|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim|cannon-boat|cannon-boat-deck>"; exit 2 ;;
 esac
 for m in "${SPOOKY[@]}"; do export WWHD_MOD_$m=0; done
 for m in ${ON[@]+"${ON[@]}"}; do export WWHD_MOD_$m=1; [ -n "${OFTEN:-}" ] && export WWHD_MOD_${m}_OFTEN=$OFTEN; done
@@ -132,6 +149,9 @@ for m in ${ON[@]+"${ON[@]}"}; do export WWHD_MOD_$m=1; [ -n "${OFTEN:-}" ] && ex
 echo "$NOTE"
 echo
 TRACE="$ROOT/build/try/${1}-$(date +%H%M%S).txt"; mkdir -p "$ROOT/build/try"
-echo "Pick Quest Log 1. Trace: $TRACE"
+echo "It goes straight to the state by itself (no need to press anything at the title). Trace: $TRACE"
 : > "$ROOT/build/try/pad.txt"  # Claude can drive the game live through it: "<buttons hex> <lx> <ly> [<rx> <ry>]"
-cd "$ROOT" && env $EXTRA WWHD_LIVE_PAD="$ROOT/build/try/pad.txt" WWHD_PORTABLE_LOAD="$ROOT/save/haunted.wwstate" WWHD_MODS_TRACE="$TRACE" ./build/cmake/wwhd
+# straight into the state: A pressed through the title and onto Quest Log 1 (as the audit routes do; the state loads
+# once a Quest Log is played)
+SKIP="WWHD_TEST_ORIGIN=1 WWHD_TEST_PRESS=3-3.2:8000,5-5.2:8000,7-7.2:8000,9-9.2:8000,11-11.2:8000,13-13.2:8000"
+cd "$ROOT" && env $EXTRA $SKIP WWHD_LIVE_PAD="$ROOT/build/try/pad.txt" WWHD_PORTABLE_LOAD="$ROOT/save/haunted.wwstate" WWHD_MODS_TRACE="$TRACE" ./build/cmake/wwhd
