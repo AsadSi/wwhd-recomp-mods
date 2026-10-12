@@ -913,12 +913,20 @@ void cannon_hits(Cpu* c, double now) {
             if (shot > 1) g_big_hits.push_back({a, a + 0x1000, shot});
             return b.second = pos_of(a), false;
         }
-        for (auto [m, pool] : {std::pair{lev, &g_leviathan_pool}, std::pair{mol, &g_molgera_pool}})
-            if (m && shot > 1 && std::hypot(b.second.x - ldf32(m + kPos), b.second.z - ldf32(m + kPos + 8)) < 1500 * shot) {
-                *pool -= (int)std::lround(4 * (shot - 1));
-                if (m == lev && g_leviathan_pool <= 0) g_leviathan_slain = true;
-                trace("extras: a bigger shot bursts by %s (%d left)", m == lev ? "the Leviathan" : "Molgera", *pool);
-            }
+        // (on the nearer one only, and only a burst on its body: within its reach, 500 or Molgera's head 350, times
+        // the shot's size, of where it is, its height too)
+        uint32_t on = 0;
+        double best = 1e9;
+        for (const uint32_t m : {lev, mol})
+            if (const double d = m ? std::hypot(b.second.x - ldf32(m + kPos), b.second.y - ldf32(m + kPos + 4), b.second.z - ldf32(m + kPos + 8)) : 1e9;
+                d < (m == lev ? 500 : 350) * shot && d < best)
+                best = d, on = m;
+        if (on && shot > 1) {
+            int& pool = on == lev ? g_leviathan_pool : g_molgera_pool;
+            pool -= (int)std::lround(4 * (shot - 1));
+            if (on == lev && pool <= 0) g_leviathan_slain = true;
+            trace("extras: a bigger shot bursts on %s (%d left)", on == lev ? "the Leviathan" : "Molgera", pool);
+        }
         if (pg && std::hypot(b.second.x - ldf32(pg + 0x37C), b.second.y - ldf32(pg + 0x37C + 4), b.second.z - ldf32(pg + 0x37C + 8)) <
                       std::min(2500.f, 300 * g_phantom_size * shot)) {
             hits += (int)std::lround(shot);
@@ -2478,7 +2486,10 @@ extern "C" void hook_02363164(Cpu* c) {
             const double t = (int16_t)ld16(k + kAngleY) * M_PI / 32768;
             dx = sin(t), dz = cos(t), d = 1;
         }
-        st32(a + kPos, u32_bits((float)(lion.x - dx / d * tow))), st32(a + kPos + 8, u32_bits((float)(lion.z - dz / d * tow)));
+        // (its old position, +0x300, the same: its collision sweeps from there, and a hulk of the Shipwreck graveyard in
+        // between held it fast while the boat sailed on)
+        for (uint32_t o : {(uint32_t)kPos, 0x300u})
+            st32(a + o, u32_bits((float)(lion.x - dx / d * tow))), st32(a + o + 8, u32_bits((float)(lion.z - dz / d * tow)));
         const uint16_t yaw = (uint16_t)(int16_t)(atan2(dx, dz) * 32768 / M_PI);
         st16(a + 0x322, yaw), st16(a + kAngleY, yaw);
         for (int i = 0; i < 3; i++) st32(a + 0x330 + 4 * i, u32_bits(g_craft->scale));
