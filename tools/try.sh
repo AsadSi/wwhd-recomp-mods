@@ -88,7 +88,7 @@ take the controller any time." ;;
   RECORD=1; export WWHD_MOD_DAMAGE=1 WWHD_MOD_DAMAGE_CHOICE=3 WWHD_TEST_UPGRADES=15
   NOTE="The long seamless run: every spooky mod at its normal How often and Scare pacing, nothing forced, the clock
 running, half damage, the raft in tow, upgrades at level 1. Claude sails it (build/try/pilot.py); take over any time." ;;
-  buy-ship) ON=(BIG_SHIP WARP FAIR_WIND); export WWHD_TEST_WARP="Zunari"; NOTE="Warps to Windfall beside Zunari's stall (5000 rupees). Walk to the Bomb Shop and talk to the shopkeeper: as
+  buy-ship) ON=(BIG_SHIP WARP FAIR_WIND); export WWHD_TEST_STAGE="Obombh 0 0"; NOTE="Goes straight into Windfall's Bomb Shop (5000 rupees). Talk to the shopkeeper: as
 the talk ends a panel offers Tetra's ship for 2500 rupees (A buy, B leave). Then sail out to open sea: she should
 wait at anchor off your left. Get on (B beside her), take the wheel (A on the stern castle) and sail her: the wind
 now sets her speed (try running before it and into it), she speeds up and slows down gently, and turns with a rudder." ;;

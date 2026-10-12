@@ -133,6 +133,10 @@ constexpr int kUpPrice[] = {500, 900, 1500};
 // to the card and read back with the Quest Log (dSv_info_c::memory_to_card 025BA9FC, card_to_memory 025BA7B0),
 // zeroed for a new file, and read by nothing in the game
 uint32_t save();
+// a price paid as the game's shops pay it: into the rupee meter's count to come (play +0x5B48, s32, as Bms1's buy at
+// 0220B2C8), which the meter then counts off the wallet; the wallet itself (sv +4) written straight was put back by it
+void pay(int rupees) { st32(kPlay + 0x5B48, ld32(kPlay + 0x5B48) - rupees); }
+int wallet() { return ld16(save() + 4) + (int32_t)ld32(kPlay + 0x5B48); }  // what Link has once the meter is done
 uint32_t upgrade_byte() { return save() + 0x773; }
 int upgrade(int k) { return g_on[kUpgrades].load() ? (ld8(upgrade_byte()) >> (2 * k)) & 3 : 0; }
 // Tetra's ship, bought at the Bomb Shop on Windfall (bit 0 of the reserve block's byte before, kept the same way)
@@ -2519,13 +2523,13 @@ void step(Cpu* c) {
         }
         talk_was = talk;
         for (int i = 0; i < 3; i++) g_shop_level[i] = (ld8(upgrade_byte()) >> (2 * i)) & 3;
-        g_shop_rupees = ld16(sv + 4);
+        g_shop_rupees = wallet();
         if (const int b = g_buy.exchange(-1); b >= 0) {
             const int lv = g_shop_level[b];
             if (lv >= 3) g_shop_news = "That one is as good as it gets.";
-            else if (ld16(sv + 4) < kUpPrice[lv]) g_shop_news = "Not enough rupees.";
+            else if (wallet() < kUpPrice[lv]) g_shop_news = "Not enough rupees.";
             else {
-                st16(sv + 4, (uint16_t)(ld16(sv + 4) - kUpPrice[lv]));
+                pay(kUpPrice[lv]);
                 st8(upgrade_byte(), (uint8_t)((ld8(upgrade_byte()) & ~(3 << (2 * b))) | ((lv + 1) << (2 * b))));
                 guest_call(c, GC(0x025E1988), {0x836});
                 g_shop_news = "Fitted! Save your game to keep it.";
@@ -2618,16 +2622,15 @@ void step(Cpu* c) {
         }
         mesg_was = mesg;
         if (g_ship_buy.exchange(false) && !owns_ship()) {
-            g_shop_rupees = ld16(sv + 4);
-            if (ld16(sv + 4) < kShipPrice) g_shop_news = "Not enough rupees.";
+            if (wallet() < kShipPrice) g_shop_news = "Not enough rupees.";
             else {
-                st16(sv + 4, (uint16_t)(ld16(sv + 4) - kShipPrice)), st8(sv + 0x772, ld8(sv + 0x772) | 1);
+                pay(kShipPrice), st8(sv + 0x772, ld8(sv + 0x772) | 1);
                 guest_call(c, GC(0x025E1988), {0x836});
                 g_shop_news = "Sold! She waits for you out at sea. Save your game to keep her.";
                 trace("extras: Tetra's ship bought for %d rupees", kShipPrice);
             }
         }
-        if (stage == "Obombh") g_shop_rupees = ld16(sv + 4);
+        if (stage == "Obombh") g_shop_rupees = wallet();
     }
     // Warp: F9 (the toggle on) opens the places; the one picked is made the next stage change, Link on his boat (or
     // test aid: WWHD_TEST_WARP=<place, part of its name> once, 5 s after a file loads). Going on to a stall: once
@@ -2686,6 +2689,21 @@ void step(Cpu* c) {
         next_shot = now + shot_every;
         screenshot::request();
         trace("extras: frame");
+    }
+    // test aid: WWHD_TEST_STAGE="<stage> <room> <point>" goes there (the next stage asked for) once, 5 s after a file loads
+    if (static const char* e = getenv("WWHD_TEST_STAGE"); e) {
+        static double at = -1;
+        if (fresh && at == -1) at = now + 5;
+        if (at > 0 && now >= at && !ld8(kPlay + 0x514C)) {
+            at = -2;
+            char name[8] = {};
+            int room = 0, point = 0;
+            sscanf(e, "%7s %d %d", name, &room, &point);
+            for (int i = 0; i < 8; i++) st8(kPlay + 0x5140 + i, (uint8_t)name[i]);
+            st16(kPlay + 0x5148, (uint16_t)point), st8(kPlay + 0x514A, (uint8_t)room), st8(kPlay + 0x514B, 0xFF);
+            st8(kPlay + 0x514D, 0), st8(kPlay + 0x514C, 1);
+            trace("extras: (test) to %s room %d point %d", name, room, point);
+        }
     }
     // test aid: WWHD_EXTRAS_SPAWN=proc:param:dist:dy[:anglex] (hex) spawns that once, 3 s after Link appears
     static const char* test_spawn = getenv("WWHD_EXTRAS_SPAWN");
