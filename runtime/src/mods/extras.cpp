@@ -786,6 +786,19 @@ void begin(int k, double now) {
     if (const uint32_t sv = save(); k == kPhantom || k == kLeviathan || k == kMolgera) st8(sv + 0x6A, ld8(sv + 0x70));
     trace("extras: event %s begins (%.0f s)%s", event_name(k), g_until[k] - now, k == kSea && g_giant_spell ? ", giants" : "");
 }
+// one of ours deleted; a cannon boat with its flag (daMajuu_Flag, proc 0xAE, which its create makes; the decomp's
+// mFlagPcId +0xD50, found here by its id, as HD moved it): the flag takes its matrix from inside the boat every step,
+// and left behind it read freed memory and flew off to 1e36, halting the game (seen twice as Haunted sea ended)
+void delete_actor(Cpu* c, uint32_t id) {
+    if (const uint32_t a = guest_call(c, GC(0x025DE50C), {id}); a && ld16(a + 8) == kOship.proc)
+        for (uint32_t o = 0xD00; o < 0xF00; o += 4)
+            if (const uint32_t f = guest_call(c, GC(0x025DE50C), {ld32(a + o)}); f && f != a && ld16(f + 8) == 0xAE) {
+                guest_call(c, GC(0x025D57E4), {ld32(a + o)});
+                trace("extras: a cannon boat's flag goes with it (its id at +%#x)", o);
+                break;
+            }
+    guest_call(c, GC(0x025D57E4), {id});
+}
 void finish(Cpu* c, int k, double now, const char* why) {
     trace("extras: event %s ends (%s)", event_name(k), why);
     g_until[k] = 0;
@@ -805,7 +818,7 @@ void finish(Cpu* c, int k, double now, const char* why) {
         g_octo = Single{}, g_octo_actor = 0, g_octo_dead = false;
     }
     if (k == kArmada) {  // what is left of it sails off into the fog: gone
-        for (uint32_t id : g_armada.ids) guest_call(c, GC(0x025D57E4), {id});
+        for (uint32_t id : g_armada.ids) delete_actor(c, id);
         g_armada = Spawner{};
     }
     if (const uint32_t w = k == kMaelstrom ? g_whirl.actor(c) : 0)
@@ -815,11 +828,11 @@ void finish(Cpu* c, int k, double now, const char* why) {
         for (uint32_t id : g_sea.ids)
             if (const uint32_t a = guest_call(c, GC(0x025DE50C), {id});
                 a && std::hypot(ldf32(a + kPos) - ldf32(link + kPos), ldf32(a + kPos + 8) - ldf32(link + kPos + 8)) > 2000)
-                guest_call(c, GC(0x025D57E4), {id});
+                delete_actor(c, id);
         if (g_ghost.actor(c)) guest_call(c, GC(0x025D57E4), {g_ghost.id});
     }
 }
-struct Forced { int k; double at; bool after_play; };  // after_play: seconds after Link is first in play (@+s)
+struct Forced { int k; double at; bool after_play; bool end = false; };  // after_play: seconds after Link is first in play (@+s); end: "end-<name>" ends it then
 std::vector<Forced> forced_events() {
     std::vector<Forced> v;
     const char* e = getenv("WWHD_SPOOKY");
@@ -829,9 +842,10 @@ std::vector<Forced> forced_events() {
         const std::string item = rest.substr(0, rest.find(';'));
         rest = item.size() < rest.size() ? rest.substr(item.size() + 1) : "";
         const size_t at = item.find('@');
+        const bool end = item.rfind("end-", 0) == 0;
         for (const auto& [name, k] : kNames)
-            if (at != std::string::npos && item.compare(0, at, name) == 0)
-                v.push_back({k, atof(item.c_str() + at + 1 + (item[at + 1] == '+')), item[at + 1] == '+'});
+            if (at != std::string::npos && item.compare(end ? 4 : 0, at - (end ? 4 : 0), name) == 0)
+                v.push_back({k, atof(item.c_str() + at + 1 + (item[at + 1] == '+')), item[at + 1] == '+', end});
     }
     return v;
 }
@@ -885,7 +899,8 @@ void direct(Cpu* c, uint32_t sv, uint32_t link, double now, bool night, bool wat
         if (f.after_play) f.at += in_play, f.after_play = false;
         if (f.at >= 0 && now >= f.at) {
             f.at = -1;
-            if (f.k == kGiants) g_until[kSea] = 0, begin(kSea, now), g_giant_spell = true;
+            if (f.end) { if (g_until[f.k] > 0) finish(c, f.k, now, "test"); }
+            else if (f.k == kGiants) g_until[kSea] = 0, begin(kSea, now), g_giant_spell = true;
             else if (warned(f.k) && g_warn < 0) warn(f.k, link, now);
             else begin(f.k, now);
         }

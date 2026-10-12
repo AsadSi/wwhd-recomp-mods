@@ -189,7 +189,7 @@ for m in ${ON[@]+"${ON[@]}"}; do export WWHD_MOD_$m=1; [ -n "${OFTEN:-}" ] && ex
 # the Big ship sails only once bought (Bomb Shop): the test runs own her, but for buy-ship
 [[ " ${ON[*]-} " == *" BIG_SHIP "* && "${1:-}" != buy-ship ]] && export WWHD_TEST_SHIP_OWNED=1
 [ -n "${AT_NIGHT:-}" ] && export WWHD_MOD_TIME=1 WWHD_MOD_TIME_CHOICE=4  # the clock held at 23:00
-[ -n "$EVENT" ] && export WWHD_SPOOKY="$EVENT"
+[ -n "$EVENT" ] && export WWHD_SPOOKY="$EVENT${EXTRA_EVENT:+;$EXTRA_EVENT}"  # (EXTRA_EVENT: more, e.g. "end-armada@+60")
 echo "$NOTE"
 echo
 TRACE="$ROOT/build/try/${1}-$(date +%H%M%S).txt"; mkdir -p "$ROOT/build/try"
