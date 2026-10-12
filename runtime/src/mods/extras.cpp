@@ -492,8 +492,8 @@ const std::vector<Mod>& catalogue() {
          "200 rupees and a blue potion.", {}, true},
         {"big-octo", "Big Octo", "Spooky",
          "Now and then, far out at sea at night, the sea goes still and dark, then a whirlpool opens by the boat and Big "
-         "Octo rises in it, Gyorgs circling and ramming. Its whirlpool drags the boat in; shoot out its eyes (arrows, the "
-         "Boomerang, bombs, a deck gun's shot) for 300 rupees and a blue potion, or hold out until it sinks again.", {}, true},
+         "Octo rises in it, as in its own fight, and Gyorgs with it, ramming the boat. Shoot out its eyes (the Boomerang, "
+         "arrows, bombs) as it sweeps you round, for 300 rupees and a blue potion.", {}, true},
         {"wrong-lion", "Something in the Lion", "Spooky",
          "Very rarely, sailing at night, the King of Red Lions laughs a laugh that is not his, swerves off and races on by "
          "himself for a few seconds, then sails on as if nothing happened.", {}, true},
@@ -1794,20 +1794,19 @@ void step(Cpu* c) {
                 st8(a + kRoom, ld8(link + kRoom));
             }
     }
-    // Big Octo: daDaiocta (proc 0xE1, param 0xFFFFFF00: type 0, four eyes, its own reach, no swallow destination, no
-    // switch) made near a sailing Link. It loads its archive itself and makes its eyes (0xE2) and whirlpool (Auzu, its
-    // id at +0x2844) itself, then waits hidden 3000 under the sea for a Link in reach, so once it has had a moment to
-    // come to life it is told to rise (its modeProc 0211889C: init, mode 1). Its swallow (a demo the open sea has no
-    // event for) is off: its reach for it, l_HIO +0x84 (104639C8), 0. Five Gyorgs with it. Its eyes die to arrows, the
-    // hookshot, the Boomerang and a bomb's burst (a deck gun's shot); with all gone its death would order a demo the
-    // sea has none of: hook_0211BFFC stops it there, and it goes here, with its whirlpool, the loot, and the event's end
+    // Big Octo, its own fight with Gyorgs as well: daDaiocta (proc 0xE1, param 0xFFFFFF00: type 0, four eyes, its own
+    // reach, no swallow destination, no switch) made near a sailing Link. It loads its archive itself and makes its eyes
+    // (0xE2) and whirlpool (Auzu, its id at +0x2844) itself, then waits hidden 3000 under the sea for a Link in reach,
+    // so once it has had a moment to come to life it is told to rise (its modeProc 0211889C: init, mode 1). Then all is
+    // the game's: its whirlpool sweeps the boat round it, its swallow, its eyes dying to arrows, the hookshot, the
+    // Boomerang and bombs, and its death (hook_0211BFFC marks it: the loot; the event ends once it is gone, or 15 s on)
     if (live(kOcto, now) && sea && settled) {
         static double made_at = 0;
         static bool risen = false;
-        if (g_octo_for != g_until[kOcto]) {
-            g_octo_for = g_until[kOcto], g_octo = Single{}, risen = false, g_octo_dead = false, g_octo_gyorgs = 5;
-            st32(GD(0x104639C8), 0);
-        }
+        static double died = -1;
+        if (g_octo_for != g_until[kOcto]) g_octo_for = g_until[kOcto], g_octo = Single{}, risen = false, g_octo_dead = false, g_octo_gyorgs = 5, died = -1;
+        if (g_octo_dead && died < 0) died = now, loot(c, 300), trace("extras: Big Octo is slain");
+        if (died >= 0 && (!g_octo.actor(c) || now - died > 15)) finish(c, kOcto, now, "Big Octo is slain");
         if (!risen && g_octo.wanted(c, now)) {
             Spawner none;
             g_octo.id = spawn(c, none, Monster{0xE1, -1, 0xFFFFFF00}, link, 2500, -1, 0, false, 0, true);
@@ -1818,20 +1817,6 @@ void step(Cpu* c) {
             if (!risen && now - made_at > 2) {
                 guest_call(c, GC(0x0211889C), {o, 0, 1}), risen = true;
                 trace("extras: the sea opens and Big Octo rises");
-            }
-            // its whirlpool drags the boat round and in; under 500 from its centre the boat would go down and the stage be
-            // reloaded (the swallow's place), so in its grip the boat is held out at 1500, circling it (both positions)
-            if (const uint32_t korl = ld32(kPlay + 0x5B3C), wid = ld32(o + 0x2844); in_mem2(korl) && ld32(korl + 0x708) == wid)
-                if (const uint32_t w = guest_call(c, GC(0x025DE50C), {wid})) {
-                    const double dx = ldf32(korl + kPos) - ldf32(w + kPos), dz = ldf32(korl + kPos + 8) - ldf32(w + kPos + 8), d = std::hypot(dx, dz);
-                    if (d < 1500 && d > 1)
-                        for (uint32_t base : {(uint32_t)kPos, 0x300u})
-                            st32(korl + base, u32_bits((float)(ldf32(w + kPos) + dx / d * 1500))),
-                                st32(korl + base + 8, u32_bits((float)(ldf32(w + kPos + 8) + dz / d * 1500)));
-                }
-            if (g_octo_dead) {
-                loot(c, 300);
-                finish(c, kOcto, now, "Big Octo is slain");
             }
         }
     }
@@ -2597,15 +2582,11 @@ extern "C" void hook_02481C94(Cpu* c) {
     }
     f_02481C94_orig(c);
 }
-// daDaiocta's modeDelete (0211BFFC; r3 Big Octo): with all its eyes gone it would order its death demo, which the open
-// sea has no event for, and stay there: ours is stopped and marked dead, and the Big Octo block lets it go
+// daDaiocta's modeDelete (0211BFFC; r3 Big Octo), its death with all its eyes out: ours is marked (its loot), and dies
+// as the game has it
 extern "C" void f_0211BFFC_orig(Cpu* c);
 extern "C" void hook_0211BFFC(Cpu* c) {
     using namespace mods::extras;
-    if (c->r[3] && c->r[3] == g_octo_actor) {
-        if (!g_octo_dead) mods::trace("extras: Big Octo's last eye is out");
-        g_octo_dead = true;
-        return;
-    }
+    if (c->r[3] && c->r[3] == g_octo_actor) g_octo_dead = true;
     f_0211BFFC_orig(c);
 }
