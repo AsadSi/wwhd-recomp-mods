@@ -853,7 +853,11 @@ bool warned(int k) {
            k == kArmada || k == kOcto || k == kDrowned || k == kHelmaroc;
 }
 void warn(int k, uint32_t link, double now) {
-    const double yaw = (int16_t)ld16(link + kAngleY) * M_PI / 32768, ahead = k == kDrowned ? 0 : 7000;
+    // (far enough ahead that sailing on reaches it as the signs end: at full sail with the upgrade the boat made 7000 in
+    // 4 s; its speedF +0x370 a step, 30 a second, the 30 s of signs less 5)
+    const uint32_t korl = ld32(kPlay + 0x5B3C);
+    const double speed = in_mem2(korl) ? std::fabs((double)ldf32(korl + 0x370)) * 30 : 0;
+    const double yaw = (int16_t)ld16(link + kAngleY) * M_PI / 32768, ahead = k == kDrowned ? 0 : std::max(7000.0, speed * (kWarning - 5));
     g_warn = k, g_warn_end = now + kWarning, g_warn_far = ahead;
     g_warn_x = ldf32(link + kPos) + sin(yaw) * ahead, g_warn_z = ldf32(link + kPos + 8) + cos(yaw) * ahead;
     trace("extras: signs of %s", event_name(k));
