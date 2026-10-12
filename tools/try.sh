@@ -84,6 +84,12 @@ mans the other). Molgera 80 health; Phantom 18 shots drive him off." ;;
 maelstrom, Molgera, Titanic Phantom and the Lion all within the first ~2 minutes; the cyclone at 7 min. Upgrades:
 sailing 3, guns 3, shots 3 (no shop). Claude drives;
 take the controller any time." ;;
+  siren-phantom) ON=(SIREN PHANTOM_GANON HORROR_AUDIO RAFT FAIR_WIND SHIP_UPGRADES SECOND_GUNNER); EVENT="siren@+30;phantom@+150"
+  AT_NIGHT=1; RECORD=1; export WWHD_TEST_UPGRADES=3F WWHD_MOD_PHANTOM_GANON_CHOICE=1
+  NOTE="At night, the big raft in tow, upgrades maxed. About 30 s in, the signs of the siren (faint harp notes, the wind
+dying, fog); at 1 min the song: the boat turns toward it by itself. Steer against it, or let it take you there (Gyorgs
+wait at the source). At about 2.5 min the signs of Titanic Phantom Ganon, then he comes: fight him from the raft's guns
+(B onto the raft, A by a gun; 18 hits drive him off, each bigger shot counts 3). Sailing away during the signs escapes." ;;
   tour) ON=(BEEDLE_SHIP SECOND_GUNNER BOARDING PHOTO_MODE DROWNED ARMADA WRONG_LION DEAD_CALM SIREN MAELSTROM CYCLONES BLOOD_MOON NIGHT_DEAD HORROR_AUDIO); export WWHD_TEST_CREW=1
   EVENT="drowned@+60;armada@+190;lion@+440;lion@+455;lion@+470;calm@+490;siren@+640;maelstrom@+910;cyclone@+1010;blood@+1170"; AT_NIGHT=1
   NOTE="$BEEDLE
@@ -149,7 +155,7 @@ Everything at once. The first minute is yours: get on the deck, try the helm and
   OFTEN=2; NOTE="$SHIP
 The long soak, played: every spooky mod on, How often at Often, nothing forced. Sail out into open sea (away from
 islands) and keep going; the events come by chance, a roll a minute (none within reach of an island). Play as you like." ;;
-  *) echo "Usage: tools/try.sh <chaos|full|raft|shop|raft-bosses|tour|tour-rest|long|beedle|beedle-guns|gunner|crew|boarding|drowned|calm|photo|blood|cyclone|maelstrom|armada|siren|lion|soak|plain|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim|cannon-boat|cannon-boat-deck>"; exit 2 ;;
+  *) echo "Usage: tools/try.sh <siren-phantom|chaos|full|raft|shop|raft-bosses|tour|tour-rest|long|beedle|beedle-guns|gunner|crew|boarding|drowned|calm|photo|blood|cyclone|maelstrom|armada|siren|lion|soak|plain|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim|cannon-boat|cannon-boat-deck>"; exit 2 ;;
 esac
 for m in "${SPOOKY[@]}"; do export WWHD_MOD_$m=0; done
 for m in ${ON[@]+"${ON[@]}"}; do export WWHD_MOD_$m=1; [ -n "${OFTEN:-}" ] && export WWHD_MOD_${m}_OFTEN=$OFTEN; done
