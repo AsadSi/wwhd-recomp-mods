@@ -37,7 +37,7 @@ on, A or ZR fires. Player 1 sails and plays as ever on the first controller. Hau
 The ship's crew fires both guns by itself at the nearest monster. A pirate armada comes at about 30 s: stop and watch,
 or man one gun yourself (the crew keeps the other)." ;;
   boarding) ON=(BEEDLE_SHIP BOARDING ARMADA); EVENT="armada@+30"; NOTE="$BEEDLE
-Get onto the deck before 30 s; then a pirate armada comes. Stay on the deck: when a cannon boat comes within 2500,
+Get onto the deck before 30 s; then a pirate armada comes. Stay on the deck: when a cannon boat comes within 4500,
 two Bokoblins leap aboard." ;;
   drowned) ON=(BEEDLE_SHIP DROWNED); EVENT="drowned@+30"; AT_NIGHT=1; NOTE="$BEEDLE
 It is night. Get onto the deck before 30 s: then ReDeads climb aboard, one every 12 s (three at most), for 2 minutes." ;;
@@ -73,6 +73,11 @@ Every new mod in one run, at night (about 20 minutes). Times are from when the f
  16:50  Wandering cyclone: steer round it, then sail into it to be thrown across the sea.
  19:30  Blood moon: the world turns red; land on an island and the dead rise twice as fast.
 Stay in open sea until the blood moon: going near an island ends whatever sea event is on." ;;
+  tour-rest) ON=(BEEDLE_SHIP SECOND_GUNNER CREW BOARDING PHOTO_MODE DROWNED ARMADA WRONG_LION DEAD_CALM SIREN WRECKS MAELSTROM CYCLONES BLOOD_MOON NIGHT_DEAD HORROR_AUDIO)
+  EVENT="armada@+30;calm@+180;siren@+300;wrecks@+400;maelstrom@+600;cyclone@+700;blood@+870"; AT_NIGHT=1
+  NOTE="$BEEDLE
+The tour's second half, at night: armada (with boarding) at 0:30, calm 3:00, siren 5:00, wrecks 6:40, maelstrom 10:00,
+cyclone 11:40, blood moon 14:30." ;;
   beedle-bosses) ON=(BEEDLE_SHIP MOLGERA PHANTOM_GANON); EVENT="molgera@+40;phantom@+45"; export WWHD_MOD_PHANTOM_GANON_CHOICE=1; NOTE="$BEEDLE
 Molgera and Titanic Phantom Ganon together from about 40 s: fight them from its deck or from the boat's cannon." ;;
   deck) ON=(BIG_SHIP); NOTE="$SHIP" ;;
@@ -118,7 +123,7 @@ Everything at once. The first minute is yours: get on the deck, try the helm and
   OFTEN=2; NOTE="$SHIP
 The long soak, played: every spooky mod on, How often at Often, nothing forced. Sail out into open sea (away from
 islands) and keep going; the events come by chance, a roll a minute (none within reach of an island). Play as you like." ;;
-  *) echo "Usage: tools/try.sh <tour|beedle|beedle-guns|gunner|crew|boarding|drowned|calm|photo|blood|cyclone|maelstrom|armada|siren|lion|wrecks|soak|plain|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim|cannon-boat|cannon-boat-deck>"; exit 2 ;;
+  *) echo "Usage: tools/try.sh <tour|tour-rest|beedle|beedle-guns|gunner|crew|boarding|drowned|calm|photo|blood|cyclone|maelstrom|armada|siren|lion|wrecks|soak|plain|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim|cannon-boat|cannon-boat-deck>"; exit 2 ;;
 esac
 for m in "${SPOOKY[@]}"; do export WWHD_MOD_$m=0; done
 for m in ${ON[@]+"${ON[@]}"}; do export WWHD_MOD_$m=1; [ -n "${OFTEN:-}" ] && export WWHD_MOD_${m}_OFTEN=$OFTEN; done
@@ -128,4 +133,5 @@ echo "$NOTE"
 echo
 TRACE="$ROOT/build/try/${1}-$(date +%H%M%S).txt"; mkdir -p "$ROOT/build/try"
 echo "Pick Quest Log 1. Trace: $TRACE"
-cd "$ROOT" && env $EXTRA WWHD_PORTABLE_LOAD="$ROOT/save/haunted.wwstate" WWHD_MODS_TRACE="$TRACE" ./build/cmake/wwhd
+: > "$ROOT/build/try/pad.txt"  # Claude can drive the game live through it: "<buttons hex> <lx> <ly> [<rx> <ry>]"
+cd "$ROOT" && env $EXTRA WWHD_LIVE_PAD="$ROOT/build/try/pad.txt" WWHD_PORTABLE_LOAD="$ROOT/save/haunted.wwstate" WWHD_MODS_TRACE="$TRACE" ./build/cmake/wwhd

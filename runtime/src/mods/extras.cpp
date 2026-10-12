@@ -1613,7 +1613,7 @@ void step(Cpu* c) {
     // The drowned and the Boarding party: monsters made on the deck Link stands on (spawn's ground check finds it, and
     // nothing over the water), carried by it as he is (their dBgS_Acch rides a moving BG through MoveBgCrrPos too).
     // The drowned: a ReDead every 12 s, three at most. Boarders: Bokoblins (daBk, proc 0xBD, 0xFFFFFF00: type 0, which
-    // goes for Link, no path or switch), two from each cannon boat that comes within 2500 of the ship, once; told to
+    // goes for Link, no path or switch), two from each cannon boat that comes within 4500 of the ship (the armada heaves to at 4000), once; told to
     // attack at once (daBk's search_sp, 1046232D, which each Bokoblin's create sets back to 0)
     if (const uint32_t ship = beedle ? beedle : hull; ship && deck && settled) {
         if (live(kDrowned, now) && (night || g_until[kDrowned] > now)) {
@@ -1631,7 +1631,7 @@ void step(Cpu* c) {
             for (uint32_t id : boats)
                 if (const uint32_t a = guest_call(c, GC(0x025DE50C), {id}); a && ld16(a + 8) == kOship.proc &&
                     std::find(boarded.begin(), boarded.end(), id) == boarded.end() &&
-                    std::hypot(ldf32(a + kPos) - ldf32(ship + kPos), ldf32(a + kPos + 8) - ldf32(ship + kPos + 8)) < 2500) {
+                    std::hypot(ldf32(a + kPos) - ldf32(ship + kPos), ldf32(a + kPos + 8) - ldf32(ship + kPos + 8)) < 4500) {
                     boarded.push_back(id);
                     for (int i = 0; i < 2; i++) spawn(c, g_boarders, Monster{0xBD, -1, 0xFFFFFF00}, link, 300 + rand() % 300, 0, 30, true);
                     trace("extras: a cannon boat comes alongside and Bokoblins leap aboard");
