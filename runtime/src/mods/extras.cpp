@@ -221,6 +221,48 @@ bool ship_sale_draw(const float* pad) {
     ImGui::End();
     return close;
 }
+// The cabin below Tetra's deck (the stage her door leads to): our panel there, drawn as the shop's: sleep the clock
+// round to morning or nightfall, the bottles filled with Elixir Soup (once a visit), the ship's bomb store
+const char* const kCabinLine[] = {"Sleep until morning", "Sleep until nightfall", "Fill empty bottles with soup", "Store your bombs",
+                                  "Take bombs"};
+std::atomic<int> g_cabin_sel{0}, g_cabin_do{-1}, g_cabin_bombs{0};
+bool cabin_draw(const float* pad) {
+    const input::PadState st = input_map::controller_state(input_map::current(), pad);
+    const uint32_t now = st.buttons | input::live_buttons() | (st.ly > 0.5f ? input::kUp : 0) | (st.ly < -0.5f ? input::kDown : 0);
+    static uint32_t prev = 0;
+    static bool keys_prev[256], fresh = true;
+    bool keys[256];
+    input::held_keys(keys);
+    if (fresh) prev = now, std::copy(keys, keys + 256, keys_prev), fresh = false;
+    auto hit = [&](uint32_t b, std::initializer_list<int> ks) {
+        bool k = false;
+        for (int c : ks) k |= keys[c] && !keys_prev[c];
+        return (now & b && !(prev & b)) || k;
+    };
+    constexpr int n = (int)std::size(kCabinLine);
+    int sel = g_cabin_sel;
+    if (hit(input::kDown, {kVK_ANSI_S, kVK_DownArrow})) sel = (sel + 1) % n;
+    if (hit(input::kUp, {kVK_ANSI_W, kVK_UpArrow})) sel = (sel + n - 1) % n;
+    g_cabin_sel = sel;
+    if (hit(input::kA, {kVK_ANSI_K, kVK_Space, kVK_Return})) g_cabin_do = sel;
+    const bool close = hit(input::kB, {kVK_ANSI_J, kVK_Escape});
+    prev = now, std::copy(keys, keys + 256, keys_prev);
+    if (close) fresh = true;
+    const ImGuiIO& io = ImGui::GetIO();
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowBgAlpha(0.85f);
+    if (ImGui::Begin("##cabin", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav)) {
+        ImGui::TextUnformatted("Tetra's cabin");
+        ImGui::Separator();
+        for (int i = 0; i < n; i++) ImGui::Selectable(kCabinLine[i], i == sel);
+        ImGui::Separator();
+        ImGui::Text("Bombs in the ship's store: %d", g_cabin_bombs.load());
+        if (const char* news = g_shop_news; *news) ImGui::TextUnformatted(news);
+        ImGui::TextDisabled("A choose    B leave (Save from the pause menu, as anywhere)");
+    }
+    ImGui::End();
+    return close;
+}
 // Warp: places on the sea stage, by the sea's 7x7 grid of 100000 squares (room = row * 7 + column + 1, the centre
 // square room 25 at the origin): Link arrives there on his boat; with `near` (an actor's process name, e.g. Zunari's
 // daNpc_Rsh1_c 0x160) he then goes on, on foot, to beside it once its room has made it (a second stage change)
@@ -349,6 +391,8 @@ V3 to_world(V3 o, int16_t yaw, V3 l) {
     return {o.x + l.x * cos(t) + l.z * sin(t), o.y + l.y, o.z - l.x * sin(t) + l.z * cos(t)};
 }
 V3 pos_of(uint32_t a) { return {ldf32(a + kPos), ldf32(a + kPos + 4), ldf32(a + kPos + 8)}; }
+// back up from Tetra's cabin: where she lay, for the Big ship to be made there again
+struct CabinReturn { V3 ship; int16_t yaw; bool pending; } g_cabin_return{};
 // Link put somewhere by a mod: every copy of his position (current +0x314, old +0x300, his collision's +0x84C, +0x68B0,
 // +0x7350) and the one d_a_player keeps (1046CD48), which his next execute reads back (without it he is back where he
 // was; without his collision's he falls through the floor he is put above)
@@ -523,7 +567,8 @@ const std::vector<Mod>& catalogue() {
          "Tetra's ship, a boat of its own, once bought at the Bomb Shop on Windfall (2500 rupees: talk to the shopkeeper). "
          "Out at sea she waits at anchor near the King of Red Lions, in place of the raft or Beedle's ship. Stop beside her and get "
          "out to jump onto its deck; walk it, fight from it, man its cannons, and sail it from its wheel while he comes "
-         "along beside it. Leave it far behind and it waits near you again the next time you are out at sea.", {}},
+         "along beside it. Her door leads below to the cabin: sleep until morning or nightfall, free soup for your empty "
+         "bottles, and a store for bombs. Leave it far behind and it waits near you again the next time you are out at sea.", {}},
         {"horror-audio", "Horror audio", "Spooky",
          "While a spooky event's monsters are about, the music sinks low, and a heartbeat sounds that quickens as "
          "one of them comes close.", {}},
@@ -2174,6 +2219,7 @@ void step(Cpu* c) {
         // water over 3 s, as the director has it: the jump from its rail into the boat is not ashore)
         static double made_at = -1;
         if (fresh) left_one = false, made_at = -1;
+        if (g_cabin_return.pending) left_at = g_cabin_return.ship, left_yaw = g_cabin_return.yaw, left_one = true, g_cabin_return.pending = false;
         const double away = hull ? std::hypot(ldf32(hull + kPos) - ldf32(link + kPos), ldf32(hull + kPos + 8) - ldf32(link + kPos + 8)) : 0;
         if (hull && away < 15000)  // kept in Link's room while he is near, so the room it was made in can unload
             st8(hull + kRoom, ld8(link + kRoom)), left_at = pos_of(hull), left_yaw = (int16_t)ld16(hull + kAngleY), left_one = true;
@@ -2462,6 +2508,72 @@ void step(Cpu* c) {
                 trace("extras: bought %s level %d for %d rupees", kUpName[b], lv + 1, kUpPrice[lv]);
             }
         }
+    }
+    // Tetra's cabin: her deck's door is the game's own exit into a cabin stage, whose way out goes back to wherever
+    // that stage's own exits lead. Going in from her deck (the next stage asked for, another stage), where she lies and
+    // where the boat is are kept; coming out (the next stage asked for again), Link is sent back instead, by the boat
+    // beside her (the turn restart, in it), and she is made again where she lay. In the cabin our panel opens as he
+    // arrives (B closes it; F10 opens it again). Its bomb store: a u16 in the reserve block (sv +0x770), kept with the
+    // Quest Log
+    {
+        struct Cabin { std::string stage; int room; V3 boat, ship; int16_t ship_yaw; } static cabin{};
+        static double arrived = -1;
+        static bool f10_was = false, souped = false;
+        bool keys[256];
+        input::held_keys(keys);
+        const bool going = ld8(kPlay + 0x514C);
+        std::string next((const char*)mem::ptr(kPlay + 0x5140), strnlen((const char*)mem::ptr(kPlay + 0x5140), 8));
+        if (const uint32_t korl = ld32(kPlay + 0x5B3C); going && stage == "sea" && hull && deck && next != "sea" && cabin.stage.empty() && in_mem2(korl)) {
+            cabin = {next, sea_room((float)ldf32(hull + kPos), (float)ldf32(hull + kPos + 8)), pos_of(korl), pos_of(hull), (int16_t)ld16(hull + kAngleY)};
+            trace("extras: Link goes below into %s (room %d)", next.c_str(), cabin.room);
+        }
+        if (!cabin.stage.empty() && stage == cabin.stage) {
+            if (fresh) arrived = now + 2, souped = false;
+            if ((arrived > 0 && now >= arrived) || (keys[kVK_F10] && !f10_was && !overlay::captures()))
+                arrived = -1, g_cabin_sel = 0, g_cabin_do = -1, g_shop_news = "", overlay::show_panel(cabin_draw);
+            if (going) {  // out of the cabin: back to her, in the boat beside her
+                const float boat[3] = {(float)cabin.boat.x, (float)cabin.boat.y, (float)cabin.boat.z};
+                ss::redirect(c, "sea", cabin.room, boat, cabin.ship_yaw, boat, true);
+                g_cabin_return = {cabin.ship, cabin.ship_yaw, true};
+                trace("extras: Link comes up from the cabin to the boat beside her");
+                cabin.stage.clear();
+            }
+            g_cabin_bombs = ld16(sv + 0x770);
+            const uint16_t bombs = ld8(sv + 0x6A), bag = ld8(sv + 0x70), store = ld16(sv + 0x770);
+            switch (const int act = g_cabin_do.exchange(-1)) {
+            case 0: case 1:  // the clock to 6:00 or 19:00 (15 an hour; dKy_instant_timechg 0256076C, a day on if earlier)
+                c->f[1].ps0 = act == 0 ? 90.0 : 285.0;
+                guest_call(c, GC(0x0256076C));
+                g_shop_news = act == 0 ? "You sleep until morning." : "You sleep until nightfall.";
+                trace("extras: Link sleeps in the cabin (%s)", act == 0 ? "morning" : "nightfall");
+                break;
+            case 2: {  // every empty bottle (0x50, items 14..17) Elixir Soup (0x55)
+                int filled = 0;
+                for (int i = 14; i < 18 && !souped; i++)
+                    if (ld8(sv + 0x3C + i) == 0x50) st8(sv + 0x3C + i, 0x55), filled++;
+                if (filled) guest_call(c, GC(0x025E1988), {0x827});
+                g_shop_news = souped ? "The pot is empty until your next visit." : filled ? "Your bottles are full of hot soup." : "You have no empty bottle.";
+                souped = souped || filled;
+                break;
+            }
+            case 3:  // bombs from the bag into the store
+                st16(sv + 0x770, (uint16_t)std::min(9999, store + bombs)), st8(sv + 0x6A, 0);
+                g_shop_news = bombs ? "Bombs stowed." : "You have no bombs to stow.";
+                break;
+            case 4:  // and back, as many as the bag holds
+                if (const uint16_t take = std::min<uint16_t>(store, bag > bombs ? bag - bombs : 0); take) {
+                    st16(sv + 0x770, (uint16_t)(store - take)), st8(sv + 0x6A, (uint8_t)(bombs + take));
+                    g_shop_news = "Bombs taken.";
+                } else {
+                    g_shop_news = !bag ? "You have no Bomb Bag." : store ? "Your Bomb Bag is full." : "The store is empty.";
+                }
+                break;
+            default: break;
+            }
+        } else if (!cabin.stage.empty() && stage != "sea" && !fresh) {
+            cabin.stage.clear();  // gone on somewhere else
+        }
+        f10_was = keys[kVK_F10];
     }
     // Tetra's ship for sale at the Bomb Shop (stage Obombh, the shopkeeper daNpc_Bms1_c, proc 0x15B): the first time
     // in a visit that a message closes with him within 600 of Link (a talk with him), unless she is Link's already

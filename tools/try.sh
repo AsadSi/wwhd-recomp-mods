@@ -92,6 +92,10 @@ running, half damage, the raft in tow, upgrades at level 1. Claude sails it (bui
 the talk ends a panel offers Tetra's ship for 2500 rupees (A buy, B leave). Then sail out to open sea: she should
 wait at anchor off your left. Get on (B beside her), take the wheel (A on the stern castle) and sail her: the wind
 now sets her speed (try running before it and into it), she speeds up and slows down gently, and turns with a rudder." ;;
+  cabin) ON=(BIG_SHIP); NOTE="$SHIP
+The cabin: on her deck, walk through the door under the stern castle. Below, a panel opens (F10 opens it again): sleep
+until morning or nightfall, fill empty bottles with soup (once a visit), stow your bombs and take them back. Walk out
+the way you came: you should come up in the boat beside her, and she should lie where you left her." ;;
   helm) ON=(BIG_SHIP); NOTE="$SHIP
 New: the wind sets her speed (before it the boat's speed, a third of it sailing into it), she gathers speed and loses it
 slowly, and the wheel turns a rudder over (turning is gentle from a standstill)." ;;

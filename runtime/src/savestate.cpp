@@ -1134,6 +1134,11 @@ bool warp(Cpu* c, const std::string& stage, int room, const float pos[3], int16_
     return true;
 }
 
+void redirect(Cpu* c, const std::string& stage, int room, const float pos[3], int16_t angle, const float* ship_pos, bool on_ship) {
+    CallScope scope(c);
+    place_link(c, stage, room, -1, pos, angle, ship_pos, angle, on_ship);
+}
+
 uint32_t snap_ld32(uint32_t ea) {
     if (!g_check) return ld32(ea);
     uint32_t base = ea & ~(kChunk - 1);

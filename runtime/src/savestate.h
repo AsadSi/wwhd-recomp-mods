@@ -101,6 +101,8 @@ void notice(const std::string& text);
 // (he on it, or standing beside it) or without; false with `why` when he is not free to go (an event, a menu...)
 bool warp(Cpu* c, const std::string& stage, int room, const float pos[3], int16_t angle, const float* ship_pos, bool on_ship,
           std::string& why);
+// a stage change the game has already asked for (Link going through a door) sent elsewhere instead, as warp places him
+void redirect(Cpu* c, const std::string& stage, int room, const float pos[3], int16_t angle, const float* ship_pos, bool on_ship);
 
 // ---- game thread: call at the frame boundary (top of the per-frame function) ----
 void service(Cpu* c);
