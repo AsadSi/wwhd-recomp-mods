@@ -302,14 +302,15 @@ void emit(Op op, const uint32* payload, uint32 n) {
 }
 
 // host-only commands never go into display lists
-static void emit_host(Op op, std::initializer_list<uint32> payload) {
+void emit_host(Op op, const uint32* payload, uint32 n) {
     if (g_render_thread) {
-        enqueue(op, payload.begin(), (uint32)payload.size());
+        enqueue(op, payload, n);
         return;
     }
     std::lock_guard<std::recursive_mutex> lk(g_exec_mutex);
-    host::with_autorelease_pool([&] { execute_one(op, payload.begin(), (uint32)payload.size()); });
+    host::with_autorelease_pool([&] { execute_one(op, payload, n); });
 }
+static void emit_host(Op op, std::initializer_list<uint32> payload) { emit_host(op, payload.begin(), (uint32)payload.size()); }
 
 #ifdef WWHD_HAS_VULKAN
 void checkpoint_vulkan_caches() {
@@ -499,6 +500,7 @@ static void execute_op(Op op, const uint32* p, uint32 n) {
     case OP_LAYOUT_CONTENT:
         aspect::set_content_clip(n && p[0]);
         break;
+    case OP_BEAST: render::beast(p, n); break;
     case OP_LAYOUT_ROOT: {
         float kx, ky;
         aspect::layout_root_target(p[0], render::target_aspect_factors(g_regs[mmCB_COLOR0_TILE] & 0xFFFF, g_regs[mmCB_COLOR0_FRAG], kx, ky));

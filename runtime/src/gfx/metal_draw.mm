@@ -1722,6 +1722,7 @@ void draw(const uint32_t* regs, uint32_t prim, uint32_t count, uint32_t indexTyp
     MTLViewport vp{xo - xs, yo + ys, xs * 2.0f, ys * -2.0f, halfZ ? zo : zo - zs, zs + zo};
     vp.originX *= kx; vp.originY *= ky; vp.width *= kx; vp.height *= ky;
     [enc setViewport:vp];
+    if (depth && depth->addr == R.mainDepthAddr) g_scene_vp = vp, g_scene_half_z = halfZ;  // for the Shadow stalker (beast.mm)
     uint32_t tl = regs[REGADDR::PA_SC_GENERIC_SCISSOR_TL], br = regs[REGADDR::PA_SC_GENERIC_SCISSOR_BR];
     auto lo = [](uint32_t v, float k, uint32_t lim) { return std::min<uint32_t>((uint32_t)std::floor(v * k + 0.01f), lim); };
     auto hi = [](uint32_t v, float k, uint32_t lim) { return std::min<uint32_t>((uint32_t)std::ceil(v * k - 0.01f), lim); };

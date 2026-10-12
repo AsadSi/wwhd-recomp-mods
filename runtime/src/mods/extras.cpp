@@ -34,6 +34,7 @@
 
 #include "guest_addr.h"
 #include "mods.h"
+#include "shadow_beast.h"
 #include "../gx2/gx2.h"
 #include "../input.h"
 #include "../input_map.h"
@@ -79,6 +80,9 @@ constexpr Monster kRedead{0xE0, 0, 0xFFFFFFFF}, kStalfos{0xBE, -1, 0xFFFFFFFF}, 
                   // spin attacks, and makes his own short-lived copies). HD fganon_class: mAction +0x5BA, mMode +0x5BC,
                   // materialized +0x8C1 (GameCube + 0x234 from there; the first fields are + 0x11C)
                   kFganon{0xF1, -1, 0x00FFFF03},
+                  // a Bokoblin (daBk), the Shadow stalker's body (mods/shadow_beast.cpp): type 0, no lantern, the default
+                  // weapon, sight 0xFA x 10, no path, no switch
+                  kBokoblin{0xBD, -1, 0xFFFFFA00},
                   // Beedle's Shop Ship (daObj_Ikada type 1, IkadaH vtsp): no path (angle.x bits 8..15 0xFF); a moving BG
                   kBeedleShip{0x44, -1, 0x00000001, (int16_t)0xFF00},
                   // the flagged raft (daObj_Ikada type 0, IkadaH vikae): the same actor, flat, with a mast and a flag
@@ -591,8 +595,11 @@ const std::vector<Mod>& catalogue() {
          "It is faster than the boat, however fast she sails, and hunts Link until he makes land: run for an "
          "island, or fight it (it takes a lot of hitting) for 300 rupees and a blue potion.", {}, true},
         {"phantom-stalker", "Phantom stalker", "Spooky",
-         "Rarely, on an island at night, fog rolls in and Phantom Ganon comes down behind Link and hunts him across the "
-         "island, until Link takes to the sea, beats him, or he fades back into the fog.", {}, true},
+         "Rarely, on an island at night, fog rolls in and something hunts Link across the island, until he takes to the "
+         "sea, beats it, or it fades back into the fog: a Shadow Beast from Twilight Princess, which comes out of the fog "
+         "behind him (it needs game/shadow_beast.bin, made from the Twilight Princess HD dump by tools/shadow_beast.py; "
+         "Phantom Ganon comes without it), or Phantom Ganon, who comes down behind him.",
+         {"Shadow Beast", "Phantom Ganon"}, true},
         {"beedle-ship", "Beedle's ship", "Experimental",
          "Out at sea the King of Red Lions tows Beedle's shop ship, a size bigger, behind him on a tow-shaft. Stop and get "
          "out to leap back onto its deck, walk it and fight from it with its two cannons (one at the bow, one up on the "
@@ -1623,7 +1630,18 @@ void step(Cpu* c) {
     // island at night: his own execute eases the actor's scale (+0x330) to 1, so it is
     // set after it every step; his colliders' centres follow the model and their sizes are scaled by the hooks below
     const bool stalked = live(kStalker, now) && stage == "sea" && !boat && (night || !always(kStalker));
-    if (((live(kPhantom, now) && sea && boat) || stalked) && settled) {
+    // the Shadow Beast: a Bokoblin on the ground behind Link, drawn as the beast (mods/shadow_beast.cpp)
+    const bool shadow = stalked && g_choice[kStalker].load() == 0 && beast::asset();
+    if (!shadow) beast::set_body(0);
+    if (shadow && settled) {
+        if (g_phantom.wanted(c, now)) {
+            Spawner none;
+            static const bool ahead = getenv("WWHD_TEST_BEAST_AHEAD") != nullptr;  // test aid: in front of Link, in view
+            g_phantom.id = spawn(c, none, kBokoblin, link, ahead ? 500 : 900 + rand() % 400, ahead ? -1 : 1, 0, true);
+            g_phantom.next = now + 20;
+        }
+        beast::set_body(g_phantom.actor(c));
+    } else if (((live(kPhantom, now) && sea && boat) || stalked) && settled) {
         load_scene_bank(c, "Pscene080.jpc", 2);
         if (g_phantom.wanted(c, now)) {
             Spawner none;
@@ -1665,6 +1683,7 @@ void step(Cpu* c) {
             st32(pg + 0x2F4, u32_bits((float)hz));
         }
     }
+    beast::step(c, link, now);
     // Leviathan: one Gyorg (made as the others are, a child of the Haunted sea's GyCtrl, which is made here too if
     // needed) at 8x: setMtx (0216731C) copies the actor's scale (+0x330) into its model each execute, its spheres are
     // sized through the SetR hooks (g_big_hits) but its body collider's radius (+0x9B4) is a plain store each execute,

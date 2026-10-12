@@ -102,6 +102,9 @@ the fitting (its name, price and words), buy it: the level goes up, the rupees g
   deep) ON=(DEEP); EVENT="deep@+15"; NOTE="Fog and the Deep about 15 s in: the sea and sky darken, a haze closes in far from land." ;;
   dead-windfall) ON=(NIGHT_DEAD HORROR_AUDIO); EVENT="dead@+25"; AT_NIGHT=1; export WWHD_TEST_STAGE="sea 11 0"; NOTE="Night on Windfall: set down at its first spawn point
 on foot, and at about 25 s the dead rise, closing in from behind Link." ;;
+  stalker) ON=(PHANTOM_STALKER HORROR_AUDIO); EVENT="stalker@+25"; AT_NIGHT=1; RECORD=1; export WWHD_TEST_STAGE="${STAGE:-sea 11 0}"; NOTE="Night on Windfall: set down at its first spawn point
+on foot, and at about 25 s fog rolls in and the Shadow Beast comes out of it behind you (WWHD_MOD_PHANTOM_STALKER_CHOICE=1:
+Phantom Ganon). It hunts you; fight it (about a dozen sword hits) or outlast it (2 minutes)." ;;
   helm) ON=(BIG_SHIP); NOTE="$SHIP
 New: the wind sets her speed (before it the boat's speed, a third of it sailing into it), she gathers speed and loses it
 slowly, and the wheel turns a rudder over (turning is gentle from a standstill)." ;;
@@ -181,7 +184,7 @@ Everything at once. The first minute is yours: get on the deck, try the helm and
   OFTEN=2; NOTE="$SHIP
 The long soak, played: every spooky mod on, How often at Often, nothing forced. Sail out into open sea (away from
 islands) and keep going; the events come by chance, a roll a minute (none within reach of an island). Play as you like." ;;
-  *) echo "Usage: tools/try.sh <seamless|windfall|buy-ship|helm|cabin|beedle-shop|helmaroc|octo-phantom|chaos|full|raft|shop|raft-bosses|tour|tour-rest|long|beedle|beedle-guns|gunner|crew|boarding|drowned|calm|photo|blood|cyclone|maelstrom|armada|octo|lion|soak|plain|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim|cannon-boat|cannon-boat-deck>"; exit 2 ;;
+  *) echo "Usage: tools/try.sh <seamless|windfall|stalker|buy-ship|helm|cabin|beedle-shop|helmaroc|octo-phantom|chaos|full|raft|shop|raft-bosses|tour|tour-rest|long|beedle|beedle-guns|gunner|crew|boarding|drowned|calm|photo|blood|cyclone|maelstrom|armada|octo|lion|soak|plain|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim|cannon-boat|cannon-boat-deck>"; exit 2 ;;
 esac
 for m in "${SPOOKY[@]}"; do export WWHD_MOD_$m=0; done
 export WWHD_MOD_TURBO=1  # hold T to fast-forward (Claude: live pad bit 28)

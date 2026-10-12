@@ -1,6 +1,7 @@
 #include "interp.h"
 #include "mods/guest_mods.h"
 #include "mods/packages.h"
+#include "mods/shadow_beast.h"
 // Frame interpolation (60, 120 or 240 fps output, game logic unchanged at 30 steps per second).
 //
 // With interpolation on, the main loop body runs N+1 times per logic step (N in-between frames:
@@ -358,6 +359,7 @@ extern "C" void hook_024FFC40(Cpu* c) {
     using namespace interp;
     uint32_t cam = c->r[3];
     mods::extras::camera_draw(cam);  // the Big ship helm's far camera (mods/extras.cpp)
+    struct BeastDrawn { uint32_t cam; ~BeastDrawn() { mods::beast::camera_drawn(cam); } } beast_drawn{cam};  // as drawn (mods/shadow_beast.cpp)
     Prev* p = prev_for(cam);
     // true 60 with Link drawn at 60 Hz (his step on the logic pass, half a step on on the record pass): a 30 Hz camera
     // (lock-on, talk, events; the follow camera during a moment of 30 Hz) is drawn on his timing too, not the 30 Hz

@@ -41,12 +41,15 @@ enum Op : uint32_t {
     OP_LAYOUT_ROOT,     // nw::lyt root pane: drawn into the target bound now (which screen it goes to)
     OP_PEEK_Z,          // signed x/y in 640x480 space, guest result address (triples)
     OP_LAYOUT_CONTENT,  // DrawSelf scope: clip TV menu content to the native layout region
+    OP_BEAST,           // the Shadow stalker's pose for this frame (mods/shadow_beast.cpp; gfx/beast.mm)
     OP_COUNT
 };
 
 // emit a command (records into the active display list, or executes now)
 void emit(Op op, const uint32_t* payload, uint32_t n);
 inline void emit(Op op, std::initializer_list<uint32_t> payload) { emit(op, payload.begin(), (uint32_t)payload.size()); }
+// a host-only command: straight to the render queue, never into a display list being recorded
+void emit_host(Op op, const uint32_t* payload, uint32_t n);
 
 // register writes
 void set_reg(uint32_t reg, uint32_t value);

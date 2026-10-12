@@ -95,6 +95,12 @@ struct Renderer {
 };
 extern Renderer R;
 
+// the 3D scene's viewport and clip-space convention, as its last draw set them (metal_draw.mm), and the Shadow
+// stalker drawn into the open pass when it is the scene's (beast.mm, from end_encoder)
+extern MTLViewport g_scene_vp;
+extern bool g_scene_half_z;
+void beast_pass();
+
 // command buffer / encoder management
 id<MTLCommandBuffer> command_buffer();
 void end_encoder();

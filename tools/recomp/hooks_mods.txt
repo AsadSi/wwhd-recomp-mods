@@ -23,6 +23,8 @@
 @02168488 # daGy_c::checkTgHit death test: the Leviathan's hits are counted into its own health (extras.cpp)
 @021685B0 # daGy_c::checkTgHit ice/light arrow test, where a sword hit ends: the same
 020FF80C  # bwd_move: Molgera of the deep never swallows Link (extras.cpp)
+0209971C  # daBk_Draw: the Shadow stalker's Bokoblin body is not drawn (mods/shadow_beast.cpp)
+020C0CE0  # daBoko draw: nor its weapon
 02134B28  # daFganon_Execute: Phantom Ganon's effects as big as he is (extras.cpp)
 025A847C  # dPa_control_c::set: the same, while his execute runs
 @023CC7F0 # ph_class Execute: the Haunted sea's Seahats attack a Link who does not ride the boat too (extras.cpp)

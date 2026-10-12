@@ -115,6 +115,7 @@ static void track_gpu_time(id<MTLCommandBuffer> cb) {
 
 void end_encoder() {
     if (R.enc) {
+        beast_pass();
         [R.enc endEncoding];
         R.enc = nil;
         // submit work in chunks so the GPU starts while the frame is still being built (like the
