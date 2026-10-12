@@ -24,8 +24,12 @@ struct Asset {
     std::vector<Anim> anims;
 };
 constexpr uint32_t kVertexSize = 52;
-// OP_BEAST payload: fade, world 3x4, view 3x4, projection 4x4, then each joint's skinning matrix 3x4 (model space)
-constexpr uint32_t kPoseHeader = 1 + 12 + 12 + 16;
+// its hair, as TP's (daE_S1's ke_set): 22 strands of 16 points, drawn as lines of the points' widths
+constexpr int kHairStrands = 22, kHairPoints = 16;
+// OP_BEAST payload: fade, world 3x4, view 3x4, projection 4x4, the ground's height under it, the scene's light there
+// (ambient rgb, light rgb, light position, fog rgb, fog start, fog end); then each joint's skinning matrix 3x4 (model
+// space); then the hair's points (world x, y, z, width)
+constexpr uint32_t kLight = 42, kPoseHeader = kLight + 14;
 
 const Asset* asset();  // null when game/shadow_beast.bin is missing or bad
 

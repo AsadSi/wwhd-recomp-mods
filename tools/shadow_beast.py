@@ -1,17 +1,20 @@
-"""Twilight Princess HD's Shadow Beast (res/Object/E_s1.arc + E_s1.pack.gz) -> game/shadow_beast.bin, the skinned
-mesh, textures and animations the Shadow stalker mod draws (runtime/src/gfx/beast.mm).
+"""Twilight Princess HD's Shadow Beast (res/Object/E_s2.arc + E_s2.pack.gz, the archive daE_S1 loads its model and
+animations from) -> game/shadow_beast.bin, the skinned mesh, textures and animations the Shadow stalker mod draws
+(runtime/src/gfx/beast.mm).
 
     tools/shadow_beast.py [<TP HD game dir>] [<out>]   (defaults ~/Documents/code/tphd-recomp/game, game/shadow_beast.bin)
 
-The mesh is the J3D model's own (s1.bmd: VTX1/SHP1 skinned through DRW1/EVP1), in bind pose model space; the
-textures are the HD pack's GX2 ones, untiled with the ingame-mod tools' libgx2tex (GX2TEX_DIR overrides where);
+The mesh is the J3D model's own (s2.bmd: VTX1/SHP1 skinned through DRW1/EVP1; the HD pack's .gmx has the same
+triangles), in bind pose model space; the textures are the HD pack's GX2 ones (the body 1024x1024), untiled and the
+archive unpacked with the ingame-mod tools' libgx2tex and libyaz0 (GX2TEX_DIR overrides where);
 each .bck is sampled at every frame into joint-local scale, quaternion, translation.
 
 Output, little-endian: 'SBST' u32 version, then
   joints:  u32 n, n x (i32 parent, f32 inverse bind 3x4 row-major)
   verts:   u32 n, n x (f32 pos3, nrm3, uv2, u8 joint4, f32 weight4)
   indices: u32 n, n x u16 (triangles)
-  groups:  u32 n, n x (u32 texture, first index, index count, flags)   flags: 1 = glow texture (the body's lines)
+  groups:  u32 n, n x (u32 texture, first index, index count, flags)   flags: 1 = the mark (s2_mat_mark: unlit, its
+           colour TEV register C2 times the texture, cut out below alpha 128); bits 8+: GX cull mode
   textures: u32 n, n x (u32 w, h, w*h*4 RGBA8)
   anims:   u32 n, n x (char[32] name, u32 frames, u32 loop, frames x joints x f32[10] (scale3, quat xyzw, trans3))
 """
@@ -20,7 +23,8 @@ import math, os, struct, sys, gzip
 TP = sys.argv[1] if len(sys.argv) > 1 else os.path.expanduser("~/Documents/code/tphd-recomp/game")
 OUT = sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.path.dirname(__file__), "..", "game", "shadow_beast.bin")
 sys.path.insert(0, os.environ.get("GX2TEX_DIR", os.path.expanduser("~/Documents/Higgsfield export/ingame-mod/tools")))
-import gx2tex  # noqa: E402
+import arc, gx2tex  # noqa: E402
+import numpy as np  # noqa: E402
 
 
 def u8(d, o): return d[o]
@@ -325,14 +329,22 @@ def load_bck(d):
     return loop, frames
 
 
-def textures(pack):
-    """E_s1.pack.gz (TMPK) -> the GTX's textures as (w, h, RGBA8 bytes)."""
-    d = gzip.decompress(pack)
-    assert d[:4] == b"TMPK"
-    gtx = None
-    for i in range(u32(d, 4)):
-        no, do, sz = struct.unpack_from(">III", d, 0x10 + 16 * i)
-        if d[no:d.index(b"\0", no)].endswith(b".gtx"): gtx = d[do:do + sz]
+def bc1(data, w, h):
+    """BC1 blocks (linear) -> HxWx4 RGBA8."""
+    a = np.frombuffer(data[:w * h // 2], np.uint8).reshape(-1, 8).astype(np.uint32)
+    c0, c1 = a[:, 0] | a[:, 1] << 8, a[:, 2] | a[:, 3] << 8
+    idx = a[:, 4] | a[:, 5] << 8 | a[:, 6] << 16 | a[:, 7] << 24
+    def rgb(v): return np.stack([(v >> 11 & 31) * 255 / 31, (v >> 5 & 63) * 255 / 63, (v & 31) * 255 / 31, np.full(v.shape, 255.)], -1)
+    p0, p1, gt = rgb(c0), rgb(c1), (c0 > c1)[:, None]
+    p3 = np.where(gt, (p0 + 2 * p1) / 3, 0)
+    pal = np.stack([p0, p1, np.where(gt, (2 * p0 + p1) / 3, (p0 + p1) / 2), p3], 1)
+    sel = np.stack([idx >> (2 * k) & 3 for k in range(16)], 1)
+    px = np.take_along_axis(pal, sel[:, :, None].repeat(4, 2).astype(np.int64), 1)
+    return px.reshape(h // 4, w // 4, 4, 4, 4).transpose(0, 2, 1, 3, 4).reshape(h, w, 4).round().astype(np.uint8)
+
+
+def gtx_textures(gtx):
+    """A GTX's textures (base level) as (w, h, RGBA8 bytes)."""
     o, cur, out = u32(gtx, 4), None, []
     while o < len(gtx):
         hs, t, ds = u32(gtx, o + 4), u32(gtx, o + 0x10), u32(gtx, o + 0x14)
@@ -346,29 +358,33 @@ def textures(pack):
         f = gx2tex.fields(tx["s"])
         w, h = f["w"], f["h"]
         lin = gx2tex.untile(tx["s"], tx["img"], tx.get("mip", b""))
-        px = bytearray(w * h * 4)
-        if f["fmt"] == 0x31:  # BC1
-            rgb = gx2tex.bc1_decode(lin, w, h)
-            for y in range(h):
-                for x in range(w):
-                    px[4 * (y * w + x):4 * (y * w + x) + 4] = bytes(rgb[y, x]) + b"\xff"
-        elif f["fmt"] == 0x2:  # R4G4
-            for i in range(w * h): px[4 * i:4 * i + 4] = bytes(((lin[i] & 15) * 17, (lin[i] >> 4) * 17, 0, 255))
-        elif f["fmt"] == 0x7:  # R8G8
-            for i in range(w * h): px[4 * i:4 * i + 4] = bytes((lin[2 * i], lin[2 * i + 1], 0, 255))
+        if f["fmt"] == 0x31: px = bc1(lin, w, h)
+        elif f["fmt"] == 0x1: px = np.repeat(np.frombuffer(lin[:w * h], np.uint8).reshape(h, w, 1), 4, 2)  # I8
         else: raise SystemExit("texture format %#x" % f["fmt"])
-        res.append((w, h, bytes(px)))
+        res.append((w, h, px.tobytes()))
     return res
 
 
+def pack_files(pack):
+    """A TP HD .pack.gz (TMPK) -> {path: bytes}."""
+    d = gzip.decompress(pack)
+    assert d[:4] == b"TMPK"
+    out = {}
+    for i in range(u32(d, 4)):
+        no, do, sz = struct.unpack_from(">III", d, 0x10 + 16 * i)
+        out[d[no:d.index(b"\0", no)].decode()] = d[do:do + sz]
+    return out
+
+
 def main():
-    arc = rarc(open(os.path.join(TP, "content/res/Object/E_s1.arc"), "rb").read())
-    jnames, parent, inv_bind, verts, indices, groups, tnames, world = load_bmd(arc["bmdp/s1.bmd"])
-    texs = textures(open(os.path.join(TP, "content/res/Object/E_s1.pack.gz"), "rb").read())
+    obj = os.path.join(TP, "content/res/Object/")
+    arc_files = rarc(arc.yaz0(open(obj + "E_s2.arc", "rb").read()))
+    jnames, parent, inv_bind, verts, indices, groups, tnames, world = load_bmd(arc_files["bmdr/s2.bmd"])
+    texs = gtx_textures(pack_files(open(obj + "E_s2.pack.gz", "rb").read())["tex/Object/E_s2/archive/bmdr/s2.bmd.gtx"])
     anims = []
-    for path in sorted(arc):
+    for path in sorted(arc_files):
         if path.endswith(".bck"):
-            loop, frames = load_bck(arc[path])
+            loop, frames = load_bck(arc_files[path])
             assert len(frames[0]) == len(jnames), (path, len(frames[0]))
             anims.append((os.path.basename(path)[:-4], loop, frames))
     out = bytearray(b"SBST" + struct.pack("<I", 1))
@@ -385,7 +401,7 @@ def main():
     out += struct.pack("<I", len(indices)) + struct.pack("<%dH" % len(indices), *indices)
     out += struct.pack("<I", len(groups))
     for tex, first, count, mname, cull in groups:
-        flags = 1 if tex is not None and tnames[tex].startswith("s1_body") else 0
+        flags = 1 if mname == "s2_mat_mark" else 0
         out += struct.pack("<4I", tex if tex is not None else 0xFFFFFFFF, first, count, flags | (cull << 8))
     out += struct.pack("<I", len(texs))
     for w, h, px in texs: out += struct.pack("<2I", w, h) + px
