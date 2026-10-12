@@ -84,11 +84,11 @@ mans the other). Molgera 80 health; Phantom 18 shots drive him off." ;;
 maelstrom, Molgera, Titanic Phantom and the Lion all within the first ~2 minutes; the cyclone at 7 min. Upgrades:
 sailing 3, guns 3, shots 3 (no shop). Claude drives;
 take the controller any time." ;;
-  siren-phantom) ON=(SIREN PHANTOM_GANON HORROR_AUDIO RAFT FAIR_WIND SHIP_UPGRADES SECOND_GUNNER); EVENT="siren@+30;phantom@+150"
+  siren-phantom) ON=(SIREN MAELSTROM PHANTOM_GANON HORROR_AUDIO RAFT FAIR_WIND SHIP_UPGRADES SECOND_GUNNER); EVENT="siren@+30;phantom@+150"
   AT_NIGHT=1; RECORD=1; export WWHD_TEST_UPGRADES=3F WWHD_MOD_PHANTOM_GANON_CHOICE=1
   NOTE="At night, the big raft in tow, upgrades maxed. About 30 s in, the signs of the siren (faint harp notes, the wind
-dying, fog); at 1 min the song: the boat turns toward it by itself. Steer against it, or let it take you there (Gyorgs
-wait at the source). At about 2.5 min the signs of Titanic Phantom Ganon, then he comes: fight him from the raft's guns
+dying, fog); at 1 min the song: the boat turns toward it by itself. Steer against it, or let it take you there: five
+Gyorgs rise and ram the boat, and the sea opens into a whirlpool (wrench the stick to break free). At about 2.5 min the signs of Titanic Phantom Ganon, then he comes: fight him from the raft's guns
 (B onto the raft, A by a gun; 18 hits drive him off, each bigger shot counts 3). Sailing away during the signs escapes." ;;
   tour) ON=(BEEDLE_SHIP SECOND_GUNNER BOARDING PHOTO_MODE DROWNED ARMADA WRONG_LION DEAD_CALM SIREN MAELSTROM CYCLONES BLOOD_MOON NIGHT_DEAD HORROR_AUDIO); export WWHD_TEST_CREW=1
   EVENT="drowned@+60;armada@+190;lion@+440;lion@+455;lion@+470;calm@+490;siren@+640;maelstrom@+910;cyclone@+1010;blood@+1170"; AT_NIGHT=1

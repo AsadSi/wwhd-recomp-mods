@@ -489,8 +489,8 @@ const std::vector<Mod>& catalogue() {
          "200 rupees and a blue potion.", {}, true},
         {"siren", "Siren song", "Spooky",
          "Now and then, far out at sea and mostly at night, a sad little melody drifts over the water and the boat begins "
-         "to turn toward it on its own. Steer against it until the song fades; sail all the way to it and something "
-         "waits there.", {}, true},
+         "to turn toward it on its own. Steer against it until the song fades; let it take you all the way and Gyorgs "
+         "rise around the boat (and, with Maelstrom on, the sea there opens into a whirlpool).", {}, true},
         {"wrong-lion", "Something in the Lion", "Spooky",
          "Very rarely, sailing at night, the King of Red Lions laughs a laugh that is not his, swerves off and races on by "
          "himself for a few seconds, then sails on as if nothing happened.", {}, true},
@@ -1397,12 +1397,31 @@ void step(Cpu* c) {
     }
     // the Gyorgs hunt Link (Haunted sea's, the siren's): without their controller's path and battle state they would only
     // dive and circle (daGy_c mode at +0x3CC: 0 dive, 1 circle, 6 circle with others), so those are turned into an
-    // attack on the player (modeAttackPlayerInit, 02169B48, mode 3); attacks, damage and deletion run as the game decides
-    if (sea && settled)
+    // attack on the player (modeAttackPlayerInit, 02169B48, mode 3), which gives up while he rides the boat (or stands
+    // on a ship): then, as the Leviathan does, they circle the boat (their controller's clear-line flag for them set,
+    // +0x42E + the child index +0x3C8) and each breaches and rams it every 5-9 s (modeAttackInit 02169B68, mode 2), kept
+    // within 3000 of him so a sailing boat does not leave them behind; attacks, damage and deletion as the game decides
+    if (sea && settled) {
+        static std::unordered_map<uint32_t, double> ram_at;
         for (uint32_t id : g_gyorg_ids) {
             const uint32_t gy = id == g_gyctrl || id == g_leviathan.id ? 0 : guest_call(c, GC(0x025DE50C), {id});
-            if (const uint32_t mode = gy ? ld32(gy + 0x3CC) : 9; mode == 0 || mode == 1 || mode == 6) guest_call(c, GC(0x02169B48), {gy});
+            if (!gy) continue;
+            const uint32_t mode = ld32(gy + 0x3CC);
+            if (!boat) {
+                if (mode == 0 || mode == 1 || mode == 6) guest_call(c, GC(0x02169B48), {gy});
+                continue;
+            }
+            if (const uint32_t ctrl = ld32(gy + 0x3D4); in_mem2(ctrl) && ld32(gy + 0x3C8) < 8) st8(ctrl + 0x42E + ld32(gy + 0x3C8), 1);
+            if (double& at = ram_at[id]; mode == 1 && now >= at) {
+                if (at > 0) guest_call(c, GC(0x02169B68), {gy});
+                at = now + 5 + rand() % 5;
+            }
+            if (const double far = std::hypot(ldf32(gy + kPos) - ldf32(link + kPos), ldf32(gy + kPos + 8) - ldf32(link + kPos + 8)); far > 3000)
+                for (uint32_t o : {kPos, kPos + 8})
+                    st32(gy + o, u32_bits((float)(ldf32(link + o) + (ldf32(gy + o) - ldf32(link + o)) * 3000 / far)));
         }
+        if (g_gyorg_ids.empty()) ram_at.clear();
+    }
     // Phantom Ganon: one near a sailing Link, at the chosen size, or (the Phantom stalker) his own size behind Link on an
     // island at night: his own execute eases the actor's scale (+0x330) to 1, so it is
     // set after it every step; his colliders' centres follow the model and their sizes are scaled by the hooks below
@@ -1774,7 +1793,8 @@ void step(Cpu* c) {
         }
         if (std::hypot(dx, dz) < 800) {
             finish(c, kSiren, now, "Link reached the song");
-            sung_for = -1, g_siren_gyorgs = 3;  // (Always: it sings from somewhere new)
+            sung_for = -1, g_siren_gyorgs = 5;  // (Always: it sings from somewhere new)
+            if (g_on[kMaelstrom].load() && g_until[kMaelstrom] <= now) begin(kMaelstrom, now);  // and the sea there turns
         }
     }
     // Something in the Lion: a laugh (CV_G_SHIP_LAUGH 0x4925), and for a few seconds the boat swerves (its yaw rate
