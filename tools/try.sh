@@ -128,12 +128,12 @@ is filled up as each one comes; the fog is thinner while they are out." ;;
 Molgera and Titanic Phantom Ganon together, from about 30 s: get onto the deck first. Molgera 80 health (20 cannon
 hits; 300 rupees and a blue potion), Phantom 18 cannon hits drive him off. Your Bomb Bag is filled up as each comes." ;;
   titanic-deck) ON=(BIG_SHIP PHANTOM_GANON); EVENT="phantom@+30"; export WWHD_MOD_PHANTOM_GANON_CHOICE=1; NOTE="$SHIP
-Titanic (20x) Phantom Ganon comes at about 30 s: get onto the deck first, then fight him from it (cannons, bow,
+Titanic (12x) Phantom Ganon comes at about 30 s: get onto the deck first, then fight him from it (cannons, bow,
 sword). His dark balls, their bursts and his hit sparks are his size." ;;
   molgera-chase) ON=(MOLGERA); EVENT="molgera@+20"; NOTE="Molgera comes at about 20 s, far off, and hunts you.
 Set sail (A) and sail full speed to get away; it circles you like a Gyorg, charges in to bite, then circles again. Or turn and fight it." ;;
   phantom-titanic) ON=(PHANTOM_GANON); EVENT="phantom@+20"; export WWHD_MOD_PHANTOM_GANON_CHOICE=1
-  NOTE="Titanic (20x) Phantom Ganon at about 20 s: his dark balls, their bursts and the sparks of hits are his size now." ;;
+  NOTE="Titanic (12x) Phantom Ganon at about 20 s: his dark balls, their bursts and the sparks of hits are his size now." ;;
   anchor-island) ON=(BIG_SHIP); NOTE="$SHIP
 Sail toward Outset (south-west): the ship drops anchor by itself before the island; take the boat in, then come back." ;;
   cannon-boat) EXTRA="WWHD_EXTRAS_SPAWN=B3:00FFFF00:DAC:0:FF"; NOTE="A cannon boat appears about 3500 away 4 s after the file loads and bombards you. Its aim is the game's

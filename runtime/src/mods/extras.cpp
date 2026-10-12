@@ -435,7 +435,7 @@ const std::vector<Mod>& catalogue() {
          "titanic) comes out of it "
          "to fight around the boat as he does in Ganon's Tower, until he is beaten, Link reaches land or he fades back "
          "into the fog.",
-         {"Normal size", "Titanic (20x)"}, true},
+         {"Normal size", "Titanic (12x)"}, true},
         {"big-ship", "Big ship", "Experimental",
          "Tetra's ship, a boat of its own: out at sea it waits at anchor near the King of Red Lions. Stop beside it and get "
          "out to jump onto its deck; walk it, fight from it, man its cannons, and sail it from its wheel while he comes "
@@ -1462,7 +1462,7 @@ void step(Cpu* c) {
             g_phantom.next = now + 20;
         }
         if (const uint32_t pg = g_phantom.actor(c)) {
-            static const float kSize[] = {1.f, 20.f};
+            static const float kSize[] = {1.f, 12.f};
             const float size = stalked ? 1.f : kSize[g_choice[kPhantom].load()];
             for (int i = 0; i < 3; i++) st32(pg + 0x330 + 4 * i, u32_bits(size));
             g_big_hits.push_back({pg, pg + 0x1000, size});  // his sword and body colliders as big as he is, and his energy
