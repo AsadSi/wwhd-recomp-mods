@@ -1306,7 +1306,7 @@ void step(Cpu* c) {
     bool keys[256];
     input::held_keys(keys);
     static bool turbo = false;
-    if (const bool t = on<kTurbo>() && keys[kVK_ANSI_T]; t != turbo) gx2::set_uncapped(turbo = t);
+    if (const bool t = on<kTurbo>() && (keys[kVK_ANSI_T] || (input::live_buttons() & 0x10000000u)); t != turbo) gx2::set_uncapped(turbo = t);  // (live pad bit 28: a test driver's T)
 
     static uint32_t last_link = 0;
     static uint16_t life = 0, rupees = 0;
@@ -1836,26 +1836,29 @@ void step(Cpu* c) {
     // Helmaroc King: the Ganon's Tower boss (daBdk, proc 0xEE, param 0) at sea. Its create puts it at its tower's
     // centre in its tower flight (action +0x3DA 0x64, state +0x3DC) and starts the tower's battle music; here it is
     // flown by hand, after its execute (position, old position, home, heading), so only its wings and its own stomps
-    // are its: it circles 2500 out and 1500 up, and every 8-12 s dives through Link. Its timer +0x3D8 is held under
+    // are its: it circles 2000 out and 900 up, and every 8-12 s dives through Link. Its timer +0x3D8 is held under
     // 100 (at 100 it sets a zone switch and deletes the gulls); any other action (its tower landings, the Skull Hammer's
     // down and its demos) is turned back into the flight. Hits on its head, crest, body and feet (+0x13F0, +0x151C,
     // +0x1648, +0x1774, +0x18A0, 0x12C apart) count as Molgera's do, against kHelmarocHealth. After 100 s unbeaten, with
-    // Link riding the boat, its next dive snatches the boat: it climbs away with it under its feet for 4 s, then drops
+    // Link riding the boat, its next dive snatches the boat: it holds it under its feet for 2 s, then drops
     // him (a stage change) on another square of the sea, in the open water beside his boat or, half the time, ashore
     // on that square's island (a second stage change once its room is there, onto the first land found on the way in)
     {
         static int hop_room = -1;      // the island drop's second hop: the room, and until when it is tried
         static double hop_until = -1;
         static V3 hop_from, hop_isle;  // where the boat came in, the island's centre
-        if (hop_until > 0 && now >= hop_until) hop_until = -1, trace("extras: no land found for the Helmaroc King's drop");
+        static float hop_highest = 0;
+        if (hop_until > 0 && now >= hop_until) hop_until = -1, trace("extras: no land found for the Helmaroc King's drop (highest %.0f)", hop_highest);
         if (const uint32_t korl = ld32(kPlay + 0x5B3C); hop_until > 0 && settled && !fresh && in_mem2(korl) && now >= hop_until - 18) {
             static const uint32_t buf = mem::host_alloc(0x10);
             const double len = std::hypot(hop_isle.x - hop_from.x, hop_isle.z - hop_from.z);
+            float highest = -1e9f;
             for (double t = 0; t < len; t += 400) {
                 const double x = hop_from.x + (hop_isle.x - hop_from.x) * t / len, z = hop_from.z + (hop_isle.z - hop_from.z) * t / len;
-                st32(buf, u32_bits((float)x)), st32(buf + 4, u32_bits(3000.f)), st32(buf + 8, u32_bits((float)z));
-                guest_call(c, GC(0x02549F4C), {buf});
-                if (const float ground = (float)c->f[1].ps0; ground > 20 && ground < 2999) {
+                st32(buf, u32_bits((float)x)), st32(buf + 4, u32_bits(900.f)), st32(buf + 8, u32_bits((float)z));
+                guest_call(c, GC(0x02549F4C), {buf});  // (from 900, as the Big ship's land check: the start height back is nothing)
+                highest = std::max(highest, (float)c->f[1].ps0 == 900.f ? -1e9f : (float)c->f[1].ps0);
+                if (const float ground = (float)c->f[1].ps0; ground > 20 && ground != 900.f) {
                     const float at[3] = {(float)x, ground + 5, (float)z};
                     const float ship[3] = {(float)ldf32(korl + kPos), (float)ldf32(korl + kPos + 4), (float)ldf32(korl + kPos + 8)};
                     std::string why;
@@ -1864,6 +1867,7 @@ void step(Cpu* c) {
                     break;
                 }
             }
+            hop_highest = highest;
         }
         if (g_helmaroc.id != 0xFFFFFFFF && !live(kHelmaroc, now) && g_helmaroc.actor(c)) guest_call(c, GC(0x025D57E4), {g_helmaroc.id});
         if (live(kHelmaroc, now) && sea && settled) {
@@ -1899,11 +1903,13 @@ void step(Cpu* c) {
                     const double step = std::min(n, speed * dt);
                     at = {at.x + heading.x * step, at.y + heading.y * step, at.z + heading.z * step};
                 };
-                const bool snatcher = now - began > 100 && riding && in_mem2(korl);
+                // (test aids: WWHD_HELMAROC_SNATCH=<s> its snatch after that long, WWHD_HELMAROC_DROP=sea|ashore where)
+                static const double snatch_after = getenv("WWHD_HELMAROC_SNATCH") ? atof(getenv("WWHD_HELMAROC_SNATCH")) : 100;
+                const bool snatcher = now - began > snatch_after && riding && in_mem2(korl);
                 switch (flight) {
-                case kCircle: {  // round him, 2500 out and 1500 up, closing on the circle from wherever it is
-                    angle += 1900.0 / 2500 * dt;
-                    toward({l.x + sin(angle) * 2500, 1500, l.z + cos(angle) * 2500}, 3200);
+                case kCircle: {  // round him, 2000 out and 900 up (in the camera's view), closing on the circle from wherever it is
+                    angle += 1900.0 / 2000 * dt;
+                    toward({l.x + sin(angle) * 2000, 900, l.z + cos(angle) * 2000}, 3200);
                     if (now >= phase_at) flight = kDive, trace("extras: the Helmaroc King dives%s", snatcher ? " to snatch the boat" : "");
                     break;
                 }
@@ -1911,7 +1917,7 @@ void step(Cpu* c) {
                     toward({l.x, l.y + 250, l.z}, 2900);
                     if (to_link < 450) {
                         if (snatcher) {
-                            flight = kCarry, phase_at = now + 4;
+                            flight = kCarry, phase_at = now + 2;
                             trace("extras: the Helmaroc King snatches the boat");
                         } else {
                             if (now - pecked > 3) pecked = now, st16(sv + 2, (uint16_t)std::max(0, ld16(sv + 2) - 4));  // a heart
@@ -1920,16 +1926,12 @@ void step(Cpu* c) {
                     }
                     break;
                 case kPass:  // on past him, climbing again
-                    toward({at.x + heading.x * 3000, 1500, at.z + heading.z * 3000}, 2900);
+                    toward({at.x + heading.x * 3000, 900, at.z + heading.z * 3000}, 2900);
                     if (now >= phase_at) flight = kCircle, phase_at = now + 8 + rand() % 5, angle = atan2(at.x - l.x, at.z - l.z);
                     break;
-                case kCarry: {  // away and up with the boat (and Link in it) under its feet
-                    toward({at.x + heading.x * 2000, 3000, at.z + heading.z * 2000}, 1200);
-                    if (in_mem2(korl)) {
-                        for (uint32_t o : {kPos, 0x300u})
-                            st32(korl + o, u32_bits((float)at.x)), st32(korl + o + 4, u32_bits((float)(at.y - 450))), st32(korl + o + 8, u32_bits((float)at.z));
-                        st32(korl + 0x340, 0), st32(korl + 0x370, 0);
-                    }
+                case kCarry: {  // down on the boat, its feet on it (the boat draws where its own execute left it, so
+                                // it is not lifted: the stage change's fade is the flight)
+                    if (in_mem2(korl)) toward({ldf32(korl + kPos), ldf32(korl + kPos + 4) + 450, ldf32(korl + kPos + 8)}, 2900);
                     if (now < phase_at) break;
                     // dropped on another square (not this one, not Forsaken Fortress's): its open water 30000 from the
                     // island, or 14000 out, by boat, for the hop ashore
@@ -1937,7 +1939,8 @@ void step(Cpu* c) {
                     int room;
                     do room = 1 + rand() % 49; while (room == here || room == 1);
                     const V3 isle{((room - 1) % 7 - 3) * 1e5, 0, ((room - 1) / 7 - 3) * 1e5};
-                    const bool ashore = rand() % 2;
+                    static const char* drop = getenv("WWHD_HELMAROC_DROP");
+                    const bool ashore = drop ? drop[0] == 'a' : rand() % 2;
                     const double b = rand() / (double)RAND_MAX * 2 * M_PI, out = ashore ? 14000 : 30000;
                     const float to[3] = {(float)(isle.x + sin(b) * out), 0, (float)(isle.z + cos(b) * out)};
                     const float ship[3] = {to[0] + (ashore ? 0 : 700.f), 0, to[2]};

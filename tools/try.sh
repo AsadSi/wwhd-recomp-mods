@@ -178,6 +178,7 @@ islands) and keep going; the events come by chance, a roll a minute (none within
   *) echo "Usage: tools/try.sh <seamless|windfall|octo-phantom|chaos|full|raft|shop|raft-bosses|tour|tour-rest|long|beedle|beedle-guns|gunner|crew|boarding|drowned|calm|photo|blood|cyclone|maelstrom|armada|octo|lion|soak|plain|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim|cannon-boat|cannon-boat-deck>"; exit 2 ;;
 esac
 for m in "${SPOOKY[@]}"; do export WWHD_MOD_$m=0; done
+export WWHD_MOD_TURBO=1  # hold T to fast-forward (Claude: live pad bit 28)
 for m in ${ON[@]+"${ON[@]}"}; do export WWHD_MOD_$m=1; [ -n "${OFTEN:-}" ] && export WWHD_MOD_${m}_OFTEN=$OFTEN; done
 # the Big ship sails only once bought (Bomb Shop): the test runs own her, but for buy-ship
 [[ " ${ON[*]-} " == *" BIG_SHIP "* && "${1:-}" != buy-ship ]] && export WWHD_TEST_SHIP_OWNED=1
