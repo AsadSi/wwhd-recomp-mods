@@ -493,7 +493,7 @@ const std::vector<Mod>& catalogue() {
         {"big-octo", "Big Octo", "Spooky",
          "Now and then, far out at sea at night, the sea goes still and dark, then a whirlpool opens by the boat and Big "
          "Octo rises in it, Gyorgs circling and ramming. Its whirlpool drags the boat in; shoot out its eyes (arrows, the "
-         "Boomerang, bombs, a deck gun's shot) for 300 rupees and a blue potion, or break free and sail off.", {}, true},
+         "Boomerang, bombs, a deck gun's shot) for 300 rupees and a blue potion, or hold out until it sinks again.", {}, true},
         {"wrong-lion", "Something in the Lion", "Spooky",
          "Very rarely, sailing at night, the King of Red Lions laughs a laugh that is not his, swerves off and races on by "
          "himself for a few seconds, then sails on as if nothing happened.", {}, true},
@@ -1436,7 +1436,9 @@ void step(Cpu* c) {
                 continue;
             }
             if (const uint32_t ctrl = ld32(gy + 0x3D4); in_mem2(ctrl) && ld32(gy + 0x3C8) < 8) st8(ctrl + 0x42E + ld32(gy + 0x3C8), 1);
-            if (double& at = ram_at[id]; (mode == 0 || mode == 1 || mode == 6) && now >= at) {  // (diving or circling)
+            // (only at the boat he sits in: on a ship's deck a ram threw him into the sea, so there they circle and he can
+            // walk it and shoot them)
+            if (double& at = ram_at[id]; riding && (mode == 0 || mode == 1 || mode == 6) && now >= at) {  // (diving or circling)
                 if (at > 0) guest_call(c, GC(0x02169B68), {gy}), trace("extras: a Gyorg breaches to ram the boat");
                 at = now + 5 + rand() % 5;
             }
@@ -1817,6 +1819,16 @@ void step(Cpu* c) {
                 guest_call(c, GC(0x0211889C), {o, 0, 1}), risen = true;
                 trace("extras: the sea opens and Big Octo rises");
             }
+            // its whirlpool drags the boat round and in; under 500 from its centre the boat would go down and the stage be
+            // reloaded (the swallow's place), so in its grip the boat is held out at 1500, circling it (both positions)
+            if (const uint32_t korl = ld32(kPlay + 0x5B3C), wid = ld32(o + 0x2844); in_mem2(korl) && ld32(korl + 0x708) == wid)
+                if (const uint32_t w = guest_call(c, GC(0x025DE50C), {wid})) {
+                    const double dx = ldf32(korl + kPos) - ldf32(w + kPos), dz = ldf32(korl + kPos + 8) - ldf32(w + kPos + 8), d = std::hypot(dx, dz);
+                    if (d < 1500 && d > 1)
+                        for (uint32_t base : {(uint32_t)kPos, 0x300u})
+                            st32(korl + base, u32_bits((float)(ldf32(w + kPos) + dx / d * 1500))),
+                                st32(korl + base + 8, u32_bits((float)(ldf32(w + kPos + 8) + dz / d * 1500)));
+                }
             if (g_octo_dead) {
                 loot(c, 300);
                 finish(c, kOcto, now, "Big Octo is slain");
