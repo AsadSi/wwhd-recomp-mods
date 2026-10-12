@@ -6,7 +6,8 @@ set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 pgrep -fl "wwhd " >/dev/null && { echo "The game is already running; close it first."; exit 1; }
 [ -f "$ROOT/save/haunted.wwstate" ] || { echo "save/haunted.wwstate is missing."; exit 1; }
-SPOOKY=(NIGHT_DEAD HAUNTED_SEA STORM FOG GIANT_SEAHATS PHANTOM_GANON HORROR_AUDIO DEEP LEVIATHAN MOLGERA PHANTOM_STALKER BIG_SHIP BEEDLE_SHIP)
+SPOOKY=(NIGHT_DEAD HAUNTED_SEA STORM FOG GIANT_SEAHATS PHANTOM_GANON HORROR_AUDIO DEEP LEVIATHAN MOLGERA PHANTOM_STALKER BIG_SHIP BEEDLE_SHIP
+        DEAD_CALM PHOTO_MODE SECOND_GUNNER BLOOD_MOON CYCLONES MAELSTROM ARMADA SIREN WRONG_LION DROWNED BOARDING WRECKS CREW TIME)
 ON=(); EVENT=; NOTE=; EXTRA=
 SHIP="Big ship (keys: move WASD, A = K/Space, B = J, ZL = Left Shift, pause/items = Return):
   Tetra's ship is a boat of its own: once you are out at sea it waits at anchor a little way off your left.
@@ -18,13 +19,44 @@ SHIP="Big ship (keys: move WASD, A = K/Space, B = J, ZL = Left Shift, pause/item
   It stays where you leave it; leave it far behind and it waits near you again the next time you are at sea.
 Deck cannons (bow and stern): stand by one and press A (or your Bomb Bag's button) to man it. Stick aims, ZL locks on
   the nearest monster (again to unlock), A fires (one bomb a shot), B leaves."
-BEEDLE="Beedle's ship (keys: move WASD, A = K/Space, B = J, pause/items = Return):
-  The King of Red Lions sails as Beedle's shop ship: sail as always (his sail, his cannon). Stop and press B to hop onto
-  its deck; walk it, climb the hut, use weapons. A by the boat's seat sits you back down. Fall in: swim to its side and
-  press A to climb aboard."
+BEEDLE="Beedle's ship (keys: move WASD, A = K/Space, B = J, ZL = Left Shift, pause/items = Return):
+  The King of Red Lions tows Beedle's shop ship behind him on a rope: sail as always and it swings in behind you.
+  Stop and press B (Get Out) to leap back onto its deck. Walk it and fight from it. A at its bow (the end by the
+  Lion, away from the bow gun) leaps you forward into the boat. Fall in: swim to its side and press A to climb aboard.
+  Guns: one at the bow, one on the hut's roof. Stand by the bow gun, or in front of the hut for the roof gun, and press A
+  (or your Bomb Bag's button) to man it: stick aims, ZL locks on the nearest monster, A fires (a bomb a shot), B leaves."
 case "${1:-}" in
   plain) NOTE="Every new mod off: plain sailing, to compare (does Link and the boat lag here too?)." ;;
   beedle) ON=(BEEDLE_SHIP); NOTE="$BEEDLE" ;;
+  beedle-guns) ON=(BEEDLE_SHIP HAUNTED_SEA); EVENT="sea@+30"; NOTE="$BEEDLE
+Haunted sea at about 30 s: get onto its deck and try both guns." ;;
+  gunner) ON=(BEEDLE_SHIP SECOND_GUNNER HAUNTED_SEA); EVENT="sea@+30"; NOTE="$BEEDLE
+Connect TWO controllers. Player 2 (the second controller) has the roof gun from the start: left stick aims, ZL locks
+on, A or ZR fires. Player 1 sails and plays as ever on the first controller. Haunted sea at about 30 s." ;;
+  crew) ON=(BEEDLE_SHIP CREW ARMADA); EVENT="armada@+30"; NOTE="$BEEDLE
+The ship's crew fires both guns by itself at the nearest monster. A pirate armada comes at about 30 s: stop and watch,
+or man one gun yourself (the crew keeps the other)." ;;
+  boarding) ON=(BEEDLE_SHIP BOARDING ARMADA); EVENT="armada@+30"; NOTE="$BEEDLE
+Get onto the deck before 30 s; then a pirate armada comes. Stay on the deck: when a cannon boat comes within 2500,
+two Bokoblins leap aboard." ;;
+  drowned) ON=(BEEDLE_SHIP DROWNED); EVENT="drowned@+30"; AT_NIGHT=1; NOTE="$BEEDLE
+It is night. Get onto the deck before 30 s: then ReDeads climb aboard, one every 12 s (three at most), for 2 minutes." ;;
+  calm) ON=(DEAD_CALM HORROR_AUDIO); EVENT="calm@+20"; NOTE="Set sail (A). At about 20 s the wind dies and a still fog settles; try the Wind Waker (it turns the wind, not the calm)." ;;
+  photo) ON=(PHOTO_MODE); NOTE="Press F7 for the free camera: left stick / WASD flies, right stick / arrow keys look, L/R (Q/E) down and up,
+ZL (Shift) for speed. F7 again gives the camera back." ;;
+  blood) ON=(BLOOD_MOON NIGHT_DEAD HORROR_AUDIO); EVENT="blood@+20"; AT_NIGHT=1; NOTE="It is night. At about 20 s the blood moon: the world turns red over 20 s. Sail to an island (Outset is south-west)
+and land: the dead rise twice as fast." ;;
+  cyclone) ON=(CYCLONES); EVENT="cyclone@+20"; NOTE="At about 20 s a cyclone appears far ahead and wanders across your course. Steer around it, then try sailing
+into it (within 3000 it takes the boat and throws you to another part of the sea)." ;;
+  maelstrom) ON=(MAELSTROM); EVENT="maelstrom@+20"; NOTE="At about 20 s a whirlpool opens beside the boat and drags you round. Wrench the stick left-right to break free,
+or wait 45 s (it takes two hearts)." ;;
+  armada) ON=(ARMADA); EVENT="armada@+20"; NOTE="At about 20 s four cannon boats come in formation from ahead. Sink them all with the boat's cannon (R, then A
+to fire) for 200 rupees and a blue potion. Sail away and they follow." ;;
+  siren) ON=(SIREN); EVENT="siren@+20"; NOTE="Set sail (A). At about 20 s a harp melody plays and the boat turns by itself toward it: steer against it.
+Then let it take you there (about 7000 off) to see what waits." ;;
+  lion) ON=(WRONG_LION); EVENT="lion@+20;lion@+40;lion@+60"; AT_NIGHT=1; NOTE="It is night. Set sail (A). At about 20, 40 and 60 s the King of Red Lions laughs and swerves off by himself
+for a few seconds." ;;
+  wrecks) ON=(WRECKS); EVENT="wrecks@+20"; AT_NIGHT=1; NOTE="It is night. At about 20 s fog rolls in over a graveyard of ships ahead: sail among the sunken hulks (Poes about)." ;;
   beedle-bosses) ON=(BEEDLE_SHIP MOLGERA PHANTOM_GANON); EVENT="molgera@+40;phantom@+45"; export WWHD_MOD_PHANTOM_GANON_CHOICE=1; NOTE="$BEEDLE
 Molgera and Titanic Phantom Ganon together from about 40 s: fight them from its deck or from the boat's cannon." ;;
   deck) ON=(BIG_SHIP); NOTE="$SHIP" ;;
@@ -70,10 +102,11 @@ Everything at once. The first minute is yours: get on the deck, try the helm and
   OFTEN=2; NOTE="$SHIP
 The long soak, played: every spooky mod on, How often at Often, nothing forced. Sail out into open sea (away from
 islands) and keep going; the events come by chance, a roll a minute (none within reach of an island). Play as you like." ;;
-  *) echo "Usage: tools/try.sh <soak|plain|beedle|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim|cannon-boat|cannon-boat-deck>"; exit 2 ;;
+  *) echo "Usage: tools/try.sh <beedle|beedle-guns|gunner|crew|boarding|drowned|calm|photo|blood|cyclone|maelstrom|armada|siren|lion|wrecks|soak|plain|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim|cannon-boat|cannon-boat-deck>"; exit 2 ;;
 esac
 for m in "${SPOOKY[@]}"; do export WWHD_MOD_$m=0; done
 for m in ${ON[@]+"${ON[@]}"}; do export WWHD_MOD_$m=1; [ -n "${OFTEN:-}" ] && export WWHD_MOD_${m}_OFTEN=$OFTEN; done
+[ -n "${AT_NIGHT:-}" ] && export WWHD_MOD_TIME=1 WWHD_MOD_TIME_CHOICE=4  # the clock held at 23:00
 [ -n "$EVENT" ] && export WWHD_SPOOKY="$EVENT"
 echo "$NOTE"
 echo
