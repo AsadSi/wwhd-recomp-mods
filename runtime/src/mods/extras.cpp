@@ -596,9 +596,9 @@ const std::vector<Mod>& catalogue() {
          "island, or fight it (it takes a lot of hitting) for 300 rupees and a blue potion.", {}, true},
         {"phantom-stalker", "Phantom stalker", "Spooky",
          "Rarely, on an island at night, fog rolls in and something hunts Link across the island, until he takes to the "
-         "sea, beats it, or it fades back into the fog: a Shadow Beast from Twilight Princess, which comes out of the fog "
-         "behind him (it needs game/shadow_beast.bin, made from the Twilight Princess HD dump by tools/shadow_beast.py; "
-         "Phantom Ganon comes without it), or Phantom Ganon, who comes down behind him.",
+         "sea, beats it, or it fades back into the fog: a Shadow Beast from Twilight Princess, which drops from the sky "
+         "and fights as it does there (it needs game/shadow_beast.bin, made from the Twilight Princess HD dump by "
+         "tools/shadow_beast.py; Phantom Ganon comes without it), or Phantom Ganon, who comes down behind him.",
          {"Shadow Beast", "Phantom Ganon"}, true},
         {"beedle-ship", "Beedle's ship", "Experimental",
          "Out at sea the King of Red Lions tows Beedle's shop ship, a size bigger, behind him on a tow-shaft. Stop and get "

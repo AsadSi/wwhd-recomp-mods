@@ -14,6 +14,7 @@
 #include "runtime.h"
 
 namespace interp { float pass_t(); }
+static uint32_t u32_bits(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
 
 namespace mods::beast {
 namespace {
@@ -119,6 +120,7 @@ void read_light(uint32_t body) {
 }
 
 uint32_t g_body_draw = 0;          // for the draw hooks (they must not call into the game)
+uint32_t g_link = 0;               // Link, as the last step saw him
 std::vector<uint32_t> g_hidden;    // weapon actors
 
 void play(const char* name, float rate, bool lock, float morf) {
@@ -252,6 +254,105 @@ void ke_set(const float* head) {  // head: the head joint's world matrix
     }
 }
 
+
+// ---- its mind: daE_S1's fight actions (d_a_e_s1.cpp: e_s1_fight_run, e_s1_fight, e_s1_damage), run in place of the
+// Bokoblin's own (Bk_move, hooked below) on the Bokoblin's body, whose execute then moves it with its ground and wall
+// checks, takes Link's hits (its health) and, once that runs out, dies as the Bokoblin does (Bk_move again, unseen)
+constexpr uint32_t kSpeedF = 0x370, kSpeed = 0x33C, kAtSph = 0x11A0;  // the body's speedF, speed, weapon AT sphere
+constexpr int kHandR = 15;                                             // its strikes hit with the right hand
+enum Act { kAppear, kRun, kFight, kDamage };
+struct Mind {
+    Act act = kAppear;
+    int mode = 0, timer = 0, health = kBodyHealth;
+    bool slow = false, at_was = false;
+    float speed = 0, push = 0;  // speedF (TP units, x the base size when moved) and the push back from a hit
+    int16_t push_angle = 0;
+} g_mind;
+
+float add_calc2(float v, float target, float max) { return v + std::clamp(target - v, -max, max); }  // cLib_addCalc2, scale 1
+int16_t add_angle(int16_t a, int16_t target, int scale, int max) {                                 // cLib_addCalcAngleS2
+    return (int16_t)(a + std::clamp((int16_t)(target - a) / scale, -max, max));
+}
+
+// where joint `j` is in the world now
+void joint_pos(int j, float* out) {
+    std::vector<float> world(g_asset.parent.size() * 12);
+    float m[12], w[12];
+    pose(0, world.data(), nullptr), base(1, m), mul34(m, &world[j * 12], w);
+    out[0] = w[3], out[1] = w[7], out[2] = w[11];
+}
+
+void think(Cpu* c, uint32_t body) {
+    Mind& m = g_mind;
+    const uint32_t pl = g_link;
+    if (!pl) return;
+    const float dx = (float)(ldf32(pl + kPos) - ldf32(body + kPos)), dz = (float)(ldf32(pl + kPos + 8) - ldf32(body + kPos + 8));
+    const float dist = std::sqrt(dx * dx + dz * dz);
+    const int16_t to_link = atan2s(dx, dz);
+    int16_t angle = (int16_t)ld16(body + kAngleY);
+    const int health = (int8_t)ld8(body + kHealth);
+    if (health < m.health) m.act = kDamage, m.mode = 0, m.speed = 0, m.push = 30, m.push_angle = to_link;  // damage_check
+    m.health = health;
+    if (m.timer > 0) m.timer--;
+    bool at = false;
+    const int frame = (int)g.cur.frame;
+    switch (m.act) {
+    case kAppear:  // e_s1_warpappear: it lands, gets up (s2_down), then hunts
+        if (g.drop == 0 && finished(g.cur)) g.locked = false, m.act = kRun, m.mode = 0;
+        break;
+    case kRun:  // e_s1_fight_run: dash at Link, turning hard, up to its dash speed
+        if (m.mode == 0) play("s2_dash01", 1, false, 3), g.cur.frame = rnd2(10), m.mode = 1;
+        angle = add_angle(angle, to_link, 4, 0x1000);
+        m.speed = add_calc2(m.speed, 20, 20 * 0.333f);
+        if (dist < 300) m.act = kFight, m.mode = 0;
+        break;
+    case kFight:  // e_s1_fight: wait a moment facing Link, then one of its two strikes
+        if (m.mode == 0) play("s2_wait01", 1, false, 10), m.timer = 30 + (int)(rand() % 30), m.mode = 1;
+        else if (m.mode == 1 && m.timer == 0) {
+            m.slow = rand() % 3 != 0;
+            play(m.slow ? "s2_attack02" : "s2_attack", 1, true, 3), m.mode = 2;
+        } else if (m.mode == 2) {
+            at = m.slow ? frame >= 25 && frame <= 33 : frame >= 21 && frame <= 30;
+            if (finished(g.cur)) {
+                g.locked = false;
+                if (dist > 310) m.act = kRun;
+                m.mode = 0;
+            }
+        }
+        angle = add_angle(angle, to_link, 4, 0x800);
+        m.speed = add_calc2(m.speed, 0, 10);
+        break;
+    case kDamage:  // e_s1_damage: reels, then runs at Link again
+        if (m.mode == 0) play("s2_damaged", 1, true, 1), m.mode = 1;
+        else if (finished(g.cur)) g.locked = false, m.act = kRun, m.mode = 0;
+        m.speed = 0;
+        break;
+    }
+    // moved as daE_S1's action() moves it: forward at speedF x the base size; pushed back from a hit
+    const float sp = m.speed * kScale, sn = ssin(angle), cs = ssin((int16_t)(angle + 0x4000));
+    st16(body + kAngleY, (uint16_t)angle);
+    st32(body + kSpeedF, u32_bits(sp));
+    st32(body + kSpeed, u32_bits(sn * sp)), st32(body + kSpeed + 8, u32_bits(cs * sp));
+    if (m.push > 0.01f) {
+        for (int i : {0, 2})
+            st32(body + kPos + 4 * i, u32_bits((float)(ldf32(body + kPos + 4 * i) - m.push * (i == 0 ? ssin(m.push_angle) : ssin((int16_t)(m.push_angle + 0x4000))))));
+        m.push -= std::min(m.push, 7.f);
+    }
+    // its strike: the Bokoblin's weapon sphere (attack power 2) on its right hand, as daE_S1's mCcAtSph (40 x base size)
+    const uint32_t sph = body + kAtSph;
+    if (at) {
+        static const uint32_t pos = mem::host_alloc(16);
+        float h[3];
+        joint_pos(kHandR, h);
+        for (int i = 0; i < 3; i++) st32(pos + 4 * i, u32_bits(h[i]));
+        guest_call(c, GC(m.at_was ? 0x025167E4 : 0x025167C0), {sph, pos});  // dCcD_Sph::MoveCAt / StartCAt
+        c->f[1].ps0 = 40 * kScale;
+        guest_call(c, GC(0x02018C8C), {sph});                                 // SetR
+        guest_call(c, GC(0x0200E240), {guest_call(c, GC(0x025200D4)) + 0x26A4, sph});  // dComIfG_Ccsp()->Set
+    }
+    m.at_was = at;
+}
+
 }  // namespace
 
 const Asset* asset() {
@@ -263,6 +364,7 @@ void set_body(uint32_t body) {
     if (body && body != g.body) {  // a new one drops from the sky behind Link
         g = State{};
         g.out = true, g.body = body, g.id = ld32(body + 0x4);  // base_process_class::mBsPcId
+        g_mind = Mind{};
         g.x = g.px = ldf32(body + kPos), g.y = g.py = ldf32(body + kPos + 4), g.z = g.pz = ldf32(body + kPos + 8);
         g.yaw = g.pyaw = (int16_t)ld16(body + kAngleY) * (float)M_PI / 32768;
         g.drop = g.pdrop = kDropFrom;
@@ -278,20 +380,14 @@ void set_body(uint32_t body) {
                 k.p[j][0] = head[3], k.p[j][1] = head[7] - j * 8, k.p[j][2] = head[11], k.v[j][0] = k.v[j][1] = k.v[j][2] = 0;
         trace("beast: out, its body the Bokoblin at %08X", body);
     } else if (!body && g.body) {
-        // gone: slain (its last health 0) falls dead as TP's do (one of dead02-04, then it lies there) and fades;
-        // the event's end (time, Link at sea) fades it out where it is
-        g.body = 0;
-        if (g.health <= 0) {
-            static const char* kDead[] = {"s2_dead02", "s2_dead03", "s2_dead04"};
-            const int k = rand() % 3;
-            g.dying = 1 + k, play(kDead[k], 1, true, 2);
-            trace("beast: slain");
-        } else g.fade_to = 0, trace("beast: fades back into the fog");
+        g.body = 0;  // gone: slain (it fell when its health ran out, below), or the event's end fades it out where it is
+        if (!g.dying) g.fade_to = 0, trace("beast: fades back into the fog");
     }
     g_body_draw = g.body;
 }
 
 void step(Cpu* c, uint32_t link, double) {
+    g_link = link;
     if (!g.out) return;
     g.pfade = g.fade, g.pdrop = g.drop;
     g.px = g.x, g.py = g.y, g.pz = g.z, g.pyaw = g.yaw;
@@ -311,20 +407,13 @@ void step(Cpu* c, uint32_t link, double) {
         const uint32_t wid = ld32(body + kWeaponId);
         if (wid != 0xFFFFFFFF && std::find(g.weapons.begin(), g.weapons.end(), wid) == g.weapons.end()) g.weapons.push_back(wid);
         const int health = (int8_t)ld8(body + kHealth);
-        const double moved = std::hypot(g.x - g.px, g.z - g.pz);
         const double to_link = std::hypot(ldf32(link + kPos) - g.x, ldf32(link + kPos + 8) - g.z);
-        // what it does, as daE_S1's actions animate it (anm_init's animations, rates and morf frames): hit
-        // (e_s1_damage), strikes when close (e_s1_fight), runs at Link (e_s1_fight_run), walks (e_s1_wait), waits
-        if (health < g.health && health > 0 && g.drop == 0) play("s2_damaged", 1, true, 1);
-        else if (g.locked && finished(g.cur)) g.locked = false;
-        if (!g.locked) {
-            constexpr float kDash = 20 * kScale, kWalk = 4 * kScale;  // its HIO dash and walk speeds, per step
-            if (to_link < 260 && moved < 6) play(rand() % 2 ? "s2_attack" : "s2_attack02", 1, true, 3);
-            else if (moved > 9) play("s2_dash01", std::clamp((float)moved / kDash, 0.7f, 1.5f), false, 3);
-            else if (moved > 1.5) play("s2_walk", std::clamp((float)moved / kWalk, 0.7f, 2.f), false, 10);
-            else play("s2_wait01", 1, false, 10);
+        if (health <= 0 && !g.dying) {  // slain: falls dead as TP's do (one of dead02-04), lies there, fades
+            static const char* kDead[] = {"s2_dead02", "s2_dead03", "s2_dead04"};
+            const int k = rand() % 3;
+            g.dying = 1 + k, play(kDead[k], 1, true, 2);
+            trace("beast: slain");
         }
-        g.health = health;
         static int n = 0;
         if (++n % 60 == 0)
             trace("beast: at %.0f %.0f %.0f, %s frame %.0f, health %d, %.0f from Link", g.x, g.y, g.z,
@@ -385,6 +474,15 @@ extern "C" void f_0209971C_orig(Cpu* c);
 extern "C" void hook_0209971C(Cpu* c) {
     if (mods::beast::g_body_draw && c->r[3] == mods::beast::g_body_draw) { c->r[3] = 1; return; }
     f_0209971C_orig(c);
+}
+// Bk_move (020A5EF4): the Bokoblin's own mind, replaced on the Shadow stalker's body by daE_S1's until its health runs out
+extern "C" void f_020A5EF4_orig(Cpu* c);
+extern "C" void hook_020A5EF4(Cpu* c) {
+    if (mods::beast::g_body_draw && c->r[3] == mods::beast::g_body_draw && (int8_t)ld8(c->r[3] + 0x3A1) > 0) {
+        mods::beast::think(c, c->r[3]);
+        return;
+    }
+    f_020A5EF4_orig(c);
 }
 // daBoko draw (020C0CE0): nor its weapon
 extern "C" void f_020C0CE0_orig(Cpu* c);
