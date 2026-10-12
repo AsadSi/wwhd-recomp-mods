@@ -38,3 +38,4 @@
 @024C8F68 # daTornado execute: nor fade it out
 @024C8FF8 # daTornado execute: (the other test)
 02481C94  # daShip_c::procTornadoUp: its cyclone gone, the boat is let go instead of reading through nothing (extras.cpp)
+0211BFFC  # daDaiocta modeDelete: Big Octo of the mod dies without its demo (extras.cpp)

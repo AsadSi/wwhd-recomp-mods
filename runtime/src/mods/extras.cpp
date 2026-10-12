@@ -46,7 +46,7 @@
 
 namespace mods::extras {
 namespace {
-enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kAudio, kDeep, kLeviathan, kMolgera, kStalker, kBeedle, kCalm, kPhoto, kGunner, kBlood, kCyclone, kMaelstrom, kArmada, kSiren, kWrongLion, kDrowned, kBoarding, kRaft, kFairWind, kPacing, kUpgrades, kCount };  // the catalogue's order
+enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kAudio, kDeep, kLeviathan, kMolgera, kStalker, kBeedle, kCalm, kPhoto, kGunner, kBlood, kCyclone, kMaelstrom, kArmada, kOcto, kWrongLion, kDrowned, kBoarding, kRaft, kFairWind, kPacing, kUpgrades, kCount };  // the catalogue's order
 std::atomic<bool> g_on[kCount];
 std::atomic<int> g_choice[kCount];
 std::atomic<int> g_often[kCount];
@@ -106,8 +106,11 @@ uint32_t g_cyclone_actor = 0;  // for its hooks
 double g_armada_for = -1;
 size_t g_armada_made = 0;
 bool g_whirl_fading = false;  // Maelstrom's whirlpool told to fade: deleted once it has
-int g_siren_gyorgs = 0;       // Gyorgs owed where the siren sang, made once their controller exists
-double g_siren_for = -1;      // the event the siren's point was placed for
+int g_octo_gyorgs = 0;       // Gyorgs owed with Big Octo, made once their controller exists
+double g_octo_for = -1;      // the event Big Octo was made for
+Single g_octo;               // Big Octo, and (for its death hook) the actor and whether it has died
+uint32_t g_octo_actor = 0;
+bool g_octo_dead = false;
 uint32_t g_leviathan_actor = 0, g_molgera_actor = 0;  // for the hooks below, which must not call into the game
 uint32_t g_phantom_actor = 0;                          // Phantom Ganon, and his size, for the same
 // Beedle's ship in tow behind the King of Red Lions (below), for its hooks: the ship, the boat, the ship's BG matrix
@@ -487,10 +490,10 @@ const std::vector<Mod>& catalogue() {
          "Now and then, far out at sea, four cannon boats come over the horizon in formation, close in, heave to and open "
          "fire, following if Link sails off. Sink them all (with the boat's cannon, bombs or a ship's deck cannons) for "
          "200 rupees and a blue potion.", {}, true},
-        {"siren", "Siren song", "Spooky",
-         "Now and then, far out at sea and mostly at night, a sad little melody drifts over the water and the boat begins "
-         "to turn toward it on its own. Steer against it until the song fades; let it take you all the way and Gyorgs "
-         "rise around the boat (and, with Maelstrom on, the sea there opens into a whirlpool).", {}, true},
+        {"big-octo", "Big Octo", "Spooky",
+         "Now and then, far out at sea at night, the sea goes still and dark, then a whirlpool opens by the boat and Big "
+         "Octo rises in it, Gyorgs circling and ramming. Its whirlpool drags the boat in; shoot out its eyes (arrows, the "
+         "Boomerang, bombs, a deck gun's shot) for 300 rupees and a blue potion, or break free and sail off.", {}, true},
         {"wrong-lion", "Something in the Lion", "Spooky",
          "Very rarely, sailing at night, the King of Red Lions laughs a laugh that is not his, swerves off and races on by "
          "himself for a few seconds, then sails on as if nothing happened.", {}, true},
@@ -550,7 +553,7 @@ void set_often(const std::string& id, int o) {
 // land, near an island or after its time, the fog rolling out. Night of the dead is a roll at nightfall for that night;
 // Stormy weather and Thick fog are spells of a few minutes. Rain and fog fade in and out: the rain count
 // (dKyw_rain_set) is ramped, and our fog is blended with the game's by dKy_fog_startendz_set's ratio.
-// Test aid: WWHD_SPOOKY=<sea|giants|phantom|dead|storm|fog|deep|leviathan|molgera|stalker|calm|blood|cyclone|maelstrom|armada|siren|lion|drowned>@<game seconds>[;...] starts that event at that time
+// Test aid: WWHD_SPOOKY=<sea|giants|phantom|dead|storm|fog|deep|leviathan|molgera|stalker|calm|blood|cyclone|maelstrom|armada|octo|lion|drowned>@<game seconds>[;...] starts that event at that time
 // (@+<seconds>: that long after Link is first in play).
 namespace {
 constexpr int kAlways = 3;
@@ -630,7 +633,7 @@ bool scare_on(double now) {
     return false;
 }
 void begin(int k, double now) {
-    g_until[k] = now + (k == kPhantom || k == kLeviathan ? 180 : k == kMolgera ? 150 : k == kStalker ? 120 : k == kSea ? 120 + rand() % 120 : k == kCalm ? 60 + rand() % 90 : k == kCyclone ? 150 : k == kMaelstrom ? 90 : k == kArmada ? 240 : k == kSiren ? 75 : k == kWrongLion ? 6 + rand() % 4 : k == kDrowned ? 120 : 180 + rand() % 300);
+    g_until[k] = now + (k == kPhantom || k == kLeviathan ? 180 : k == kMolgera ? 150 : k == kStalker ? 120 : k == kSea ? 120 + rand() % 120 : k == kCalm ? 60 + rand() % 90 : k == kCyclone ? 150 : k == kMaelstrom ? 90 : k == kArmada ? 240 : k == kOcto ? 180 : k == kWrongLion ? 6 + rand() % 4 : k == kDrowned ? 120 : 180 + rand() % 300);
     if (k == kPhantom || k == kStalker) g_phantom = Single{};  // made afresh by their blocks below
     if (k == kLeviathan) g_leviathan = Single{};
     if (k == kMolgera) g_molgera = Single{};
@@ -649,6 +652,13 @@ void finish(Cpu* c, int k, double now, const char* why) {
     if (k == kCyclone && g_cyclone.actor(c)) guest_call(c, GC(0x025D57E4), {g_cyclone.id});
     // the whirlpool lets go: told to fade (+0x434 0) from nearly nothing (+0x430), so the boat is free at its next step;
     // deleted once it has (its own delete leaves its wave effect, which it removes itself as it reaches 0)
+    if (k == kOcto) {  // Big Octo sinks out of sight, and its whirlpool with it
+        if (const uint32_t o = g_octo.actor(c)) {
+            if (const uint32_t w = ld32(o + 0x2844); guest_call(c, GC(0x025DE50C), {w})) guest_call(c, GC(0x025D57E4), {w});
+            guest_call(c, GC(0x025D57E4), {g_octo.id});
+        }
+        g_octo = Single{}, g_octo_actor = 0, g_octo_dead = false;
+    }
     if (k == kArmada) {  // what is left of it sails off into the fog: gone
         for (uint32_t id : g_armada.ids) guest_call(c, GC(0x025D57E4), {id});
         g_armada = Spawner{};
@@ -669,7 +679,7 @@ std::vector<Forced> forced_events() {
     std::vector<Forced> v;
     const char* e = getenv("WWHD_SPOOKY");
     static const std::pair<const char*, int> kNames[] = {{"sea", kSea}, {"giants", kGiants}, {"phantom", kPhantom},
-                                                         {"dead", kNight}, {"storm", kStorm}, {"fog", kFog}, {"deep", kDeep}, {"leviathan", kLeviathan}, {"molgera", kMolgera}, {"stalker", kStalker}, {"calm", kCalm}, {"blood", kBlood}, {"cyclone", kCyclone}, {"maelstrom", kMaelstrom}, {"armada", kArmada}, {"siren", kSiren}, {"lion", kWrongLion}, {"drowned", kDrowned}};
+                                                         {"dead", kNight}, {"storm", kStorm}, {"fog", kFog}, {"deep", kDeep}, {"leviathan", kLeviathan}, {"molgera", kMolgera}, {"stalker", kStalker}, {"calm", kCalm}, {"blood", kBlood}, {"cyclone", kCyclone}, {"maelstrom", kMaelstrom}, {"armada", kArmada}, {"octo", kOcto}, {"lion", kWrongLion}, {"drowned", kDrowned}};
     for (std::string rest = e ? e : ""; !rest.empty();) {
         const std::string item = rest.substr(0, rest.find(';'));
         rest = item.size() < rest.size() ? rest.substr(item.size() + 1) : "";
@@ -682,7 +692,7 @@ std::vector<Forced> forced_events() {
 }
 
 // The warning signs before a scare (kWarning seconds), `t` 0 to 1 as it nears: the wind dies away (before a cyclone it
-// rises), and the fog that comes with a sea event rolls in (the fog block in step(), g_warn); before the siren faint
+// rises), and the fog that comes with a sea event rolls in (the fog block in step(), g_warn); before
 // notes of its song drift over the water, before the armada there is far-off gunfire (the boat's cannon sound)
 constexpr double kWarning = 30;
 void omens(Cpu* c, int k, double now, double t) {
@@ -690,14 +700,13 @@ void omens(Cpu* c, int k, double now, double t) {
     if (now < next) return;
     next = now + 2;
     wind(c, k == kCyclone ? (float)(0.4 + 0.6 * t) : (float)std::max(0.02, 0.3 * (1 - t)));
-    if (k == kSiren && rand() % 2) guest_call(c, GC(0x025E1988), {0x5940u + rand() % 5});
     if (k == kArmada && rand() % 3 == 0) guest_call(c, GC(0x025E1988), {0x2852});
 }
 // the events that come with warning signs, and their place: 7000 ahead of Link (the drowned's where he is: they come
 // for the ship, and leave it be once he has sailed off)
 bool warned(int k) {
     return k == kSea || k == kPhantom || k == kLeviathan || k == kMolgera || k == kCalm || k == kCyclone || k == kMaelstrom ||
-           k == kArmada || k == kSiren || k == kDrowned;
+           k == kArmada || k == kOcto || k == kDrowned;
 }
 void warn(int k, uint32_t link, double now) {
     const double yaw = (int16_t)ld16(link + kAngleY) * M_PI / 32768, ahead = k == kDrowned ? 0 : 7000;
@@ -733,11 +742,11 @@ void direct(Cpu* c, uint32_t sv, uint32_t link, double now, bool night, bool wat
         }
     }
     // the sea events end on land, near an island, after their time, or (Phantom Ganon) once he is gone
-    for (int k : {kSea, kPhantom, kLeviathan, kMolgera, kStalker, kCalm, kCyclone, kMaelstrom, kArmada, kSiren, kWrongLion, kDrowned})  // set to Always or switched off mid-event
+    for (int k : {kSea, kPhantom, kLeviathan, kMolgera, kStalker, kCalm, kCyclone, kMaelstrom, kArmada, kOcto, kWrongLion, kDrowned})  // set to Always or switched off mid-event
         if (g_until[k] > 0 && (always(k) || !g_on[k].load())) finish(c, k, now, "its setting changed");
     for (int k : {kWrongLion, kDrowned})  // (so the quiet after a scare follows them too)
         if (g_until[k] > 0 && now >= g_until[k]) finish(c, k, now, "time");
-    for (int k : {kSea, kPhantom, kLeviathan, kMolgera, kCalm, kCyclone, kMaelstrom, kArmada, kSiren})
+    for (int k : {kSea, kPhantom, kLeviathan, kMolgera, kCalm, kCyclone, kMaelstrom, kArmada, kOcto})
         if (g_until[k] > 0) {
             if (ashore || isle < 3500) finish(c, k, now, ashore ? "Link is off the water" : "near an island");
             else if (now >= g_until[k]) finish(c, k, now, "time");
@@ -791,11 +800,11 @@ void direct(Cpu* c, uint32_t sv, uint32_t link, double now, bool night, bool wat
         begin(kFog, now);
     if (now >= g_until[kDeep] && stage == "sea" && !ashore && rolls(kDeep, 0.07 * (night ? 1.5 : 0.8))) begin(kDeep, now);
     // the scares: one at a time, none in the quiet after the last. The horror ones only at night (Haunted sea, Phantom
-    // Ganon and his stalking, the Leviathan, Molgera, the siren, the Lion, the drowned); the eerie ones by day too
+    // Ganon and his stalking, the Leviathan, Molgera, Big Octo, the Lion, the drowned); the eerie ones by day too
     // (dead calm, the armada, cyclones, the maelstrom)
     if (now < g_cool || scare_on(now)) return;
     if (stage == "sea" && ashore && night && rolls(kStalker, 0.03)) { begin(kStalker, now); return; }
-    if (stage == "sea" && night && boat && g_until[kSiren] == 0 && (always(kWrongLion) ? g_on[kWrongLion].load() : rolls(kWrongLion, 0.02))) {
+    if (stage == "sea" && night && boat && g_until[kOcto] == 0 && (always(kWrongLion) ? g_on[kWrongLion].load() : rolls(kWrongLion, 0.02))) {
         begin(kWrongLion, now);  // (Always: every minute of the night)
         return;
     }
@@ -807,7 +816,7 @@ void direct(Cpu* c, uint32_t sv, uint32_t link, double now, bool night, bool wat
     else if (night && rolls(kLeviathan, 0.018 * more)) k = kLeviathan;
     else if (night && rolls(kMolgera, 0.012 * more)) k = kMolgera;
     else if (night && rolls(kSea, 0.12 * more)) k = kSea;
-    else if (night && boat && rolls(kSiren, 0.06 * more)) k = kSiren;
+    else if (night && boat && rolls(kOcto, 0.06 * more)) k = kOcto;
     else if (boat && rolls(kCalm, 0.04 * more)) k = kCalm;
     else if (boat && rolls(kCyclone, 0.04 * more)) k = kCyclone;
     else if (boat && rolls(kMaelstrom, 0.03 * more)) k = kMaelstrom;
@@ -1175,8 +1184,8 @@ void step(Cpu* c) {
         g_gyorg_ids.clear(), g_giant_ids.clear(), g_big_hits.clear();
         settle = game_time() + 2;
         if (g_warn >= 0) wind(c, 0), g_warn = -1;  // a sea event does not outlive its stage
-        g_until[kSea] = g_until[kPhantom] = g_until[kLeviathan] = g_until[kMolgera] = g_until[kStalker] = g_until[kCalm] = g_until[kCyclone] = g_until[kMaelstrom] = g_until[kArmada] = g_until[kSiren] = 0;
-        g_armada_for = g_siren_for = -1, g_whirl_fading = false, g_siren_gyorgs = 0;
+        g_until[kSea] = g_until[kPhantom] = g_until[kLeviathan] = g_until[kMolgera] = g_until[kStalker] = g_until[kCalm] = g_until[kCyclone] = g_until[kMaelstrom] = g_until[kArmada] = g_until[kOcto] = 0;
+        g_armada_for = g_octo_for = -1, g_whirl_fading = false, g_octo_gyorgs = 0, g_octo = Single{}, g_octo_dead = false;
         remove_molgera(c);
     }
     // nor while the next stage is asked for (dComIfGp's next stage enabled, play +0x514C): through the Big ship's
@@ -1407,7 +1416,7 @@ void step(Cpu* c) {
                     if (const uint32_t model = ld32(ph + off); in_mem2(model))
                         for (int i = 0; i < 3; i++) st32(model + 0xBC + 4 * i, u32_bits(scale));
     }
-    // the Gyorgs hunt Link (Haunted sea's, the siren's): without their controller's path and battle state they would only
+    // the Gyorgs hunt Link (Haunted sea's, Big Octo's): without their controller's path and battle state they would only
     // dive and circle (daGy_c mode at +0x3CC: 0 dive, 1 circle, 6 circle with others), so those are turned into an
     // attack on the player (modeAttackPlayerInit, 02169B48, mode 3), which gives up while he rides the boat (or stands
     // on a ship): then, as the Leviathan does, they circle the boat (their controller's clear-line flag for them set,
@@ -1780,39 +1789,39 @@ void step(Cpu* c) {
                 st8(a + kRoom, ld8(link + kRoom));
             }
     }
-    // Siren song: a melody of Medli's harp notes (CM_MD_HARP_*, 0x5940-0x5944, global one-shots) from a point 7000 off
-    // to one side of a sailing Link, toward which the boat turns by itself: its yaw rate m03B8 (+0x6A0, s16), which its
-    // execute adds to its heading every step after easing it 0x80 toward 0, set after each execute to pull toward the
-    // point (at most 0x200 a step); he steers against it. Within 800 of the point the song stops, and Gyorgs are there
-    if (const uint32_t korl = ld32(kPlay + 0x5B3C); live(kSiren, now) && in_mem2(korl) && settled) {
-        static double note_at = 0;
-        static double& sung_for = g_siren_for;
-        static V3 siren;
-        static int note = 0;
-        if (sung_for != g_until[kSiren]) {
-            sung_for = g_until[kSiren];
-            const double side = (int16_t)ld16(korl + kAngleY) * M_PI / 32768 + (rand() % 2 ? 1 : -1) * (M_PI / 2.5);
-            siren = {ldf32(korl + kPos) + sin(side) * 7000, 0, ldf32(korl + kPos + 8) + cos(side) * 7000};
-            trace("extras: a song drifts over the water");
+    // Big Octo: daDaiocta (proc 0xE1, param 0xFFFFFF00: type 0, four eyes, its own reach, no swallow destination, no
+    // switch) made near a sailing Link. It loads its archive itself and makes its eyes (0xE2) and whirlpool (Auzu, its
+    // id at +0x2844) itself, then waits hidden 3000 under the sea for a Link in reach, so once it has had a moment to
+    // come to life it is told to rise (its modeProc 0211889C: init, mode 1). Its swallow (a demo the open sea has no
+    // event for) is off: its reach for it, l_HIO +0x84 (104639C8), 0. Five Gyorgs with it. Its eyes die to arrows, the
+    // hookshot, the Boomerang and a bomb's burst (a deck gun's shot); with all gone its death would order a demo the
+    // sea has none of: hook_0211BFFC stops it there, and it goes here, with its whirlpool, the loot, and the event's end
+    if (live(kOcto, now) && sea && settled) {
+        static double made_at = 0;
+        static bool risen = false;
+        if (g_octo_for != g_until[kOcto]) {
+            g_octo_for = g_until[kOcto], g_octo = Single{}, risen = false, g_octo_dead = false, g_octo_gyorgs = 5;
+            st32(GD(0x104639C8), 0);
         }
-        static constexpr uint16_t kTune[] = {0x5944, 0x5943, 0x5941, 0x5942, 0x5940, 0, 0x5943, 0x5942, 0x5940, 0, 0};
-        if (now >= note_at) {
-            if (const uint16_t id = kTune[note++ % std::size(kTune)]) guest_call(c, GC(0x025E1988), {id});
-            note_at = now + 0.7;
+        if (!risen && g_octo.wanted(c, now)) {
+            Spawner none;
+            g_octo.id = spawn(c, none, Monster{0xE1, -1, 0xFFFFFF00}, link, 2500, -1, 0, false, 0, true);
+            g_octo.next = now + 10, made_at = now;
         }
-        const double dx = siren.x - ldf32(korl + kPos), dz = siren.z - ldf32(korl + kPos + 8);
-        if (riding) {
-            const int16_t off = (int16_t)((int16_t)(atan2(dx, dz) * 32768 / M_PI) - (int16_t)ld16(korl + kAngleY));
-            st16(korl + 0x6A0, (uint16_t)(int16_t)std::clamp(off / 16, -0x200, 0x200));
-        }
-        if (std::hypot(dx, dz) < 800) {
-            finish(c, kSiren, now, "Link reached the song");
-            sung_for = -1, g_siren_gyorgs = 5;  // (Always: it sings from somewhere new)
-            if (g_on[kMaelstrom].load() && g_until[kMaelstrom] <= now) begin(kMaelstrom, now);  // and the sea there turns
+        if (const uint32_t o = g_octo_actor = g_octo.actor(c)) {
+            st8(o + kRoom, ld8(link + kRoom));
+            if (!risen && now - made_at > 2) {
+                guest_call(c, GC(0x0211889C), {o, 0, 1}), risen = true;
+                trace("extras: the sea opens and Big Octo rises");
+            }
+            if (g_octo_dead) {
+                loot(c, 300);
+                finish(c, kOcto, now, "Big Octo is slain");
+            }
         }
     }
     // Something in the Lion: a laugh (CV_G_SHIP_LAUGH 0x4925), and for a few seconds the boat swerves (its yaw rate
-    // m03B8, +0x6A0, as Siren song's) and races (speedF +0x370 35, its steering's speed limit m03E0 +0x6C4 raised so it
+    // m03B8, +0x6A0) and races (speedF +0x370 35, its steering's speed limit m03E0 +0x6C4 raised so it
     // is not cut back), each step after its execute, whatever the stick and the wind say
     if (const uint32_t korl = ld32(kPlay + 0x5B3C); in_mem2(korl) && riding) {
         static double for_event = -1;
@@ -1828,8 +1837,8 @@ void step(Cpu* c) {
             if (static int every = 0; ++every % 45 == 0) swerve = (int16_t)-swerve;  // weaving
         }
     }
-    // the Gyorgs where the siren sang: their controller first (a Gyorg's create fails while its parent is not yet found)
-    if (g_siren_gyorgs > 0 && sea && settled) {
+    // the Gyorgs with Big Octo: their controller first (a Gyorg's create fails while its parent is not yet found)
+    if (g_octo_gyorgs > 0 && sea && settled) {
         if (g_gyctrl == 0xFFFFFFFF || !guest_call(c, GC(0x025DE50C), {g_gyctrl})) {
             static double asked = 0;
             if (now - asked > 2) {
@@ -1839,7 +1848,7 @@ void step(Cpu* c) {
                 g_gyorg_ids.push_back(g_gyctrl);
             }
         } else {
-            for (; g_siren_gyorgs > 0; g_siren_gyorgs--)
+            for (; g_octo_gyorgs > 0; g_octo_gyorgs--)
                 if (const uint32_t id = spawn(c, g_sea, kGyorg, link, 900 + rand() % 400, 0, -40, false, g_gyctrl, true); id != 0xFFFFFFFF) g_gyorg_ids.push_back(id);
         }
     }
@@ -2572,4 +2581,16 @@ extern "C" void hook_02481C94(Cpu* c) {
         return;
     }
     f_02481C94_orig(c);
+}
+// daDaiocta's modeDelete (0211BFFC; r3 Big Octo): with all its eyes gone it would order its death demo, which the open
+// sea has no event for, and stay there: ours is stopped and marked dead, and the Big Octo block lets it go
+extern "C" void f_0211BFFC_orig(Cpu* c);
+extern "C" void hook_0211BFFC(Cpu* c) {
+    using namespace mods::extras;
+    if (c->r[3] && c->r[3] == g_octo_actor) {
+        if (!g_octo_dead) mods::trace("extras: Big Octo's last eye is out");
+        g_octo_dead = true;
+        return;
+    }
+    f_0211BFFC_orig(c);
 }
