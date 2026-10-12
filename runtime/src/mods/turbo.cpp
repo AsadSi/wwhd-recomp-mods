@@ -241,6 +241,23 @@ void after_execute(Cpu* c, uint32_t execute_fn) {
     c->r[3] = r3;
 }
 
+// one more logic step this frame, as a quick door's (deletion stays once per frame, presses seen once):
+// the test fast-forward (interp.cpp, WWHD_TEST_FASTFWD); not while a door or a scene change runs its own
+bool extra_step(Cpu* c, uint32_t execute_fn) {
+    if (g_door_event || overlap_active()) return false;
+    const uint32_t lr = c->lr, r3 = c->r[3], pad = ld32(kPadPtr);
+    uint32_t saved[sizeof kTrigWords / sizeof *kTrigWords] = {};
+    for (size_t k = 0; pad && k < sizeof kTrigWords / sizeof *kTrigWords; k++) saved[k] = ld32(pad + kTrigWords[k]), st32(pad + kTrigWords[k], 0);
+    call(c, f_0200E6EC_orig, 0);  // cCt_Counter
+    call(c, f_025E0EE4_orig, 0);  // fpcPi_Handler
+    call(c, f_025DDCEC_orig, 0);  // fpcCt_Handler
+    interp::record_executed_step();
+    call(c, f_025DE788_orig, execute_fn);
+    for (size_t k = 0; pad && k < sizeof kTrigWords / sizeof *kTrigWords; k++) st32(pad + kTrigWords[k], saved[k]);
+    c->lr = lr, c->r[3] = r3;
+    return true;
+}
+
 // Link executed (camera.cpp's daPy_Execute hook): control traces
 void link_executed(uint32_t link) {
     if (!trace_on()) return;
