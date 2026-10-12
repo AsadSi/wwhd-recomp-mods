@@ -135,6 +135,9 @@ constexpr int kUpPrice[] = {500, 900, 1500};
 uint32_t save();
 uint32_t upgrade_byte() { return save() + 0x773; }
 int upgrade(int k) { return g_on[kUpgrades].load() ? (ld8(upgrade_byte()) >> (2 * k)) & 3 : 0; }
+// Tetra's ship, bought at the Bomb Shop on Windfall (bit 0 of the reserve block's byte before, kept the same way)
+constexpr int kShipPrice = 2500;
+bool owns_ship() { return ld8(save() + 0x772) & 1; }
 // The shop: our panel over the game (overlay::show_panel), drawn on the render thread from what the game step last
 // told it (levels, rupees, a line of news); a buy it asks for (g_buy) is made by the game step
 const char* const kUpName[] = {"Faster sailing", "Faster guns", "Bigger shots"};
@@ -176,6 +179,40 @@ bool shop_draw(const float* pad) {
             else snprintf(line, sizeof line, "%-15s  level %d -> %d   %d rupees", kUpName[i], lv, lv + 1, kUpPrice[lv]);
             ImGui::Selectable(line, i == sel);
         }
+        ImGui::Separator();
+        ImGui::Text("You have %d rupees", g_shop_rupees.load());
+        if (const char* news = g_shop_news; *news) ImGui::TextUnformatted(news);
+        ImGui::TextDisabled("A buy    B leave");
+    }
+    ImGui::End();
+    return close;
+}
+// Tetra's ship for sale: the Bomb Shop's panel, as the shop's (above)
+std::atomic<bool> g_ship_buy{false};
+bool ship_sale_draw(const float* pad) {
+    const input::PadState st = input_map::controller_state(input_map::current(), pad);
+    const uint32_t now = st.buttons | input::live_buttons();
+    static uint32_t prev = 0;
+    static bool keys_prev[256], fresh = true;
+    bool keys[256];
+    input::held_keys(keys);
+    if (fresh) prev = now, std::copy(keys, keys + 256, keys_prev), fresh = false;
+    auto hit = [&](uint32_t b, std::initializer_list<int> ks) {
+        bool k = false;
+        for (int c : ks) k |= keys[c] && !keys_prev[c];
+        return (now & b && !(prev & b)) || k;
+    };
+    if (hit(input::kA, {kVK_ANSI_K, kVK_Space, kVK_Return})) g_ship_buy = true;
+    const bool close = hit(input::kB, {kVK_ANSI_J, kVK_Escape});
+    prev = now, std::copy(keys, keys + 256, keys_prev);
+    if (close) fresh = true;
+    const ImGuiIO& io = ImGui::GetIO();
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowBgAlpha(0.85f);
+    if (ImGui::Begin("##ship_sale", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav)) {
+        ImGui::TextUnformatted("For sale, no questions asked");
+        ImGui::Separator();
+        ImGui::Selectable(g_shop_news.load()[0] == 'S' ? "Tetra's ship   SOLD" : "Tetra's ship   2500 rupees", true);
         ImGui::Separator();
         ImGui::Text("You have %d rupees", g_shop_rupees.load());
         if (const char* news = g_shop_news; *news) ImGui::TextUnformatted(news);
@@ -483,7 +520,8 @@ const std::vector<Mod>& catalogue() {
          "into the fog.",
          {"Normal size", "Titanic (12x)"}, true},
         {"big-ship", "Big ship", "Experimental",
-         "Tetra's ship, a boat of its own: out at sea it waits at anchor near the King of Red Lions. Stop beside it and get "
+         "Tetra's ship, a boat of its own, once bought at the Bomb Shop on Windfall (2500 rupees: talk to the shopkeeper). "
+         "Out at sea she waits at anchor near the King of Red Lions, in place of the raft or Beedle's ship. Stop beside her and get "
          "out to jump onto its deck; walk it, fight from it, man its cannons, and sail it from its wheel while he comes "
          "along beside it. Leave it far behind and it waits near you again the next time you are out at sea.", {}},
         {"horror-audio", "Horror audio", "Spooky",
@@ -1292,14 +1330,17 @@ void step(Cpu* c) {
     const int proc = (int)ld32(link + 0x65F0);
     const bool riding = proc >= 0x86 && proc <= 0x91 && proc != 0x90, swimming = ld32(link + 0x6A70) & 0x40000;
     // the craft in tow (the raft before Beedle's ship); changed while one is out, that one goes (and its rope)
-    const Craft* tow = on<kRaft>() ? &kRaftCraft : on<kBeedle>() ? &kBeedleCraft : nullptr;
+    // (test aid: WWHD_TEST_SHIP_OWNED=1 gives the file Tetra's ship as it loads)
+    if (fresh && getenv("WWHD_TEST_SHIP_OWNED")) st8(sv + 0x772, ld8(sv + 0x772) | 1);
+    const bool own_ship = on<kBigShip>() && owns_ship();  // she sails in place of a craft in tow
+    const Craft* tow = own_ship ? nullptr : on<kRaft>() ? &kRaftCraft : on<kBeedle>() ? &kBeedleCraft : nullptr;
     if (tow && tow != g_craft && g_beedle.actor(c)) {
         guest_call(c, GC(0x025D57E4), {g_beedle.id}), g_beedle = Single{};
         if (g_tow_rope.actor(c)) guest_call(c, GC(0x025D57E4), {g_tow_rope.id}), g_tow_rope = Single{};
     }
     if (tow) g_craft = tow;
     const uint32_t beedle = tow && stage == "sea" ? g_beedle.actor(c) : 0;
-    const uint32_t hull = !beedle && on<kBigShip>() && stage == "sea" ? g_bigship.actor(c) : 0;
+    const uint32_t hull = !beedle && own_ship && stage == "sea" ? g_bigship.actor(c) : 0;
     const bool deck = !riding && !swimming && ((hull && on_deck(hull, link)) || (beedle && on_beedle(beedle, link)));
     // on a ship's deck Link moves with it at 30 Hz while it moves (true 60), and for a second after: its bobbing carries
     // him a little, now and then, and each carry dropped him to 30 Hz for a few passes and back to 60, a shake (at 60 Hz
@@ -2101,7 +2142,7 @@ void step(Cpu* c) {
     // A at its rail by him takes him back in the boat; A while swimming by its side climbs aboard. While it sails from its
     // helm, the King of Red Lions comes along beside it (on its +x flank). It floats as the game floats it (its origin at
     // the waterline, the deck 400 above the sea).
-    if (const uint32_t korl = ld32(kPlay + 0x5B3C); on<kBigShip>() && !tow && stage == "sea" && in_mem2(korl) && settled) {
+    if (const uint32_t korl = ld32(kPlay + 0x5B3C); own_ship && stage == "sea" && in_mem2(korl) && settled) {
         constexpr double kLionX = 1050, kLionZ = 250;  // his place beside it while it sails (its +x flank, by the main deck)
         const int16_t yaw = (int16_t)ld16(korl + kAngleY);
         auto put = [](uint32_t h, V3 p, int16_t a) {
@@ -2421,6 +2462,36 @@ void step(Cpu* c) {
                 trace("extras: bought %s level %d for %d rupees", kUpName[b], lv + 1, kUpPrice[lv]);
             }
         }
+    }
+    // Tetra's ship for sale at the Bomb Shop (stage Obombh, the shopkeeper daNpc_Bms1_c, proc 0x15B): the first time
+    // in a visit that a message closes with him within 600 of Link (a talk with him), unless she is Link's already
+    {
+        static bool offered = false;
+        static uint8_t mesg_was = 0;
+        const uint8_t mesg = ld8(kPlay + 0x5BB2);  // dComIfGp_getMesgStatus
+        if (fresh) offered = false;
+        if (on<kBigShip>() && stage == "Obombh" && !owns_ship() && !offered && mesg_was && !mesg) {
+            static const uint32_t out = mem::host_alloc(4);
+            st32(out, 0);
+            guest_call(c, GC(0x025D5578), {0x15B, out});
+            if (const uint32_t m = ld32(out); in_mem2(m) && std::hypot(ldf32(m + kPos) - ldf32(link + kPos), ldf32(m + kPos + 8) - ldf32(link + kPos + 8)) < 600) {
+                offered = true, g_shop_news = "", g_ship_buy = false;
+                overlay::show_panel(ship_sale_draw);
+                trace("extras: Tetra's ship is offered at the Bomb Shop (%u rupees)", ld16(sv + 4));
+            }
+        }
+        mesg_was = mesg;
+        if (g_ship_buy.exchange(false) && !owns_ship()) {
+            g_shop_rupees = ld16(sv + 4);
+            if (ld16(sv + 4) < kShipPrice) g_shop_news = "Not enough rupees.";
+            else {
+                st16(sv + 4, (uint16_t)(ld16(sv + 4) - kShipPrice)), st8(sv + 0x772, ld8(sv + 0x772) | 1);
+                guest_call(c, GC(0x025E1988), {0x836});
+                g_shop_news = "Sold! She waits for you out at sea. Save your game to keep her.";
+                trace("extras: Tetra's ship bought for %d rupees", kShipPrice);
+            }
+        }
+        if (stage == "Obombh") g_shop_rupees = ld16(sv + 4);
     }
     // Warp: F9 (the toggle on) opens the places; the one picked is made the next stage change, Link on his boat (or
     // test aid: WWHD_TEST_WARP=<place, part of its name> once, 5 s after a file loads). Going on to a stall: once

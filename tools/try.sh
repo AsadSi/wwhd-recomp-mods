@@ -88,6 +88,13 @@ take the controller any time." ;;
   RECORD=1; export WWHD_MOD_DAMAGE=1 WWHD_MOD_DAMAGE_CHOICE=3 WWHD_TEST_UPGRADES=15
   NOTE="The long seamless run: every spooky mod at its normal How often and Scare pacing, nothing forced, the clock
 running, half damage, the raft in tow, upgrades at level 1. Claude sails it (build/try/pilot.py); take over any time." ;;
+  buy-ship) ON=(BIG_SHIP WARP FAIR_WIND); export WWHD_TEST_WARP="Zunari"; NOTE="Warps to Windfall beside Zunari's stall (5000 rupees). Walk to the Bomb Shop and talk to the shopkeeper: as
+the talk ends a panel offers Tetra's ship for 2500 rupees (A buy, B leave). Then sail out to open sea: she should
+wait at anchor off your left. Get on (B beside her), take the wheel (A on the stern castle) and sail her: the wind
+now sets her speed (try running before it and into it), she speeds up and slows down gently, and turns with a rudder." ;;
+  helm) ON=(BIG_SHIP); NOTE="$SHIP
+New: the wind sets her speed (before it the boat's speed, a third of it sailing into it), she gathers speed and loses it
+slowly, and the wheel turns a rudder over (turning is gentle from a standstill)." ;;
   helmaroc) ON=(HELMAROC FAIR_WIND); EVENT="helmaroc@+20"; RECORD=1
   NOTE="Set sail (A). About 20 s in the wind dies; 30 s later the Helmaroc King comes down and circles, diving at you every
 8-12 s. Shoot him (arrows, bombs, Boomerang): 60 health. Don't beat him and after ~100 s his next dive snatches the boat
@@ -168,6 +175,8 @@ islands) and keep going; the events come by chance, a roll a minute (none within
 esac
 for m in "${SPOOKY[@]}"; do export WWHD_MOD_$m=0; done
 for m in ${ON[@]+"${ON[@]}"}; do export WWHD_MOD_$m=1; [ -n "${OFTEN:-}" ] && export WWHD_MOD_${m}_OFTEN=$OFTEN; done
+# the Big ship sails only once bought (Bomb Shop): the test runs own her, but for buy-ship
+[[ " ${ON[*]-} " == *" BIG_SHIP "* && "${1:-}" != buy-ship ]] && export WWHD_TEST_SHIP_OWNED=1
 [ -n "${AT_NIGHT:-}" ] && export WWHD_MOD_TIME=1 WWHD_MOD_TIME_CHOICE=4  # the clock held at 23:00
 [ -n "$EVENT" ] && export WWHD_SPOOKY="$EVENT"
 echo "$NOTE"
