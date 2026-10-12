@@ -59,7 +59,14 @@ static std::atomic<bool> g_split{false};
 static PadState g_pad2;
 static bool g_has2 = false;
 void set_second_player(bool on) { g_split = on; }
-static bool split_off(NSArray<GCController*>* cs) { return g_split.load() && cs.count >= 2; }
+// the second gamepad connected (devices without one, e.g. a remote, do not count), while the split is on; else nil
+static GCController* second_pad() {
+    if (!g_split.load()) return nil;
+    int n = 0;
+    for (GCController* c in [GCController controllers])
+        if (c.extendedGamepad && ++n == 2) return c;
+    return nil;
+}
 
 // a controller's mappable inputs, 0..1, into v where stronger than what is there
 static void add_values(GCController* c, float* v) {
@@ -90,9 +97,9 @@ static void add_values(GCController* c, float* v) {
 // every mappable controller input, 0..1, the strongest over all connected controllers (but a second player's)
 void controller_values(float* v) {
     for (int i = 0; i < input_map::kPadCount; i++) v[i] = 0;
-    NSArray<GCController*>* cs = [GCController controllers];
-    for (NSUInteger i = 0; i < cs.count; i++)
-        if (!(i == 1 && split_off(cs))) add_values(cs[i], v);
+    GCController* p2 = second_pad();
+    for (GCController* c in [GCController controllers])
+        if (c != p2) add_values(c, v);
 }
 
 // the latest controller_values (the timer below), for the settings overlay's navigation
@@ -308,12 +315,12 @@ void init() {
         float v[input_map::kPadCount];
         controller_values(v);
         PadState s = input_map::controller_state(input_map::current(), v);
-        NSArray<GCController*>* cs = [GCController controllers];
-        const bool has2 = split_off(cs);
+        GCController* p2 = second_pad();
+        const bool has2 = p2 != nil;
         PadState s2;
         if (has2) {
             float v2[input_map::kPadCount] = {};
-            add_values(cs[1], v2);
+            add_values(p2, v2);
             s2 = input_map::controller_state(input_map::current(), v2);
         }
         {

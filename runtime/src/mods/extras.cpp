@@ -100,6 +100,12 @@ uint32_t g_cyclone_actor = 0;  // for its hooks
 // Shipwreck graveyard: its hulks, for hook_02360420: the actor, how far it is sunk, and its list (shape_angle x, z)
 struct Wreck { uint32_t id, actor; float sink; int16_t tilt_x, tilt_z; };
 std::vector<Wreck> g_wrecks;
+// the event the armada's boats and the graveyard's hulks were made for (its end time; -1 none yet), and the boats made
+double g_armada_for = -1, g_wrecks_for = -1;
+size_t g_armada_made = 0;
+bool g_whirl_fading = false;  // Maelstrom's whirlpool told to fade: deleted once it has
+int g_siren_gyorgs = 0;       // Gyorgs owed where the siren sang, made once their controller exists
+double g_siren_for = -1;      // the event the siren's point was placed for
 uint32_t g_leviathan_actor = 0, g_molgera_actor = 0;  // for the hooks below, which must not call into the game
 uint32_t g_phantom_actor = 0;                          // Phantom Ganon, and his size, for the same
 // Beedle's ship in tow behind the King of Red Lions (below), for its hooks: the ship, the boat, the ship's BG matrix
@@ -529,7 +535,7 @@ void begin(int k, double now) {
 void finish(Cpu* c, int k, double now, const char* why) {
     trace("extras: event %s ends (%s)", event_name(k), why);
     g_until[k] = 0;
-    if (k != kNight && k != kStorm && k != kFog && k != kDeep && k != kBlood && k != kWrongLion && k != kDrowned) g_cool = now + (k == kSea || k == kCalm || k == kCyclone || k == kMaelstrom ? 300 : 600);
+    if (k != kNight && k != kStorm && k != kFog && k != kDeep && k != kBlood && k != kWrongLion && k != kDrowned && !always(k)) g_cool = now + (k == kSea || k == kCalm || k == kCyclone || k == kMaelstrom ? 300 : 600);
     if ((k == kPhantom || k == kStalker) && g_phantom.actor(c)) guest_call(c, GC(0x025D57E4), {g_phantom.id});  // fopAcM_delete_id
     if (k == kLeviathan && g_leviathan.actor(c)) guest_call(c, GC(0x025D57E4), {g_leviathan.id});
     if (k == kMolgera) remove_molgera(c);
@@ -544,7 +550,8 @@ void finish(Cpu* c, int k, double now, const char* why) {
         for (uint32_t id : g_armada.ids) guest_call(c, GC(0x025D57E4), {id});
         g_armada = Spawner{};
     }
-    if (const uint32_t w = k == kMaelstrom ? g_whirl.actor(c) : 0) st8(w + 0x434, 0), st32(w + 0x430, u32_bits(0.01f)), g_whirl.next = now + 2;
+    if (const uint32_t w = k == kMaelstrom ? g_whirl.actor(c) : 0)
+        st8(w + 0x434, 0), st32(w + 0x430, u32_bits(0.01f)), g_whirl.next = now + 2, g_whirl_fading = true;
     if (k == kSea) {  // the spell's monsters break off: those out in the fog (cannon boats, the Ghost Ship) go
         const uint32_t link = ld32(kLinkPtr);
         for (uint32_t id : g_sea.ids)
@@ -910,8 +917,8 @@ void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, const Gun* 
     fire(c, sv, link, from, yaw, up, locked);
 }
 // The ship's crew: each gun neither Link nor the second gunner is at is laid on the nearest monster within 6000 and fires
-// every 4 s (its own powder); it points as laid (g_crew_yaw / _up, which the gun loop shows)
-void crew(Cpu* c, uint32_t link, double now) {
+// every 4 s (its own powder), if that is out over its own side; it points as laid (g_crew_yaw / _up, which the gun loop shows)
+void crew(Cpu* c, uint32_t link, uint32_t ship, const Gun* guns, double now) {
     static double fired[2];
     static Lay lay[2];
     for (int i = 0; i < 2; i++) {
@@ -923,6 +930,8 @@ void crew(Cpu* c, uint32_t link, double now) {
         const uint32_t m = id == 0xFFFFFFFF ? 0 : guest_call(c, GC(0x025DE50C), {id});
         if (!m || std::hypot(ldf32(m + kPos) - from.x, ldf32(m + kPos + 8) - from.z) > 6000) continue;
         lay_on(m, id, from, lay[i], g_crew_yaw[i], g_crew_up[i]);
+        // only out over its own side of the ship (within 90 degrees of the way it rests): never across its deck
+        if (std::abs((int16_t)(g_crew_yaw[i] - (int16_t)(ld16(ship + kAngleY) + guns[i].face))) > 0x4000) continue;
         g_crew_aims[i] = true;
         if (now >= fired[i] + 4) fired[i] = now, fire(c, 0, link, from, g_crew_yaw[i], g_crew_up[i], id);
     }
@@ -990,7 +999,7 @@ void step(Cpu* c) {
         settle = game_time() + 2;
         if (g_warn >= 0) wind(c, 0), g_warn = -1;  // a sea event does not outlive its stage
         g_until[kSea] = g_until[kPhantom] = g_until[kLeviathan] = g_until[kMolgera] = g_until[kStalker] = g_until[kCalm] = g_until[kCyclone] = g_until[kMaelstrom] = g_until[kArmada] = g_until[kSiren] = g_until[kWrecks] = 0;
-        g_wrecks.clear();
+        g_wrecks.clear(), g_armada_for = g_wrecks_for = g_siren_for = -1, g_whirl_fading = false, g_siren_gyorgs = 0;
         remove_molgera(c);
     }
     // nor while the next stage is asked for (dComIfGp's next stage enabled, play +0x514C): through the Big ship's
@@ -1181,14 +1190,15 @@ void step(Cpu* c) {
                 for (uint32_t off : {0x12C4u, 0x12CCu})
                     if (const uint32_t model = ld32(ph + off); in_mem2(model))
                         for (int i = 0; i < 3; i++) st32(model + 0xBC + 4 * i, u32_bits(scale));
-        // the Gyorgs hunt Link: without their controller's path and battle state they would only dive and circle
-        // (daGy_c mode at +0x3CC: 0 dive, 1 circle, 6 circle with others), so those are turned into an attack on the
-        // player (modeAttackPlayerInit, 02169B48, mode 3); attacks, damage and deletion run as the game decides
+    }
+    // the Gyorgs hunt Link (Haunted sea's, the siren's): without their controller's path and battle state they would only
+    // dive and circle (daGy_c mode at +0x3CC: 0 dive, 1 circle, 6 circle with others), so those are turned into an
+    // attack on the player (modeAttackPlayerInit, 02169B48, mode 3); attacks, damage and deletion run as the game decides
+    if (sea && settled)
         for (uint32_t id : g_gyorg_ids) {
             const uint32_t gy = id == g_gyctrl || id == g_leviathan.id ? 0 : guest_call(c, GC(0x025DE50C), {id});
             if (const uint32_t mode = gy ? ld32(gy + 0x3CC) : 9; mode == 0 || mode == 1 || mode == 6) guest_call(c, GC(0x02169B48), {gy});
         }
-    }
     // Phantom Ganon: one near a sailing Link, at the chosen size, or (the Phantom stalker) his own size behind Link on an
     // island at night: his own execute eases the actor's scale (+0x330) to 1, so it is
     // set after it every step; his colliders' centres follow the model and their sizes are scaled by the hooks below
@@ -1467,15 +1477,18 @@ void step(Cpu* c) {
     // Wrenching the stick from side to side (its travel since the last step, summed) breaks him free; after 45 s held it
     // takes two hearts and lets go. Under 500 from its centre the boat would be dragged down and the stage reloaded
     // at a spawn point the open sea may not have: it lets go well before, at 1200
-    if (const uint32_t korl = ld32(kPlay + 0x5B3C); g_whirl.id != 0xFFFFFFFF && g_until[kMaelstrom] == 0 && now >= g_whirl.next) {
-        if (g_whirl.actor(c)) guest_call(c, GC(0x025D57E4), {g_whirl.id});  // faded away: gone
-        g_whirl = Single{};
+    if (const uint32_t korl = ld32(kPlay + 0x5B3C); g_whirl.id != 0xFFFFFFFF && (g_whirl_fading || !live(kMaelstrom, now)) && now >= g_whirl.next) {
+        if (g_whirl.actor(c)) guest_call(c, GC(0x025D57E4), {g_whirl.id});  // faded away (or switched off): gone
+        g_whirl = Single{}, g_whirl_fading = false;
+        if (always(kMaelstrom)) g_whirl.next = now + 300;  // (Always: the next one a while later)
     } else if (live(kMaelstrom, now) && in_mem2(korl) && settled) {
         static uint32_t placed = 0;
         static double caught_at = -1, wrench = 0;
         static float lx = 0, ly = 0;
-        if (!riding) finish(c, kMaelstrom, now, "Link left the boat");
-        else if (g_whirl.wanted(c, now)) {
+        if (!riding) {
+            if (!always(kMaelstrom) && g_until[kMaelstrom] > 0) finish(c, kMaelstrom, now, "Link left the boat");
+        } else if (g_whirl_fading) {
+        } else if (g_whirl.wanted(c, now)) {
             Spawner none;
             g_whirl.id = spawn(c, none, Monster{0x11B, -1, 0x001100FF}, link, 3000, 0, 0, false, 0, true);
             g_whirl.next = now + 10;
@@ -1502,18 +1515,20 @@ void step(Cpu* c) {
     // its fire) until 4000 off, where they heave to (speedF 0) and fire by their own modes; further than 6000 again and
     // they come on after him. All sunk: the loot, and the event ends
     if (live(kArmada, now) && sea && settled) {
-        static double made_for = -1, made_at = 0, course = 0;  // made_for: the event its boats were made for (its end time)
+        static double made_at = 0, wait = 0, course = 0;
         static V3 lead;
         if (now - made_at > 3) g_armada.prune(c);  // (once they have had time to come to life)
-        if (made_for != g_until[kArmada]) {
-            made_for = g_until[kArmada], made_at = now;
+        if (g_armada_for != g_until[kArmada] && now >= wait) {
+            g_armada_for = g_until[kArmada], made_at = now;
             const double yaw = (int16_t)ld16(link + kAngleY) * M_PI / 32768;
             lead = {ldf32(link + kPos) + sin(yaw) * 9000, 0, ldf32(link + kPos + 8) + cos(yaw) * 9000};
             for (int i = 0; i < 4; i++)  // where spawn() puts them hardly matters: they are put in formation below
                 spawn(c, g_armada, Monster{kOship.proc, -1, kOship.param, (int16_t)0xFFFF}, link, 9000, -1, 0, false, 0, true);
+            g_armada_made = g_armada.ids.size();
             trace("extras: a pirate armada comes over the horizon");
-        } else if (now - made_at > 3 && g_armada.ids.empty()) {
-            loot(c, 200);
+        } else if (g_armada_for == g_until[kArmada] && now - made_at > 3 && g_armada.ids.empty()) {
+            if (g_armada_made) loot(c, 200);
+            g_armada_for = -1, g_armada_made = 0, wait = now + 300;  // (Always: the next one a while later)
             finish(c, kArmada, now, "the armada is sunk");
         }
         static bool hove_to = false;
@@ -1538,7 +1553,8 @@ void step(Cpu* c) {
     // execute adds to its heading every step after easing it 0x80 toward 0, set after each execute to pull toward the
     // point (at most 0x200 a step); he steers against it. Within 800 of the point the song stops, and Gyorgs are there
     if (const uint32_t korl = ld32(kPlay + 0x5B3C); live(kSiren, now) && in_mem2(korl) && settled) {
-        static double sung_for = -1, note_at = 0;
+        static double note_at = 0;
+        static double& sung_for = g_siren_for;
         static V3 siren;
         static int note = 0;
         if (sung_for != g_until[kSiren]) {
@@ -1559,13 +1575,7 @@ void step(Cpu* c) {
         }
         if (std::hypot(dx, dz) < 800) {
             finish(c, kSiren, now, "Link reached the song");
-            if (g_gyctrl == 0xFFFFFFFF || !guest_call(c, GC(0x025DE50C), {g_gyctrl})) {
-                Spawner none;
-                g_gyctrl = spawn(c, none, kGyCtrl, link, 0, false, 0, false);
-                g_gyorg_ids.push_back(g_gyctrl);
-            }
-            for (int i = 0; i < 3; i++)
-                if (const uint32_t id = spawn(c, g_sea, kGyorg, link, 900 + rand() % 400, 0, -40, false, g_gyctrl, true); id != 0xFFFFFFFF) g_gyorg_ids.push_back(id);
+            sung_for = -1, g_siren_gyorgs = 3;  // (Always: it sings from somewhere new)
         }
     }
     // Something in the Lion: a laugh (CV_G_SHIP_LAUGH 0x4925), and for a few seconds the boat swerves (its yaw rate
@@ -1585,13 +1595,28 @@ void step(Cpu* c) {
             if (static int every = 0; ++every % 45 == 0) swerve = (int16_t)-swerve;  // weaving
         }
     }
+    // the Gyorgs where the siren sang: their controller first (a Gyorg's create fails while its parent is not yet found)
+    if (g_siren_gyorgs > 0 && sea && settled) {
+        if (g_gyctrl == 0xFFFFFFFF || !guest_call(c, GC(0x025DE50C), {g_gyctrl})) {
+            static double asked = 0;
+            if (now - asked > 2) {
+                asked = now;
+                Spawner none;
+                g_gyctrl = spawn(c, none, kGyCtrl, link, 0, false, 0, false);
+                g_gyorg_ids.push_back(g_gyctrl);
+            }
+        } else {
+            for (; g_siren_gyorgs > 0; g_siren_gyorgs--)
+                if (const uint32_t id = spawn(c, g_sea, kGyorg, link, 900 + rand() % 400, 0, -40, false, g_gyctrl, true); id != 0xFFFFFFFF) g_gyorg_ids.push_back(id);
+        }
+    }
     // The drowned and the Boarding party: monsters made on the deck Link stands on (spawn's ground check finds it, and
     // nothing over the water), carried by it as he is (their dBgS_Acch rides a moving BG through MoveBgCrrPos too).
     // The drowned: a ReDead every 12 s, three at most. Boarders: Bokoblins (daBk, proc 0xBD, 0xFFFFFF00: type 0, which
     // goes for Link, no path or switch), two from each cannon boat that comes within 2500 of the ship, once; told to
     // attack at once (daBk's search_sp, 1046232D, which each Bokoblin's create sets back to 0)
     if (const uint32_t ship = beedle ? beedle : hull; ship && deck && settled) {
-        if ((live(kDrowned, now) && night) || g_until[kDrowned] > now) {
+        if (live(kDrowned, now) && (night || g_until[kDrowned] > now)) {
             static double next = 0;
             g_night.prune(c);
             if (now >= next && g_night.ids.size() < 3) {
@@ -1619,9 +1644,16 @@ void step(Cpu* c) {
     // they only wait, no path, no sound, 0xFF in angle.x for none) about Link's course ahead, 1.6x, each sunk 80-260 and
     // listing as hook_02360420 has it; at night three Poes among them
     if (live(kWrecks, now) && sea && settled) {
-        static double made_for = -1;
-        if (made_for != g_until[kWrecks]) {
-            made_for = g_until[kWrecks];
+        double& made_for = g_wrecks_for;
+        bool anew = made_for != g_until[kWrecks];
+        if (always(kWrecks)) {  // Always: a new graveyard once he has left the last one 9000 behind
+            bool near = false;
+            for (const Wreck& w : g_wrecks)
+                if (w.actor && std::hypot(ldf32(w.actor + kPos) - ldf32(link + kPos), ldf32(w.actor + kPos + 8) - ldf32(link + kPos + 8)) < 9000) near = true;
+            anew = made_for < 0 || (!near && now - made_for > 30);
+        }
+        if (anew) {
+            made_for = always(kWrecks) ? now : g_until[kWrecks];
             for (const Wreck& w : g_wrecks) guest_call(c, GC(0x025D57E4), {w.id});
             g_wrecks.clear();
             for (int i = 0; i < 8; i++) {
@@ -1643,7 +1675,7 @@ void step(Cpu* c) {
     // behind him as he sailed on (Phantom Ganon's event ended "he is gone")
     for (Single* b : {&g_phantom, &g_leviathan, &g_molgera})
         if (const uint32_t a = b->actor(c)) st8(a + kRoom, ld8(link + kRoom));
-    horror_audio(c, link, now, sea_event || (night && ((g_until[kNight] > now && !always(kNight)) || (g_until[kBlood] > now && !always(kBlood)))), on<kAudio>());
+    horror_audio(c, link, now, sea_event || (night && ((g_until[kNight] > now && !always(kNight)) || (on<kBlood>() && g_until[kBlood] > now && !always(kBlood)))), on<kAudio>());
     // the GamePad since the last step
     static uint32_t pad_prev = 0;
     const uint32_t pad_hold = g_pad_hold.load(), pressed = g_pad_seen.exchange(0) & ~pad_prev;
@@ -1852,7 +1884,9 @@ void step(Cpu* c) {
             static Leap leap;
             static bool to_boat = false;  // the leap is into the boat
             // out of the boat: the get-off jump (its jump phase, link +0x69C0 1) a leap back onto its deck, before the hut
-            if (leap.step < 0 && proc == 0x90 && ld32(link + 0x69C0) == 1) {
+            const double isle = std::hypot(ldf32(link + kPos) - std::round(ldf32(link + kPos) / 1e5) * 1e5,
+                                           ldf32(link + kPos + 8) - std::round(ldf32(link + kPos + 8) / 1e5) * 1e5);
+            if (leap.step < 0 && proc == 0x90 && ld32(link + 0x69C0) == 1 && isle >= 6000) {  // (by an island, ashore)
                 leap.start(link, beedle, {0, kBeedleTop + 30, 700}), to_boat = false;
                 trace("extras: Link leaps back onto Beedle's ship");
             }
@@ -1893,9 +1927,9 @@ void step(Cpu* c) {
         const Gun* guns = beedle ? kBeedleGuns : kBigShipGuns;
         deck_cannons(c, sv, link, ship, guns, beedle ? kBeedleTop : kDeckY, deck, proc, pressed, now);
         input::set_second_player(on<kGunner>());
-        if (on<kGunner>()) second_gunner(c, sv, link, ship, guns, now);
+        if (on<kGunner>() && settled) second_gunner(c, sv, link, ship, guns, now);
         else g_p2_gun = -1;
-        if (ship && on<kCrew>()) crew(c, link, now);
+        if (ship && on<kCrew>() && settled) crew(c, link, ship, guns, now);
         else g_crew_aims[0] = g_crew_aims[1] = false;
     }
     if (static double t = 0; hull && now - t >= 1) {  // where Link is about the Big ship, once a second (the trace)
