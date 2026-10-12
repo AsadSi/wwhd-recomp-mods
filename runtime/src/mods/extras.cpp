@@ -43,7 +43,7 @@
 
 namespace mods::extras {
 namespace {
-enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kAudio, kDeep, kLeviathan, kMolgera, kStalker, kBeedle, kCalm, kPhoto, kGunner, kBlood, kCyclone, kMaelstrom, kArmada, kSiren, kWrongLion, kDrowned, kBoarding, kWrecks, kCount };  // the catalogue's order
+enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kAudio, kDeep, kLeviathan, kMolgera, kStalker, kBeedle, kCalm, kPhoto, kGunner, kBlood, kCyclone, kMaelstrom, kArmada, kSiren, kWrongLion, kDrowned, kBoarding, kWrecks, kCrew, kCount };  // the catalogue's order
 std::atomic<bool> g_on[kCount];
 std::atomic<int> g_choice[kCount];
 std::atomic<int> g_often[kCount];
@@ -413,6 +413,9 @@ const std::vector<Mod>& catalogue() {
         {"wrecks", "Shipwreck graveyard", "Spooky",
          "Now and then, far out at sea, Link sails into fog over a graveyard of ships: hulks lying tilted and half sunk all "
          "about, and at night Poes drifting among them.", {}, true},
+        {"crew", "Ship's crew", "Gameplay",
+         "Beedle's ship and the Big ship have gunners of their own: a gun nobody is at fires by itself at the nearest "
+         "monster within 6000, every few seconds, with its own powder (not Link's bombs).", {}},
     };
     return mods;
 }
@@ -725,6 +728,8 @@ Single g_cannon[2];
 int g_manned = -1;  // the cannon Link stands at
 int g_p2_gun = -1;  // and the second gunner's, and its aim
 int16_t g_p2_yaw = 0, g_p2_up = 0;
+int16_t g_crew_yaw[2], g_crew_up[2];  // the ship's crew's aim at each gun, while it has one (crew(), below)
+bool g_crew_aims[2];
 uint32_t g_deck_shots = 0;  // deck cannon shots so far: cannon boats answer them as the boat's own (hook_023C68B8)
 std::vector<uint32_t> monsters_out() {
     std::vector<uint32_t> v = g_sea.ids;
@@ -783,10 +788,10 @@ void lay_on(uint32_t a, uint32_t id, V3 from, Lay& m, int16_t& yaw, int16_t& up)
     up = (int16_t)std::clamp(e * 32768 / M_PI, (double)-kDown, (double)0x2AAA);
 }
 // a shot from a gun whose pivot is `from`, from over its barrel, clear of the gunner and of the cannon's own cylinder (a
-// shot bursts on anything it touches); `target` only for the trace
+// shot bursts on anything it touches); `locked` only for the trace; `sv` 0: the crew's own powder, no bomb taken
 void fire(Cpu* c, uint32_t sv, uint32_t link, V3 from, int16_t yaw, int16_t up, uint32_t locked) {
-    if (!ld8(sv + 0x6A)) { guest_call(c, GC(0x025E1988), {0x0883}); return; }
-    st8(sv + 0x6A, ld8(sv + 0x6A) - 1);
+    if (sv && !ld8(sv + 0x6A)) { guest_call(c, GC(0x025E1988), {0x0883}); return; }
+    if (sv) st8(sv + 0x6A, ld8(sv + 0x6A) - 1);
     const double e = up * M_PI / 32768, t = yaw * M_PI / 32768;
     static const uint32_t buf = mem::host_alloc(0x20);  // pos at +0, angle at +0x10
     st32(buf, u32_bits((float)(from.x + sin(t) * cos(e) * 230)));
@@ -804,7 +809,7 @@ void fire(Cpu* c, uint32_t sv, uint32_t link, V3 from, int16_t yaw, int16_t up, 
     st32(ball + 0x370, u32_bits((float)(kShotSpeed * cos(e)))), st32(ball + 0x340, u32_bits((float)(kShotSpeed * sin(e)))), st32(ball + 0x374, u32_bits(-2.5f));
     guest_call(c, GC(0x025E1988), {0x2852});
     g_deck_shots++;
-    trace("extras: deck cannon fires (yaw %d, up %d, %u bombs left)%s", yaw, up, ld8(sv + 0x6A), locked == 0xFFFFFFFF ? ", aimed by hand" : ", locked on");
+    trace("extras: deck cannon fires (yaw %d, up %d, %u bombs left)%s", yaw, up, sv ? ld8(sv + 0x6A) : 0, locked == 0xFFFFFFFF ? ", aimed by hand" : ", locked on");
 }
 // the gun Link stands by on `ship` (by the deck spot it is manned from, for one up on a roof), or -1
 int gun_by(uint32_t ship, const Gun* guns, uint32_t link) {
@@ -856,9 +861,9 @@ void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, const Gun* 
         }
         const V3 w = to_world(pos_of(hull), hull_yaw, {guns[i].at.x, floor_y[i], guns[i].at.z});
         st32(a + kPos, u32_bits((float)w.x)), st32(a + kPos + 4, u32_bits((float)w.y)), st32(a + kPos + 8, u32_bits((float)w.z));
-        const bool mine = g_manned == i, p2 = !mine && g_p2_gun == i;
-        st16(a + kAngleY, (uint16_t)(mine ? yaw : p2 ? g_p2_yaw : (int16_t)(hull_yaw + guns[i].face)));
-        st16(a + 0x328, (uint16_t)(mine ? 0x4000 - up : p2 ? 0x4000 - g_p2_up : 0x3400));
+        const bool mine = g_manned == i, p2 = !mine && g_p2_gun == i, crew = !mine && !p2 && g_crew_aims[i];
+        st16(a + kAngleY, (uint16_t)(mine ? yaw : p2 ? g_p2_yaw : crew ? g_crew_yaw[i] : (int16_t)(hull_yaw + guns[i].face)));
+        st16(a + 0x328, (uint16_t)(mine ? 0x4000 - up : p2 ? 0x4000 - g_p2_up : crew ? 0x4000 - g_crew_up[i] : 0x3400));
         st32(a + 0x39C, 0);
     }
     if (!deck) { g_cannon_btn = 0; return; }
@@ -903,6 +908,24 @@ void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, const Gun* 
     if (!(pressed & (g_cannon_btn.load() | input::kA)) || now < fired + 1) return;
     fired = now;
     fire(c, sv, link, from, yaw, up, locked);
+}
+// The ship's crew: each gun neither Link nor the second gunner is at is laid on the nearest monster within 6000 and fires
+// every 4 s (its own powder); it points as laid (g_crew_yaw / _up, which the gun loop shows)
+void crew(Cpu* c, uint32_t link, double now) {
+    static double fired[2];
+    static Lay lay[2];
+    for (int i = 0; i < 2; i++) {
+        g_crew_aims[i] = false;
+        const uint32_t a = i == g_manned || i == g_p2_gun ? 0 : g_cannon[i].actor(c);
+        if (!a) continue;
+        const V3 from{ldf32(a + kPos), ldf32(a + kPos + 4) + 100, ldf32(a + kPos + 8)};
+        const uint32_t id = nearest_monster(c, from);
+        const uint32_t m = id == 0xFFFFFFFF ? 0 : guest_call(c, GC(0x025DE50C), {id});
+        if (!m || std::hypot(ldf32(m + kPos) - from.x, ldf32(m + kPos + 8) - from.z) > 6000) continue;
+        lay_on(m, id, from, lay[i], g_crew_yaw[i], g_crew_up[i]);
+        g_crew_aims[i] = true;
+        if (now >= fired[i] + 4) fired[i] = now, fire(c, 0, link, from, g_crew_yaw[i], g_crew_up[i], id);
+    }
 }
 // The second gunner: with a second controller (kept apart from the first, input::set_second_player), player 2 has the
 // gun Link is not at: its left stick turns and raises it, ZL locks it on the nearest monster (and off), A or ZR fires,
@@ -1872,6 +1895,8 @@ void step(Cpu* c) {
         input::set_second_player(on<kGunner>());
         if (on<kGunner>()) second_gunner(c, sv, link, ship, guns, now);
         else g_p2_gun = -1;
+        if (ship && on<kCrew>()) crew(c, link, now);
+        else g_crew_aims[0] = g_crew_aims[1] = false;
     }
     if (static double t = 0; hull && now - t >= 1) {  // where Link is about the Big ship, once a second (the trace)
         t = now;
