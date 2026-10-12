@@ -65,7 +65,7 @@ leap onto the raft; walk it, man its guns (A by one); A at its front edge leaps 
   full) ON=(NIGHT_DEAD HAUNTED_SEA GIANT_SEAHATS LEVIATHAN HORROR_AUDIO RAFT FAIR_WIND BOARDING DEAD_CALM BLOOD_MOON
             CYCLONES MAELSTROM ARMADA SIREN WRONG_LION DROWNED SCARE_PACING SHIP_UPGRADES); export WWHD_TEST_CREW=1
   EVENT="drowned@+180;armada@+330;lion@+570;calm@+630;siren@+780;maelstrom@+1080;sea@+1200;leviathan@+1380;cyclone@+1560;blood@+1710"
-  AT_NIGHT=1; export WWHD_MOD_DAMAGE=1 WWHD_MOD_DAMAGE_CHOICE=4 WWHD_TEST_SHOP=1
+  AT_NIGHT=1; RECORD=1; export WWHD_MOD_DAMAGE=1 WWHD_MOD_DAMAGE_CHOICE=4 WWHD_TEST_SHOP=1
   NOTE="The full test, at night, no damage: the big raft in tow, Fair wind, the ship's crew, and every event with its warning signs
 (30 s before each, sail away to escape it): the drowned 3:00, armada + boarding 5:30, the Lion 9:30, dead calm 10:30,
 siren 13:00, maelstrom 18:00, Haunted sea 20:00, Leviathan 23:00, cyclone 26:00, blood moon 28:30." ;;
@@ -79,7 +79,7 @@ mans the other). Molgera 80 health; Phantom 18 shots drive him off." ;;
   chaos) ON=(NIGHT_DEAD HAUNTED_SEA GIANT_SEAHATS LEVIATHAN MOLGERA PHANTOM_GANON HORROR_AUDIO RAFT FAIR_WIND BOARDING DEAD_CALM
              BLOOD_MOON CYCLONES MAELSTROM ARMADA SIREN WRONG_LION DROWNED SHIP_UPGRADES SECOND_GUNNER)
   EVENT="blood@+20;armada@+40;drowned@+45;sea@+50;calm@+60;siren@+70;leviathan@+80;maelstrom@+90;molgera@+100;phantom@+110;lion@+130;cyclone@+420"
-  AT_NIGHT=1; export WWHD_MOD_DAMAGE=1 WWHD_MOD_DAMAGE_CHOICE=4 WWHD_TEST_UPGRADES=3F WWHD_TEST_CREW=1 WWHD_MOD_PHANTOM_GANON_CHOICE=1
+  AT_NIGHT=1; RECORD=1; export WWHD_MOD_DAMAGE=1 WWHD_MOD_DAMAGE_CHOICE=4 WWHD_TEST_UPGRADES=3F WWHD_TEST_CREW=1 WWHD_MOD_PHANTOM_GANON_CHOICE=1
   NOTE="Everything at once, at night, no damage: blood moon, armada, drowned, Haunted sea, calm, siren, Leviathan,
 maelstrom, Molgera, Titanic Phantom and the Lion all within the first ~2 minutes; the cyclone at 7 min. Upgrades:
 sailing 3, guns 3, shots 3 (no shop). Claude drives;
@@ -164,4 +164,10 @@ echo "It goes straight to the state by itself (no need to press anything at the 
 # once a Quest Log is played)
 SKIP="WWHD_TEST_ORIGIN=1 WWHD_TEST_PRESS=3-3.2:8000,5-5.2:8000,7-7.2:8000,9-9.2:8000,11-11.2:8000,13-13.2:8000"
 mkdir -p "$ROOT/build/try/shots"
+# RECORD=1 (chaos, full; or set it yourself): a screenshot every 3 s, shrunk into build/try/rec-<run>/ (tools/rec.sh)
+if [ -n "${RECORD:-}" ]; then
+  export WWHD_TEST_SHOT_EVERY=3; rm -f "$ROOT"/build/try/shots/*.png
+  (sleep 5; "$ROOT/tools/rec.sh" "$ROOT/build/try/shots" "${TRACE%.txt}-rec") &
+  echo "Recording: ${TRACE%.txt}-rec/"
+fi
 cd "$ROOT" && env $EXTRA $SKIP WWHD_SCREENSHOT_DIR="$ROOT/build/try/shots" WWHD_LIVE_PAD="$ROOT/build/try/pad.txt" WWHD_PORTABLE_LOAD="$ROOT/save/haunted.wwstate" WWHD_MODS_TRACE="$TRACE" ./build/cmake/wwhd

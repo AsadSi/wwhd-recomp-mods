@@ -39,6 +39,7 @@
 #include "../input_map.h"
 #include "../true60.h"
 #include "../overlay/overlay.h"
+#include "../screenshot.h"
 #include "../platform/keycodes.h"
 #include "imgui.h"
 #include "runtime.h"
@@ -2163,6 +2164,13 @@ void step(Cpu* c) {
                 trace("extras: bought %s level %d for %d rupees", kUpName[b], lv + 1, kUpPrice[lv]);
             }
         }
+    }
+    // test aid: WWHD_TEST_SHOT_EVERY=<seconds>, a screenshot that often (a test's flipbook), each marked in the trace
+    static const double shot_every = getenv("WWHD_TEST_SHOT_EVERY") ? atof(getenv("WWHD_TEST_SHOT_EVERY")) : 0;
+    if (static double next_shot = 0; shot_every > 0 && now >= next_shot) {
+        next_shot = now + shot_every;
+        screenshot::request();
+        trace("extras: frame");
     }
     // test aid: WWHD_EXTRAS_SPAWN=proc:param:dist:dy[:anglex] (hex) spawns that once, 3 s after Link appears
     static const char* test_spawn = getenv("WWHD_EXTRAS_SPAWN");
