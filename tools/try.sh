@@ -7,7 +7,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 pgrep -x wwhd >/dev/null && { echo "The game is already running; close it first."; exit 1; }
 [ -f "$ROOT/save/haunted.wwstate" ] || { echo "save/haunted.wwstate is missing."; exit 1; }
 SPOOKY=(NIGHT_DEAD HAUNTED_SEA STORM FOG GIANT_SEAHATS PHANTOM_GANON HORROR_AUDIO DEEP LEVIATHAN MOLGERA PHANTOM_STALKER BIG_SHIP BEEDLE_SHIP
-        DEAD_CALM PHOTO_MODE SECOND_GUNNER BLOOD_MOON CYCLONES MAELSTROM ARMADA SIREN WRONG_LION DROWNED BOARDING WRECKS TIME
+        DEAD_CALM PHOTO_MODE SECOND_GUNNER BLOOD_MOON CYCLONES MAELSTROM ARMADA SIREN WRONG_LION DROWNED BOARDING TIME
         RAFT FAIR_WIND SCARE_PACING SHIP_UPGRADES)
 ON=(); EVENT=; NOTE=; EXTRA=
 SHIP="Big ship (keys: move WASD, A = K/Space, B = J, ZL = Left Shift, pause/items = Return):
@@ -28,7 +28,7 @@ BEEDLE="Beedle's ship (keys: move WASD, A = K/Space, B = J, ZL = Left Shift, pau
   (or your Bomb Bag's button) to man it: stick aims, ZL locks on the nearest monster, A fires (a bomb a shot), B leaves."
 case "${1:-}" in
   long) ON=(NIGHT_DEAD HAUNTED_SEA STORM FOG GIANT_SEAHATS PHANTOM_GANON HORROR_AUDIO DEEP LEVIATHAN MOLGERA PHANTOM_STALKER RAFT FAIR_WIND
-           DEAD_CALM BLOOD_MOON CYCLONES MAELSTROM ARMADA SIREN WRONG_LION DROWNED BOARDING WRECKS); export WWHD_TEST_CREW=1
+           DEAD_CALM BLOOD_MOON CYCLONES MAELSTROM ARMADA SIREN WRONG_LION DROWNED BOARDING); export WWHD_TEST_CREW=1
   OFTEN=2; export WWHD_MOD_DAMAGE=1 WWHD_MOD_DAMAGE_CHOICE=4; NOTE="Claude's long run: every spooky mod at Often, nothing forced, no damage; Claude sails it through the live pad." ;;
   plain) NOTE="Every new mod off: plain sailing, to compare (does Link and the boat lag here too?)." ;;
   beedle) ON=(BEEDLE_SHIP); NOTE="$BEEDLE" ;;
@@ -60,16 +60,15 @@ to fire) for 200 rupees and a blue potion. Sail away and they follow." ;;
 Then let it take you there (about 7000 off) to see what waits." ;;
   lion) ON=(WRONG_LION); EVENT="lion@+20;lion@+40;lion@+60"; AT_NIGHT=1; NOTE="It is night. Set sail (A). At about 20, 40 and 60 s the King of Red Lions laughs and swerves off by himself
 for a few seconds." ;;
-  wrecks) ON=(WRECKS); EVENT="wrecks@+20"; AT_NIGHT=1; NOTE="It is night. At about 20 s fog rolls in over a graveyard of ships ahead: sail among the sunken hulks (Poes about)." ;;
   raft) ON=(RAFT FAIR_WIND); NOTE="The King of Red Lions tows a big flagged raft (Fair wind on: the sail is always full). Stop and press B to
 leap onto the raft; walk it, man its guns (A by one); A at its front edge leaps back into the boat. Fall in: A by its side." ;;
   full) ON=(NIGHT_DEAD HAUNTED_SEA GIANT_SEAHATS LEVIATHAN HORROR_AUDIO RAFT FAIR_WIND BOARDING DEAD_CALM BLOOD_MOON
-            CYCLONES MAELSTROM ARMADA SIREN WRONG_LION DROWNED WRECKS SCARE_PACING SHIP_UPGRADES); export WWHD_TEST_CREW=1
-  EVENT="drowned@+180;armada@+330;lion@+570;calm@+630;siren@+780;wrecks@+900;maelstrom@+1080;sea@+1200;leviathan@+1380;cyclone@+1560;blood@+1710"
+            CYCLONES MAELSTROM ARMADA SIREN WRONG_LION DROWNED SCARE_PACING SHIP_UPGRADES); export WWHD_TEST_CREW=1
+  EVENT="drowned@+180;armada@+330;lion@+570;calm@+630;siren@+780;maelstrom@+1080;sea@+1200;leviathan@+1380;cyclone@+1560;blood@+1710"
   AT_NIGHT=1; export WWHD_MOD_DAMAGE=1 WWHD_MOD_DAMAGE_CHOICE=4 WWHD_TEST_SHOP=1
   NOTE="The full test, at night, no damage: the big raft in tow, Fair wind, the ship's crew, and every event with its warning signs
 (30 s before each, sail away to escape it): the drowned 3:00, armada + boarding 5:30, the Lion 9:30, dead calm 10:30,
-siren 13:00, wrecks 15:00, maelstrom 18:00, Haunted sea 20:00, Leviathan 23:00, cyclone 26:00, blood moon 28:30." ;;
+siren 13:00, maelstrom 18:00, Haunted sea 20:00, Leviathan 23:00, cyclone 26:00, blood moon 28:30." ;;
   shop) ON=(RAFT FAIR_WIND SHIP_UPGRADES HAUNTED_SEA); EVENT="sea@+60"; export WWHD_TEST_SHOP=1 WWHD_TEST_CREW=1; NOTE="Zunari's ship fittings open 5 s in, and again on F8 (in play: after talking to Zunari on Windfall). Stick/d-pad (W/S) to choose, A (K) to buy,
 B (J) to leave. You have 5000 rupees: buy some, then sail (faster?), get on the raft (B) and fire its guns (quicker,
 bigger shots?). Haunted sea at about 1:30 for something to shoot." ;;
@@ -78,15 +77,15 @@ bigger shots?). Haunted sea at about 1:30 for something to shoot." ;;
 upgrades first (5000 rupees). Get onto the raft (B) before they come and fight from its two guns (A by one; a second controller
 mans the other). Molgera 80 health; Phantom 18 shots drive him off." ;;
   chaos) ON=(NIGHT_DEAD HAUNTED_SEA GIANT_SEAHATS LEVIATHAN MOLGERA PHANTOM_GANON HORROR_AUDIO RAFT FAIR_WIND BOARDING DEAD_CALM
-             BLOOD_MOON CYCLONES MAELSTROM ARMADA SIREN WRONG_LION DROWNED WRECKS SHIP_UPGRADES SECOND_GUNNER)
-  EVENT="blood@+20;armada@+40;drowned@+45;sea@+50;wrecks@+55;calm@+60;siren@+70;leviathan@+80;maelstrom@+90;molgera@+100;phantom@+110;lion@+130;cyclone@+420"
+             BLOOD_MOON CYCLONES MAELSTROM ARMADA SIREN WRONG_LION DROWNED SHIP_UPGRADES SECOND_GUNNER)
+  EVENT="blood@+20;armada@+40;drowned@+45;sea@+50;calm@+60;siren@+70;leviathan@+80;maelstrom@+90;molgera@+100;phantom@+110;lion@+130;cyclone@+420"
   AT_NIGHT=1; export WWHD_MOD_DAMAGE=1 WWHD_MOD_DAMAGE_CHOICE=4 WWHD_TEST_UPGRADES=3F WWHD_TEST_CREW=1 WWHD_MOD_PHANTOM_GANON_CHOICE=1
-  NOTE="Everything at once, at night, no damage: blood moon, armada, drowned, Haunted sea, wrecks, calm, siren, Leviathan,
+  NOTE="Everything at once, at night, no damage: blood moon, armada, drowned, Haunted sea, calm, siren, Leviathan,
 maelstrom, Molgera, Titanic Phantom and the Lion all within the first ~2 minutes; the cyclone at 7 min. Upgrades:
 sailing 3, guns 3, shots 3 (no shop). Claude drives;
 take the controller any time." ;;
-  tour) ON=(BEEDLE_SHIP SECOND_GUNNER BOARDING PHOTO_MODE DROWNED ARMADA WRONG_LION DEAD_CALM SIREN WRECKS MAELSTROM CYCLONES BLOOD_MOON NIGHT_DEAD HORROR_AUDIO); export WWHD_TEST_CREW=1
-  EVENT="drowned@+60;armada@+190;lion@+440;lion@+455;lion@+470;calm@+490;siren@+640;wrecks@+725;maelstrom@+910;cyclone@+1010;blood@+1170"; AT_NIGHT=1
+  tour) ON=(BEEDLE_SHIP SECOND_GUNNER BOARDING PHOTO_MODE DROWNED ARMADA WRONG_LION DEAD_CALM SIREN MAELSTROM CYCLONES BLOOD_MOON NIGHT_DEAD HORROR_AUDIO); export WWHD_TEST_CREW=1
+  EVENT="drowned@+60;armada@+190;lion@+440;lion@+455;lion@+470;calm@+490;siren@+640;maelstrom@+910;cyclone@+1010;blood@+1170"; AT_NIGHT=1
   NOTE="$BEEDLE
 Every new mod in one run, at night (about 20 minutes). Times are from when the file loads:
   0:00  Yours: the tow, get on the deck and back, both guns. F7 = free camera (F7 again to stop). A second controller
@@ -96,15 +95,14 @@ Every new mod in one run, at night (about 20 minutes). Times are from when the f
   7:20  Something in the Lion, three times: be in the boat, sailing. He laughs and swerves off by himself.
   8:10  Dead calm: the wind dies and a still fog settles.
  10:40  Siren song: a harp, the boat turns toward it. Steer against it, or let it take you to the Gyorgs.
- 12:05  Shipwreck graveyard: fog and sunken hulks ahead, Poes about.
  15:10  Maelstrom: wrench the stick left-right to break free (or it takes two hearts after 45 s).
  16:50  Wandering cyclone: steer round it, then sail into it to be thrown across the sea.
  19:30  Blood moon: the world turns red; land on an island and the dead rise twice as fast.
 Stay in open sea until the blood moon: going near an island ends whatever sea event is on." ;;
-  tour-rest) ON=(BEEDLE_SHIP SECOND_GUNNER BOARDING PHOTO_MODE DROWNED ARMADA WRONG_LION DEAD_CALM SIREN WRECKS MAELSTROM CYCLONES BLOOD_MOON NIGHT_DEAD HORROR_AUDIO); export WWHD_TEST_CREW=1
-  EVENT="armada@+30;calm@+180;siren@+300;wrecks@+400;maelstrom@+600;cyclone@+700;blood@+870"; AT_NIGHT=1
+  tour-rest) ON=(BEEDLE_SHIP SECOND_GUNNER BOARDING PHOTO_MODE DROWNED ARMADA WRONG_LION DEAD_CALM SIREN MAELSTROM CYCLONES BLOOD_MOON NIGHT_DEAD HORROR_AUDIO); export WWHD_TEST_CREW=1
+  EVENT="armada@+30;calm@+180;siren@+300;maelstrom@+600;cyclone@+700;blood@+870"; AT_NIGHT=1
   NOTE="$BEEDLE
-The tour's second half, at night: armada (with boarding) at 0:30, calm 3:00, siren 5:00, wrecks 6:40, maelstrom 10:00,
+The tour's second half, at night: armada (with boarding) at 0:30, calm 3:00, siren 5:00, maelstrom 10:00,
 cyclone 11:40, blood moon 14:30." ;;
   beedle-bosses) ON=(BEEDLE_SHIP MOLGERA PHANTOM_GANON); EVENT="molgera@+40;phantom@+45"; export WWHD_MOD_PHANTOM_GANON_CHOICE=1; NOTE="$BEEDLE
 Molgera and Titanic Phantom Ganon together from about 40 s: fight them from its deck or from the boat's cannon." ;;
@@ -151,7 +149,7 @@ Everything at once. The first minute is yours: get on the deck, try the helm and
   OFTEN=2; NOTE="$SHIP
 The long soak, played: every spooky mod on, How often at Often, nothing forced. Sail out into open sea (away from
 islands) and keep going; the events come by chance, a roll a minute (none within reach of an island). Play as you like." ;;
-  *) echo "Usage: tools/try.sh <chaos|full|raft|shop|raft-bosses|tour|tour-rest|long|beedle|beedle-guns|gunner|crew|boarding|drowned|calm|photo|blood|cyclone|maelstrom|armada|siren|lion|wrecks|soak|plain|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim|cannon-boat|cannon-boat-deck>"; exit 2 ;;
+  *) echo "Usage: tools/try.sh <chaos|full|raft|shop|raft-bosses|tour|tour-rest|long|beedle|beedle-guns|gunner|crew|boarding|drowned|calm|photo|blood|cyclone|maelstrom|armada|siren|lion|soak|plain|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim|cannon-boat|cannon-boat-deck>"; exit 2 ;;
 esac
 for m in "${SPOOKY[@]}"; do export WWHD_MOD_$m=0; done
 for m in ${ON[@]+"${ON[@]}"}; do export WWHD_MOD_$m=1; [ -n "${OFTEN:-}" ] && export WWHD_MOD_${m}_OFTEN=$OFTEN; done
