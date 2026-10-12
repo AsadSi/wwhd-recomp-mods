@@ -96,6 +96,9 @@ now sets her speed (try running before it and into it), she speeds up and slows 
 The cabin: on her deck, walk through the door under the stern castle. Below, a panel opens (F10 opens it again): sleep
 until morning or nightfall, fill empty bottles with soup (once a visit), stow your bombs and take them back. Walk out
 the way you came: you should come up in the boat beside her, and she should lie where you left her." ;;
+  beedle-shop) ON=(SHIP_UPGRADES); export WWHD_TEST_STAGE="${SHOP:-Obshop 4 4}"; NOTE="Straight into a Beedle shop (SHOP=\"Obshop 4 4\": his shop 5, Faster sailing in the Red Potion's place;
+SHOP=\"Obshop 2 2\": shop 3, a cannon fitting where 30 Bombs stand once you have the Bomb Bag). Talk to Beedle, look at
+the fitting (its name, price and words), buy it: the level goes up, the rupees go down, Link holds up nothing odd." ;;
   helm) ON=(BIG_SHIP); NOTE="$SHIP
 New: the wind sets her speed (before it the boat's speed, a third of it sailing into it), she gathers speed and loses it
 slowly, and the wheel turns a rudder over (turning is gentle from a standstill)." ;;

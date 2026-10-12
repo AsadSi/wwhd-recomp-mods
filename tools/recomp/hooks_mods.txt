@@ -39,3 +39,7 @@
 @024C8FF8 # daTornado execute: (the other test)
 02481C94  # daShip_c::procTornadoUp: its cyclone gone, the boat is let go instead of reading through nothing (extras.cpp)
 0211BFFC  # daDaiocta modeDelete: Big Octo of the mod dies without its demo (extras.cpp)
+02212BA0  # daNpc_Bs1_c::createShopList: Ship upgrades on Beedle's shelves (extras.cpp)
+025F50E8  # getMessage: their shop texts and prices written into the loaded messages
+@02215474 # Bs1 buy: checkItemGet's answer, ours down the execItemGet path
+@02215484 # Bs1 buy: execItemGet, ours fitted instead
