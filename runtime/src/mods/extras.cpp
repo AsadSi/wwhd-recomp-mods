@@ -139,24 +139,27 @@ const char* const kUpName[] = {"Faster sailing", "Faster guns", "Bigger shots"};
 std::atomic<int> g_shop_level[3], g_shop_rupees{0}, g_shop_sel{0}, g_buy{-1};
 std::atomic<const char*> g_shop_news{""};
 bool shop_draw(const float* pad) {
-    using namespace input_map;
-    static float prev[kPadCount];
+    // the controller as the game sees it (the player's controls: on a Nintendo layout A is the right-hand button), its
+    // stick as up and down; and the keyboard's own keys
+    const input::PadState st = input_map::controller_state(input_map::current(), pad);
+    const uint32_t now = st.buttons | (st.ly > 0.5f ? input::kUp : 0) | (st.ly < -0.5f ? input::kDown : 0);
+    static uint32_t prev = 0;
     static bool keys_prev[256], fresh = true;
     bool keys[256];
     input::held_keys(keys);
-    if (fresh) std::copy(pad, pad + kPadCount, prev), std::copy(keys, keys + 256, keys_prev), fresh = false;  // (the A that opened it)
-    auto hit = [&](int p, std::initializer_list<int> ks) {
+    if (fresh) prev = now, std::copy(keys, keys + 256, keys_prev), fresh = false;  // (the A that opened it)
+    auto hit = [&](uint32_t b, std::initializer_list<int> ks) {
         bool k = false;
         for (int c : ks) k |= keys[c] && !keys_prev[c];
-        return (pad[p] > 0.5f && prev[p] <= 0.5f) || k;
+        return (now & b && !(prev & b)) || k;
     };
     int sel = g_shop_sel;
-    if (hit(kPadDDown, {kVK_ANSI_S, kVK_DownArrow}) || hit(kPadLSDown, {})) sel = (sel + 1) % 3;
-    if (hit(kPadDUp, {kVK_ANSI_W, kVK_UpArrow}) || hit(kPadLSUp, {})) sel = (sel + 2) % 3;
+    if (hit(input::kDown, {kVK_ANSI_S, kVK_DownArrow})) sel = (sel + 1) % 3;
+    if (hit(input::kUp, {kVK_ANSI_W, kVK_UpArrow})) sel = (sel + 2) % 3;
     g_shop_sel = sel;
-    if (hit(kPadA, {kVK_ANSI_K, kVK_Space, kVK_Return})) g_buy = sel;
-    const bool close = hit(kPadB, {kVK_ANSI_J, kVK_Escape});
-    std::copy(pad, pad + kPadCount, prev), std::copy(keys, keys + 256, keys_prev);
+    if (hit(input::kA, {kVK_ANSI_K, kVK_Space, kVK_Return})) g_buy = sel;
+    const bool close = hit(input::kB, {kVK_ANSI_J, kVK_Escape});
+    prev = now, std::copy(keys, keys + 256, keys_prev);
     if (close) fresh = true;
     const ImGuiIO& io = ImGui::GetIO();
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
@@ -2164,11 +2167,15 @@ void step(Cpu* c) {
         const uint8_t talk = in_mem2(z) ? ld8(z + 0xAC4) : 0;
         bool has_sail = false;
         for (int i = 0; i < 21; i++) has_sail |= ld8(sv + 0x3C + i) == 0x78;
-        // (test aid: WWHD_TEST_SHOP=1 opens it 5 s after a file loads)
+        // (test aid: WWHD_TEST_SHOP=1 opens it 5 s after a file loads, and again on F8)
         static const bool test_shop = getenv("WWHD_TEST_SHOP") != nullptr;
         static double test_at = -1;
+        static bool f8_was = false;
+        bool keys[256];
+        input::held_keys(keys);
         if (fresh && test_shop) test_at = now + 5;
-        const bool test_now = test_at > 0 && now >= test_at;
+        const bool test_now = (test_at > 0 && now >= test_at) || (test_shop && keys[kVK_F8] && !f8_was);
+        f8_was = keys[kVK_F8];
         if (test_now) test_at = -1;
         if (on<kUpgrades>() && ((talk_was == 2 && talk != 2 && ld8(z + 0xAC3) != 4 && has_sail) || test_now)) {
             g_shop_news = "", g_shop_sel = 0, g_buy = -1;
