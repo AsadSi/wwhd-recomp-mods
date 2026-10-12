@@ -100,7 +100,7 @@ the way you came: you should come up in the boat beside her, and she should lie 
 SHOP=\"Obshop 2 2\": shop 3, a cannon fitting where 30 Bombs stand once you have the Bomb Bag). Talk to Beedle, look at
 the fitting (its name, price and words), buy it: the level goes up, the rupees go down, Link holds up nothing odd." ;;
   deep) ON=(DEEP); EVENT="deep@+15"; NOTE="Fog and the Deep about 15 s in: the sea and sky darken, a haze closes in far from land." ;;
-  dead-windfall) ON=(NIGHT_DEAD WARP HORROR_AUDIO); EVENT="dead@+25"; AT_NIGHT=1; export WWHD_TEST_WARP="Zunari"; NOTE="Night on Windfall: warped to Zunari's stall
+  dead-windfall) ON=(NIGHT_DEAD HORROR_AUDIO); EVENT="dead@+25"; AT_NIGHT=1; export WWHD_TEST_STAGE="sea 11 0"; NOTE="Night on Windfall: set down at its first spawn point
 on foot, and at about 25 s the dead rise, closing in from behind Link." ;;
   helm) ON=(BIG_SHIP); NOTE="$SHIP
 New: the wind sets her speed (before it the boat's speed, a third of it sailing into it), she gathers speed and loses it
