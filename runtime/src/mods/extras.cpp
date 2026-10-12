@@ -1411,8 +1411,8 @@ void step(Cpu* c) {
     // dive and circle (daGy_c mode at +0x3CC: 0 dive, 1 circle, 6 circle with others), so those are turned into an
     // attack on the player (modeAttackPlayerInit, 02169B48, mode 3), which gives up while he rides the boat (or stands
     // on a ship): then, as the Leviathan does, they circle the boat (their controller's clear-line flag for them set,
-    // +0x42E + the child index +0x3C8) and each breaches and rams it every 5-9 s (modeAttackInit 02169B68, mode 2), kept
-    // within 3000 of him so a sailing boat does not leave them behind; attacks, damage and deletion as the game decides
+    // +0x42E + the child index +0x3C8) and each breaches and rams it every 5-9 s (modeAttackInit 02169B68, mode 2), from
+    // a dive or its circle, kept within 2000 of him so a sailing boat does not leave them behind; attacks, damage and deletion as the game decides
     if (sea && settled) {
         static std::unordered_map<uint32_t, double> ram_at;
         for (uint32_t id : g_gyorg_ids) {
@@ -1424,15 +1424,15 @@ void step(Cpu* c) {
                 continue;
             }
             if (const uint32_t ctrl = ld32(gy + 0x3D4); in_mem2(ctrl) && ld32(gy + 0x3C8) < 8) st8(ctrl + 0x42E + ld32(gy + 0x3C8), 1);
-            if (double& at = ram_at[id]; mode == 1 && now >= at) {
+            if (double& at = ram_at[id]; (mode == 0 || mode == 1 || mode == 6) && now >= at) {  // (diving or circling)
                 if (at > 0) guest_call(c, GC(0x02169B68), {gy}), trace("extras: a Gyorg breaches to ram the boat");
                 at = now + 5 + rand() % 5;
             }
             if (static double told = 0; now - told > 3)  // (what each is doing, now and then: the trace)
                 told = now, trace("extras: Gyorg %#x mode %u, %.0f off", id, mode, std::hypot(ldf32(gy + kPos) - ldf32(link + kPos), ldf32(gy + kPos + 8) - ldf32(link + kPos + 8)));
-            if (const double far = std::hypot(ldf32(gy + kPos) - ldf32(link + kPos), ldf32(gy + kPos + 8) - ldf32(link + kPos + 8)); far > 3000)
+            if (const double far = std::hypot(ldf32(gy + kPos) - ldf32(link + kPos), ldf32(gy + kPos + 8) - ldf32(link + kPos + 8)); far > 2000)
                 for (uint32_t o : {kPos, kPos + 8})
-                    st32(gy + o, u32_bits((float)(ldf32(link + o) + (ldf32(gy + o) - ldf32(link + o)) * 3000 / far)));
+                    st32(gy + o, u32_bits((float)(ldf32(link + o) + (ldf32(gy + o) - ldf32(link + o)) * 2000 / far)));
         }
         if (g_gyorg_ids.empty()) ram_at.clear();
     }
@@ -2550,4 +2550,26 @@ extern "C" void hook_024C8A58(Cpu* c) {
     if (hide) st32(kPlay + 0x5CD8, flags & ~0x10000u);
     f_024C8A58_orig(c);
     if (hide) st32(kPlay + 0x5CD8, ld32(kPlay + 0x5CD8) | (flags & 0x10000u));
+}
+// daShip_c::procTornadoUp (02481C94; r3 the boat): carried up by a cyclone, it follows the cyclone's joints every step
+// through mTornadoActor (+0x704, GameCube 0x41C) without asking whether it is still there; one that went (a cyclone of
+// the sea's that saw Cyclos beaten and faded, with the boat already in its grip) left it reading address 0x3B4 (a
+// halt). Gone: the boat is let go (its tornado id +0x700 and actor cleared) and put back to waiting (procWait_init
+// 0247C300)
+extern "C" void f_02481C94_orig(Cpu* c);
+extern "C" void hook_02481C94(Cpu* c) {
+    const uint32_t ship = c->r[3], t = ld32(ship + 0x704);
+    if (t && (t < 0x10000000 || t >= 0x50000000 || !guest_call(c, GC(0x025DE50C), {ld32(ship + 0x700)}))) {
+        st32(ship + 0x700, 0xFFFFFFFF), st32(ship + 0x704, 0);
+        guest_call(c, GC(0x0247C300), {ship});
+        mods::trace("extras: the boat's cyclone is gone: it is let go");
+        c->r[3] = 1;
+        return;
+    }
+    if (!t) {  // (no cyclone at all)
+        guest_call(c, GC(0x0247C300), {ship});
+        c->r[3] = 1;
+        return;
+    }
+    f_02481C94_orig(c);
 }

@@ -37,3 +37,4 @@
 @024C99E0 # daTornado create: Cyclos beaten (event bit 0x2710) does not stop the wandering cyclone
 @024C8F68 # daTornado execute: nor fade it out
 @024C8FF8 # daTornado execute: (the other test)
+02481C94  # daShip_c::procTornadoUp: its cyclone gone, the boat is let go instead of reading through nothing (extras.cpp)
