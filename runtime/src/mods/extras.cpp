@@ -188,6 +188,7 @@ double g_step_time = 0;  // game time at the last step, for the hooks
 bool g_molgera_dying = false;     // slain, diving under (hook_020FF80C lets it dive at its own speed)
 int32_t g_molgera_pitch = -1;     // its pitch before a return to its flight's start, which points it straight up: put back
 bool g_molgera_gave_up = false;  // it has stopped hunting him (the event ends once he is 5000 away)
+double g_molgera_pace = 1;        // its circling flight's speed, x its own 40 a step (hook_020FF80C)
 // ph_class is the Peahat and the Seahat: the parameter's low byte picks it (0 or 0xFF a Peahat, else a Seahat, which
 // loads its own archive). Giant Seahats: the class ignores the actor's scale; its two J3DModels (body +0x12C4,
 // propeller +0x12CC) are drawn at their base scale (J3DModel +0xBC in HD), which nothing else sets, so it is set there
@@ -452,8 +453,8 @@ const std::vector<Mod>& catalogue() {
          "Very rarely, far out at sea, the wind dies, fog rolls in and Molgera, the Wind Temple's sand worm and bigger "
          "than in its lair, comes for Link over the water from far off, circling him as a Gyorg does and charging in to bite, "
          "then round again; when it dies it bursts apart as it dives under. "
-         "It is a little slower than the boat under full sail: sail well and leave it behind, or "
-         "fight it (it takes a lot of hitting) for 300 rupees and a blue potion.", {}, true},
+         "It is faster than the boat, however fast she sails, and hunts Link until he makes land: run for an "
+         "island, or fight it (it takes a lot of hitting) for 300 rupees and a blue potion.", {}, true},
         {"phantom-stalker", "Phantom stalker", "Spooky",
          "Rarely, on an island at night, fog rolls in and Phantom Ganon comes down behind Link and hunts him across the "
          "island, until Link takes to the sea, beats him, or he fades back into the fog.", {}, true},
@@ -1529,14 +1530,14 @@ void step(Cpu* c) {
             // 80-300 above the sea so it shows: it circles him 3000 out for 6-10 s (nearer, its body sweeps the Big ship's deck),
             // now and then (one time in three) swinging wide, 6000 out (substate 1, the FLY animation,
             // steering at its target +0x1B38 that we set ahead of it on the circle; its timers +0x1B50/52 held so it
-            // stays; held to 34 a step in hook_020FF80C, a little slower than a boat under full sail, 40), then charges
+            // stays; at its own 40 a step, or faster than his boat while it is left behind, hook_020FF80C), then charges
             // (substate 2 by its own timer: jaws open, steering at Link's eyes every step), lunges within 1200 and bites
             // (state 5: hook_020FF80C turns a bite that catches him into a miss, which sends it back to waiting, state
             // 1), and flies on to circle again; a charge that passes him (substate 3, its dive) goes back to circling.
-            // Left 1000 further out than its circle for 8 s, it gives up and flies off, and the event ends once he is 5000 away.
+            // It hunts him until he makes land (near an island) or the event's time is out.
             static uint32_t placed = 0;
             static double waited = 0, phase_at = 0, died = -1, blast = 0;
-            static bool closed = false, charging = false;  // closed: it has once come within its circle of him
+            static bool charging = false;
             static int dir = 1;              // which way round it circles
             static double ring = 3000;       // and how far out
             const double yaw = (int16_t)ld16(link + kAngleY) * M_PI / 32768;
@@ -1547,7 +1548,7 @@ void step(Cpu* c) {
                 st32(a + 0x1B38, u32_bits((float)x)), st32(a + 0x1B3C, u32_bits((float)y)), st32(a + 0x1B40, u32_bits((float)z));
             };
             if (placed != g_molgera.id) {
-                placed = g_molgera.id, closed = false, g_molgera_gave_up = false, died = -1, g_molgera_dying = false;
+                placed = g_molgera.id, g_molgera_gave_up = false, died = -1, g_molgera_dying = false;
                 // its head and the ring of positions and angles its body follows (+0x674, 256 x 12; +0x1274, 256 x 6),
                 // all at one point, so the body is not strung out back to where it was
                 st32(a + kPos, u32_bits((float)(ldf32(link + kPos) + sin(yaw) * 5000))), st32(a + kPos + 4, u32_bits(-60.f));
@@ -1588,13 +1589,10 @@ void step(Cpu* c) {
                     }
                 }
                 if (sub == 3) hunt(), circle();  // its charge passed him: round again
-                if (d < ring + 1000) closed = true;
-                static double behind_since = 0;  // left behind only after 8 s further off: it keeps on after him
-                if (d <= ring + 1000 || !closed || g_molgera_gave_up) behind_since = now;
-                if (now - behind_since > 8) {
-                    g_molgera_gave_up = true, charging = false;
-                    trace("extras: Molgera gives up the hunt");
-                } else if (sub == 2 && d < 1200 && !g_molgera_gave_up) {
+                // left behind, it comes on faster than his boat can sail (a tenth over its top speed, 55, with the
+                // sailing upgrade's share): it never gives up, until he makes land or its time is out
+                g_molgera_pace = d > ring + 1000 ? 1.1 * 55 * (1 + kSailBonus[upgrade(kUpSail)]) / 40 : 1;
+                if (sub == 2 && d < 1200 && !g_molgera_gave_up) {
                     st16(a + 0x1B32, 5), st16(a + 0x1B34, 0), st32(a + 0x370, 0);
                 }
             } else if (state == 1 && now - waited > 0.5) {  // after a bite: on, to circle again
@@ -2386,8 +2384,8 @@ extern "C" void hook_020FF80C(Cpu* c) {
         st16(a + 0x3E96, 0), st16(a + 0x1B32, 1), st16(a + 0x1B34, 0), st16(a + 0x1B50, 0x7A), st16(a + 0x1B54, 100);
     if (ld16(a + 0x1B32) == 10 && ld16(a + 0x1B34) == 1) {
         if (g_molgera_pitch >= 0) st16(a + 0x320, (uint16_t)g_molgera_pitch), g_molgera_pitch = -1;
-        if (!g_molgera_dying)  // its circling flight makes 40 a step (speed +0x33C, xz): held to 34
-            for (uint32_t o : {0u, 8u}) st32(a + kPos + o, u32_bits((float)(ldf32(a + kPos + o) - ldf32(a + 0x33C + o) * 0.15)));
+        if (!g_molgera_dying)  // its circling flight makes 40 a step (speed +0x33C, xz): carried on by its pace
+            for (uint32_t o : {0u, 8u}) st32(a + kPos + o, u32_bits((float)(ldf32(a + kPos + o) + ldf32(a + 0x33C + o) * (g_molgera_pace - 1))));
     }
     st32(a + 0x1878, 1);
     if (ld16(a + 0x1B32) == 10) st16(a + 0x1B32, 13);

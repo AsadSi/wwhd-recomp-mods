@@ -66,14 +66,14 @@ leap onto the raft; walk it, man its guns (A by one); A at its front edge leaps 
   full) ON=(NIGHT_DEAD HAUNTED_SEA GIANT_SEAHATS LEVIATHAN HORROR_AUDIO RAFT FAIR_WIND BOARDING DEAD_CALM BLOOD_MOON
             CYCLONES MAELSTROM ARMADA SIREN WRONG_LION DROWNED WRECKS SCARE_PACING SHIP_UPGRADES); export WWHD_TEST_CREW=1
   EVENT="drowned@+180;armada@+330;lion@+570;calm@+630;siren@+780;wrecks@+900;maelstrom@+1080;sea@+1200;leviathan@+1380;cyclone@+1560;blood@+1710"
-  AT_NIGHT=1; export WWHD_MOD_DAMAGE=1 WWHD_MOD_DAMAGE_CHOICE=4
+  AT_NIGHT=1; export WWHD_MOD_DAMAGE=1 WWHD_MOD_DAMAGE_CHOICE=4 WWHD_TEST_SHOP=1
   NOTE="The full test, at night, no damage: the big raft in tow, Fair wind, the ship's crew, and every event with its warning signs
 (30 s before each, sail away to escape it): the drowned 3:00, armada + boarding 5:30, the Lion 9:30, dead calm 10:30,
 siren 13:00, wrecks 15:00, maelstrom 18:00, Haunted sea 20:00, Leviathan 23:00, cyclone 26:00, blood moon 28:30." ;;
   shop) ON=(RAFT FAIR_WIND SHIP_UPGRADES HAUNTED_SEA); EVENT="sea@+60"; export WWHD_TEST_SHOP=1 WWHD_TEST_CREW=1; NOTE="Zunari's ship fittings open 5 s in, and again on F8 (in play: after talking to Zunari on Windfall). Stick/d-pad (W/S) to choose, A (K) to buy,
 B (J) to leave. You have 5000 rupees: buy some, then sail (faster?), get on the raft (B) and fire its guns (quicker,
 bigger shots?). Haunted sea at about 1:30 for something to shoot." ;;
-  raft-bosses) ON=(RAFT FAIR_WIND SHIP_UPGRADES SECOND_GUNNER MOLGERA PHANTOM_GANON HORROR_AUDIO); EVENT="molgera@+60;phantom@+70"
+  raft-bosses) ON=(RAFT FAIR_WIND SHIP_UPGRADES SECOND_GUNNER MOLGERA PHANTOM_GANON HORROR_AUDIO); EVENT="molgera@+60;phantom@+70"; export WWHD_TEST_CREW=1
   export WWHD_MOD_PHANTOM_GANON_CHOICE=1 WWHD_TEST_SHOP=1; NOTE="The big raft against Molgera and Titanic Phantom Ganon (about 1 min in). The shop opens 5 s in (F8 opens it again): buy
 upgrades first (5000 rupees). Get onto the raft (B) before they come and fight from its two guns (A by one; a second controller
 mans the other). Molgera 80 health; Phantom 18 shots drive him off." ;;
