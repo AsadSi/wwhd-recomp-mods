@@ -1096,7 +1096,6 @@ static bool skip(int bit) {
 }
 static bool g_in_execute = false;  // inside fpcEx_Handler (actor Execute): logic, not drawing
 namespace mods { void after_execute(Cpu* c, uint32_t execute_fn); }  // mods/turbo.cpp
-namespace mods { bool extra_step(Cpu* c, uint32_t execute_fn); }        // mods/turbo.cpp
 namespace mods::extras { void step(Cpu* c); }  // mods/extras.cpp
 extern "C" void hook_025DE788(Cpu* c) {
     if (skip(1) && !true60::enabled()) return;  // true 60: the per-process gate decides (true60.cpp)
@@ -1110,10 +1109,6 @@ extern "C" void hook_025DE788(Cpu* c) {
         mods::packages::frame(interp::g_logic_steps);
         const uint32_t r3 = c->r[3];  // fpcEx_Handler's result: the extras call into the game (spawns)
         mods::extras::step(c);
-        // test aid: WWHD_TEST_FASTFWD=n, n more full logic steps a frame (a quick door's, each counted and followed by
-        // the extras' step as a step of its own), for long test runs: the game runs n+1 times as fast, drawn once a frame
-        static const int fastfwd = getenv("WWHD_TEST_FASTFWD") ? atoi(getenv("WWHD_TEST_FASTFWD")) : 0;
-        for (int i = 0; i < fastfwd && mods::extra_step(c, execute_fn); i++) interp::g_logic_steps++, mods::extras::step(c);
         c->r[3] = r3;
     }
     g_in_execute = false;
