@@ -2180,6 +2180,8 @@ void step(Cpu* c) {
         bool keys[256];
         input::held_keys(keys);
         if (fresh && test_shop) test_at = now + 5;
+        // (test aid: WWHD_TEST_UPGRADES=<hex byte> sets the levels as a file loads, two bits each: sailing, guns, shots)
+        if (const char* e = getenv("WWHD_TEST_UPGRADES"); e && fresh) st8(upgrade_byte(), (uint8_t)strtoul(e, nullptr, 16));
         const bool test_now = (test_at > 0 && now >= test_at) || (test_shop && keys[kVK_F8] && !f8_was);
         f8_was = keys[kVK_F8];
         if (test_now) test_at = -1;

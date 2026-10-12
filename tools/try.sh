@@ -80,9 +80,10 @@ mans the other). Molgera 80 health; Phantom 18 shots drive him off." ;;
   chaos) ON=(NIGHT_DEAD HAUNTED_SEA GIANT_SEAHATS LEVIATHAN MOLGERA PHANTOM_GANON HORROR_AUDIO RAFT FAIR_WIND BOARDING DEAD_CALM
              BLOOD_MOON CYCLONES MAELSTROM ARMADA SIREN WRONG_LION DROWNED WRECKS SHIP_UPGRADES SECOND_GUNNER)
   EVENT="blood@+20;armada@+40;drowned@+45;sea@+50;wrecks@+55;calm@+60;siren@+70;leviathan@+80;maelstrom@+90;molgera@+100;phantom@+110;lion@+130;cyclone@+420"
-  AT_NIGHT=1; export WWHD_MOD_DAMAGE=1 WWHD_MOD_DAMAGE_CHOICE=4 WWHD_TEST_SHOP=1 WWHD_TEST_CREW=1 WWHD_MOD_PHANTOM_GANON_CHOICE=1
+  AT_NIGHT=1; export WWHD_MOD_DAMAGE=1 WWHD_MOD_DAMAGE_CHOICE=4 WWHD_TEST_UPGRADES=3F WWHD_TEST_CREW=1 WWHD_MOD_PHANTOM_GANON_CHOICE=1
   NOTE="Everything at once, at night, no damage: blood moon, armada, drowned, Haunted sea, wrecks, calm, siren, Leviathan,
-maelstrom, Molgera, Titanic Phantom and the Lion all within the first ~2 minutes; the cyclone at 7 min. Claude drives;
+maelstrom, Molgera, Titanic Phantom and the Lion all within the first ~2 minutes; the cyclone at 7 min. Upgrades:
+sailing 3, guns 3, shots 3 (no shop). Claude drives;
 take the controller any time." ;;
   tour) ON=(BEEDLE_SHIP SECOND_GUNNER BOARDING PHOTO_MODE DROWNED ARMADA WRONG_LION DEAD_CALM SIREN WRECKS MAELSTROM CYCLONES BLOOD_MOON NIGHT_DEAD HORROR_AUDIO); export WWHD_TEST_CREW=1
   EVENT="drowned@+60;armada@+190;lion@+440;lion@+455;lion@+470;calm@+490;siren@+640;wrecks@+725;maelstrom@+910;cyclone@+1010;blood@+1170"; AT_NIGHT=1
