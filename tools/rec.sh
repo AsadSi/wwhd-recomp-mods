@@ -3,7 +3,9 @@
 # dir> (named in the order they come, 0001.jpg...) and the full-size PNG deleted; the trace's "extras: frame" lines are
 # the same order, so frame N is the Nth such line's step
 mkdir -p "$2"; n=$(ls "$2" | wc -l | tr -d ' ')
-while pgrep -x wwhd >/dev/null || [ -n "$(ls "$1"/*.png 2>/dev/null)" ]; do
+# (only the game this run started: the newest wwhd once it is up; a recorder that followed any game ate the next run's shots)
+for i in $(seq 1 30); do pid=$(pgrep -nx wwhd) && break; sleep 1; done
+while { [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null; } || [ -n "$(ls "$1"/*.png 2>/dev/null)" ]; do
   for f in $(ls -tr "$1"/*.png 2>/dev/null); do
     [ $(( $(date +%s) - $(stat -f %m "$f") )) -lt 1 ] && continue
     n=$((n + 1)); sips -s format jpeg -s formatOptions 60 -Z 640 "$f" --out "$2/$(printf %04d $n).jpg" >/dev/null 2>&1; rm -f "$f"
