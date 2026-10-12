@@ -2251,6 +2251,14 @@ void step(Cpu* c) {
         } else {
             static uint32_t placed = 0;
             if (placed != g_bigship.id) placed = g_bigship.id, put(hull, home, home_yaw), trace("extras: Big ship lies at anchor (%.0f %.0f)", home.x, home.z);
+            if (static uint32_t told = 0; told != g_bigship.id && now - made_at > 3) {  // its children, where they sit (the trace)
+                told = g_bigship.id;
+                for (uint32_t o = 0x478; o <= 0x498; o += 8)
+                    if (const uint32_t k = guest_call(c, GC(0x025DE50C), {ld32(hull + o)})) {
+                        const V3 l = to_local(hull, k);
+                        trace("extras: Big ship child +%#x proc %#x at %.0f %.0f %.0f", o, ld16(k + 8), l.x, l.y, l.z);
+                    }
+            }
             // out of the boat beside it: the get-off jump (SHIP_GET_OFF, its jump phase link +0x69C0 1), with its deck within
             // 1600 on either side, is made a leap onto the nearest spot of its main deck (x +-250), then he falls the last
             // 30 onto it
@@ -2283,6 +2291,19 @@ void step(Cpu* c) {
                     trace("extras: Link climbs out of the water onto the deck");
                 }
             }
+            // (test aid: live pad bit 27 drops Link onto her deck at WWHD_TEST_DECK="x z", her frame, default the wheel)
+            static bool drop_was = false;
+            if (const bool drop = input::live_buttons() & 0x08000000u; drop && !drop_was && leap.step < 0) {
+                double x = 0, z = -780;
+                if (const char* e = getenv("WWHD_TEST_DECK")) sscanf(e, "%lf %lf", &x, &z);
+                const V3 w = to_world(pos_of(hull), (int16_t)ld16(hull + kAngleY), {x, kDeckY + 400, z}  /* from above whichever deck is there */);
+                put_link(link, w);
+                st32(link + 0x340, 0), st32(link + 0x6A48, u32_bits((float)w.y)), st32(link + 0x6A4C, u32_bits((float)w.y));
+                c->f[1].ps0 = 0;
+                guest_call(c, GC(0x023F6564), {link, 1});
+                trace("extras: (test) Link dropped onto the Big ship's deck at %.0f %.0f", x, z);
+            }
+            drop_was = input::live_buttons() & 0x08000000u;
             // The helm, the ship's wheel (Kaji, at z -858) on the stern castle: A by it takes it (the stick, A and B are
             // then the helm's, filter_pad). The stick up raises the sail, down lowers it (0.7 s from furled to full);
             // the wind sets how fast she sails (below), and she turns quicker the faster she goes. The hull is
@@ -2321,7 +2342,7 @@ void step(Cpu* c) {
                 speed += (sail * top - speed) * (sail * top > speed ? 0.02 : 0.012);
                 static double rudder = 0;
                 rudder += ((helm ? g_pad_lx.load() : 0) - rudder) * 0.08;
-                a = (int16_t)(a - rudder * 0xC0 * std::min(1.0, 0.25 + speed / 30));
+                a = (int16_t)(a - rudder * 0xA0 * std::min(1.0, 0.25 + speed / 30));
                 if (static double t = 0; now - t >= 1) t = now, trace("extras: Big ship wind %.2f power %.2f top %.1f rudder %.2f", along, power, top, rudder);
                 if (helm) {
                     static const uint32_t cam_name = [] {
