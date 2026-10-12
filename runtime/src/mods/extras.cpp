@@ -893,6 +893,9 @@ std::vector<uint32_t> monsters_out() {
     std::vector<uint32_t> v = g_sea.ids;
     v.insert(v.end(), g_armada.ids.begin(), g_armada.ids.end());
     for (uint32_t id : {g_leviathan.id, g_molgera.id, g_phantom.id}) if (id != 0xFFFFFFFF) v.push_back(id);
+    if (const uint32_t o = g_octo_actor)  // Big Octo's eyes (their ids at +0x25C0, up to 12): what the guns lock on to
+        for (uint32_t i = 0; i < 12; i++)
+            if (const uint32_t id = ld32(o + 0x25C0 + 4 * i); id && id != 0xFFFFFFFF) v.push_back(id);
     return v;
 }
 // Phantom Ganon takes no harm from bombs in the game; 18 deck-cannon shots that burst on him (within 300 x his size,
