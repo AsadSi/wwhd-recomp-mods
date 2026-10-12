@@ -4,7 +4,7 @@
 # Only that feature's mods are on; the spooky events come only when forced. Prints the controls first.
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-pgrep -fl "wwhd " >/dev/null && { echo "The game is already running; close it first."; exit 1; }
+pgrep -x wwhd >/dev/null && { echo "The game is already running; close it first."; exit 1; }
 [ -f "$ROOT/save/haunted.wwstate" ] || { echo "save/haunted.wwstate is missing."; exit 1; }
 SPOOKY=(NIGHT_DEAD HAUNTED_SEA STORM FOG GIANT_SEAHATS PHANTOM_GANON HORROR_AUDIO DEEP LEVIATHAN MOLGERA PHANTOM_STALKER BIG_SHIP BEEDLE_SHIP
         DEAD_CALM PHOTO_MODE SECOND_GUNNER BLOOD_MOON CYCLONES MAELSTROM ARMADA SIREN WRONG_LION DROWNED BOARDING WRECKS TIME
