@@ -43,3 +43,4 @@
 025F50E8  # getMessage: their shop texts and prices written into the loaded messages
 @02215474 # Bs1 buy: checkItemGet's answer, ours down the execItemGet path
 @02215484 # Bs1 buy: execItemGet, ours fitted instead
+@025D4ABC # fopAc_Execute position check: the actor about to halt the game, traced (extras.cpp)

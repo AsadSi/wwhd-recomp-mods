@@ -2966,6 +2966,18 @@ extern "C" void site_02215484(Cpu* c) {  // execItemGet(r3): ours fitted instead
     c->r[3] = 0x13;
 }
 
+// fopAc_Execute's position check (025D4ABC: r30 the actor, its position out of +-1e32, as the game halts next): which
+// actor, where, and whether it is one of ours, into the trace (a NaN position halted a seamless run, 2026-10-12)
+extern "C" void site_025D4ABC(Cpu* c) {
+    using namespace mods::extras;
+    const uint32_t a = c->r[30], id = ld32(a + 4);
+    const bool sea = std::find(g_sea.ids.begin(), g_sea.ids.end(), id) != g_sea.ids.end(),
+               gyorg = std::find(g_gyorg_ids.begin(), g_gyorg_ids.end(), id) != g_gyorg_ids.end();
+    mods::trace("extras: HALT: actor proc %#x id %#x at %g %g %g (old %g %g %g)%s%s%s", ld16(a + 8), id, ldf32(a + kPos), ldf32(a + kPos + 4),
+                ldf32(a + kPos + 8), ldf32(a + 0x300), ldf32(a + 0x304), ldf32(a + 0x308), sea ? " [Haunted sea]" : "", gyorg ? " [Gyorg]" : "",
+                a == g_beedle_actor ? " [craft in tow]" : "");
+}
+
 // the Boomerang check of daGy_c::_create (02167A64, r30 the Gyorg) and daGy_Ctrl_c::_create (0216BB70, r31 the
 // controller), just after dComIfGs_checkGetItem returned in r3: passed for the processes Haunted sea made
 static bool ours(uint32_t actor) {
