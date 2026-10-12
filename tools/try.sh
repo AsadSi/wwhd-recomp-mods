@@ -173,7 +173,7 @@ echo "It goes straight to the state by itself (no need to press anything at the 
 : > "$ROOT/build/try/pad.txt"  # Claude can drive the game live through it: "<buttons hex> <lx> <ly> [<rx> <ry>]"
 # straight into the state: A pressed through the title and onto Quest Log 1 (as the audit routes do; the state loads
 # once a Quest Log is played)
-SKIP="WWHD_TEST_ORIGIN=1 WWHD_TEST_PRESS=3-3.2:8000,5-5.2:8000,7-7.2:8000,9-9.2:8000,11-11.2:8000,13-13.2:8000"
+SKIP="WWHD_TEST_ORIGIN=1 WWHD_TEST_PRESS=2-2.15:8000,2.5-2.65:8000,3-3.15:8000,3.5-3.65:8000,4-4.15:8000,4.5-4.65:8000,5-5.15:8000,5.5-5.65:8000,6-6.15:8000,6.5-6.65:8000,7-7.15:8000,7.5-7.65:8000,8-8.15:8000,8.5-8.65:8000,9-9.15:8000,9.5-9.65:8000,10-10.15:8000,10.5-10.65:8000,11-11.15:8000,11.5-11.65:8000,12-12.15:8000"  # (every 0.5 s: each screen moves on as soon as it takes A)
 mkdir -p "$ROOT/build/try/shots"
 # RECORD=1 (chaos, full; or set it yourself): a screenshot every 3 s, shrunk into build/try/rec-<run>/ (tools/rec.sh)
 if [ -n "${RECORD:-}" ]; then
