@@ -8,7 +8,7 @@ pgrep -x wwhd >/dev/null && { echo "The game is already running; close it first.
 [ -f "$ROOT/save/haunted.wwstate" ] || { echo "save/haunted.wwstate is missing."; exit 1; }
 SPOOKY=(NIGHT_DEAD HAUNTED_SEA STORM FOG GIANT_SEAHATS PHANTOM_GANON HORROR_AUDIO DEEP LEVIATHAN MOLGERA PHANTOM_STALKER BIG_SHIP BEEDLE_SHIP
         DEAD_CALM PHOTO_MODE SECOND_GUNNER BLOOD_MOON CYCLONES MAELSTROM ARMADA BIG_OCTO WRONG_LION DROWNED BOARDING TIME
-        RAFT FAIR_WIND SCARE_PACING SHIP_UPGRADES WARP)
+        RAFT FAIR_WIND SCARE_PACING SHIP_UPGRADES WARP HELMAROC)
 ON=(); EVENT=; NOTE=; EXTRA=
 SHIP="Big ship (keys: move WASD, A = K/Space, B = J, ZL = Left Shift, pause/items = Return):
   Tetra's ship is a boat of its own: once you are out at sea it waits at anchor a little way off your left.
@@ -88,6 +88,10 @@ take the controller any time." ;;
   RECORD=1; export WWHD_MOD_DAMAGE=1 WWHD_MOD_DAMAGE_CHOICE=3 WWHD_TEST_UPGRADES=15
   NOTE="The long seamless run: every spooky mod at its normal How often and Scare pacing, nothing forced, the clock
 running, half damage, the raft in tow, upgrades at level 1. Claude sails it (build/try/pilot.py); take over any time." ;;
+  helmaroc) ON=(HELMAROC FAIR_WIND); EVENT="helmaroc@+20"; RECORD=1
+  NOTE="Set sail (A). About 20 s in the wind dies; 30 s later the Helmaroc King comes down and circles, diving at you every
+8-12 s. Shoot him (arrows, bombs, Boomerang): 60 health. Don't beat him and after ~100 s his next dive snatches the boat
+and drops you on another square of the sea (open water, or ashore on its island)." ;;
   windfall) ON=(SHIP_UPGRADES WARP FAIR_WIND); export WWHD_TEST_WARP="Zunari"; NOTE="Warps to Windfall 5 s in, then on foot beside Zunari's stall: talk to him and his ship fittings open after.
 F9 opens the warp list any time (Warp on)." ;;
   octo-phantom) ON=(BIG_OCTO PHANTOM_GANON HORROR_AUDIO RAFT FAIR_WIND SHIP_UPGRADES SECOND_GUNNER); EVENT="octo@+30;phantom@+240"

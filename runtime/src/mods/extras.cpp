@@ -47,7 +47,7 @@
 
 namespace mods::extras {
 namespace {
-enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kAudio, kDeep, kLeviathan, kMolgera, kStalker, kBeedle, kCalm, kPhoto, kGunner, kBlood, kCyclone, kMaelstrom, kArmada, kOcto, kWrongLion, kDrowned, kBoarding, kRaft, kFairWind, kPacing, kUpgrades, kWarp, kCount };  // the catalogue's order
+enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kAudio, kDeep, kLeviathan, kMolgera, kStalker, kBeedle, kCalm, kPhoto, kGunner, kBlood, kCyclone, kMaelstrom, kArmada, kOcto, kWrongLion, kDrowned, kBoarding, kRaft, kFairWind, kPacing, kUpgrades, kWarp, kHelmaroc, kCount };  // the catalogue's order
 std::atomic<bool> g_on[kCount];
 std::atomic<int> g_choice[kCount];
 std::atomic<int> g_often[kCount];
@@ -101,7 +101,7 @@ struct Single {
     uint32_t actor(Cpu* c) { return id == 0xFFFFFFFF ? 0 : guest_call(c, GC(0x025DE50C), {id}); }
     bool wanted(Cpu* c, double now) { return !actor(c) && now >= next; }
 };
-Single g_ghost, g_bigship, g_phantom, g_leviathan, g_molgera, g_beedle, g_tow_rope, g_cyclone, g_whirl;
+Single g_ghost, g_bigship, g_phantom, g_leviathan, g_molgera, g_beedle, g_tow_rope, g_cyclone, g_whirl, g_helmaroc;
 uint32_t g_cyclone_actor = 0;  // for its hooks
 // the event the armada's boats were made for (its end time; -1 none yet), and the boats made
 double g_armada_for = -1;
@@ -121,7 +121,7 @@ bool g_beedle_aboard = false;  // Link on its deck: its hut's door (an exit only
 float g_phantom_size = 1, g_fx_size = 1;               // g_fx_size: his size while his execute runs (particle hook)
 // the Leviathan and Molgera can be killed, by any weapon (a cannonball or bomb 4, an arrow 2, the sword its power):
 // what is left of their health, and the Leviathan's death as its hit test saw it (loot and the event's end follow)
-constexpr int kLeviathanHealth = 48, kMolgeraHealth = 80;
+constexpr int kLeviathanHealth = 48, kMolgeraHealth = 80, kHelmarocHealth = 60;
 // Ship upgrades, bought from Zunari on Windfall (shop below): each 0 to 3, kept in the Quest Log's own save data, two
 // bits each in one byte (upgrade_byte): sailing (the boat carried on by a share of its speed), the guns' reload (a
 // manned gun's; the crew test aid's), and the shots (their burst, their size, and their harm to the sea's bosses)
@@ -566,6 +566,11 @@ const std::vector<Mod>& catalogue() {
         {"warp", "Warp", "Gameplay",
          "F9 opens a list of places (Zunari's stall on Windfall, Outset, open sea far from land); pick one and Link is "
          "there, on his boat or, at a stall, on foot beside it. Not during a cutscene or with a menu open.", {}},
+        {"helmaroc", "Helmaroc King", "Spooky",
+         "Now and then, far out at sea, the wind dies and the Helmaroc King comes down out of the sky to hunt the boat: he "
+         "circles high and dives at Link. Bring him down with arrows, bombs, the Boomerang or a ship's guns for 300 rupees "
+         "and a blue potion. Hold out too long and he snatches the boat, Link and all, and drops him somewhere on the Great "
+         "Sea: in the open water, or on an island's shore.", {}, true},
     };
     return mods;
 }
@@ -682,10 +687,11 @@ bool scare_on(double now) {
     return false;
 }
 void begin(int k, double now) {
-    g_until[k] = now + (k == kPhantom || k == kLeviathan ? 180 : k == kMolgera ? 150 : k == kStalker ? 120 : k == kSea ? 120 + rand() % 120 : k == kCalm ? 60 + rand() % 90 : k == kCyclone ? 150 : k == kMaelstrom ? 90 : k == kArmada ? 240 : k == kOcto ? 180 : k == kWrongLion ? 6 + rand() % 4 : k == kDrowned ? 120 : 180 + rand() % 300);
+    g_until[k] = now + (k == kPhantom || k == kLeviathan ? 180 : k == kMolgera ? 150 : k == kStalker ? 120 : k == kSea ? 120 + rand() % 120 : k == kCalm ? 60 + rand() % 90 : k == kCyclone ? 150 : k == kMaelstrom ? 90 : k == kArmada ? 240 : k == kOcto ? 180 : k == kWrongLion ? 6 + rand() % 4 : k == kDrowned ? 120 : k == kHelmaroc ? 150 : 180 + rand() % 300);
     if (k == kPhantom || k == kStalker) g_phantom = Single{};  // made afresh by their blocks below
     if (k == kLeviathan) g_leviathan = Single{};
     if (k == kMolgera) g_molgera = Single{};
+    if (k == kHelmaroc) g_helmaroc = Single{};
     if (k == kSea) g_giant_spell = giant_spell();
     // a boss at sea: the Bomb Bag filled up (its count +0x6A to what it holds +0x70), for the deck cannons
     if (const uint32_t sv = save(); k == kPhantom || k == kLeviathan || k == kMolgera) st8(sv + 0x6A, ld8(sv + 0x70));
@@ -697,6 +703,7 @@ void finish(Cpu* c, int k, double now, const char* why) {
     if (scare(k) && !always(k)) g_cool = now + quiet();
     if ((k == kPhantom || k == kStalker) && g_phantom.actor(c)) guest_call(c, GC(0x025D57E4), {g_phantom.id});  // fopAcM_delete_id
     if (k == kLeviathan && g_leviathan.actor(c)) guest_call(c, GC(0x025D57E4), {g_leviathan.id});
+    if (k == kHelmaroc && g_helmaroc.actor(c)) guest_call(c, GC(0x025D57E4), {g_helmaroc.id});
     if (k == kMolgera) remove_molgera(c);
     if (k == kCyclone && g_cyclone.actor(c)) guest_call(c, GC(0x025D57E4), {g_cyclone.id});
     // the whirlpool lets go: told to fade (+0x434 0) from nearly nothing (+0x430), so the boat is free at its next step;
@@ -728,7 +735,7 @@ std::vector<Forced> forced_events() {
     std::vector<Forced> v;
     const char* e = getenv("WWHD_SPOOKY");
     static const std::pair<const char*, int> kNames[] = {{"sea", kSea}, {"giants", kGiants}, {"phantom", kPhantom},
-                                                         {"dead", kNight}, {"storm", kStorm}, {"fog", kFog}, {"deep", kDeep}, {"leviathan", kLeviathan}, {"molgera", kMolgera}, {"stalker", kStalker}, {"calm", kCalm}, {"blood", kBlood}, {"cyclone", kCyclone}, {"maelstrom", kMaelstrom}, {"armada", kArmada}, {"octo", kOcto}, {"lion", kWrongLion}, {"drowned", kDrowned}};
+                                                         {"dead", kNight}, {"storm", kStorm}, {"fog", kFog}, {"deep", kDeep}, {"leviathan", kLeviathan}, {"molgera", kMolgera}, {"stalker", kStalker}, {"calm", kCalm}, {"blood", kBlood}, {"cyclone", kCyclone}, {"maelstrom", kMaelstrom}, {"armada", kArmada}, {"octo", kOcto}, {"lion", kWrongLion}, {"drowned", kDrowned}, {"helmaroc", kHelmaroc}};
     for (std::string rest = e ? e : ""; !rest.empty();) {
         const std::string item = rest.substr(0, rest.find(';'));
         rest = item.size() < rest.size() ? rest.substr(item.size() + 1) : "";
@@ -755,7 +762,7 @@ void omens(Cpu* c, int k, double now, double t) {
 // for the ship, which sails on with him, so only making land escapes them)
 bool warned(int k) {
     return k == kSea || k == kPhantom || k == kLeviathan || k == kMolgera || k == kCalm || k == kCyclone || k == kMaelstrom ||
-           k == kArmada || k == kOcto || k == kDrowned;
+           k == kArmada || k == kOcto || k == kDrowned || k == kHelmaroc;
 }
 void warn(int k, uint32_t link, double now) {
     const double yaw = (int16_t)ld16(link + kAngleY) * M_PI / 32768, ahead = k == kDrowned ? 0 : 7000;
@@ -791,11 +798,11 @@ void direct(Cpu* c, uint32_t sv, uint32_t link, double now, bool night, bool wat
         }
     }
     // the sea events end on land, near an island, after their time, or (Phantom Ganon) once he is gone
-    for (int k : {kSea, kPhantom, kLeviathan, kMolgera, kStalker, kCalm, kCyclone, kMaelstrom, kArmada, kOcto, kWrongLion, kDrowned})  // set to Always or switched off mid-event
+    for (int k : {kSea, kPhantom, kLeviathan, kMolgera, kStalker, kCalm, kCyclone, kMaelstrom, kArmada, kOcto, kWrongLion, kDrowned, kHelmaroc})  // set to Always or switched off mid-event
         if (g_until[k] > 0 && (always(k) || !g_on[k].load())) finish(c, k, now, "its setting changed");
     for (int k : {kWrongLion, kDrowned})  // (so the quiet after a scare follows them too)
         if (g_until[k] > 0 && now >= g_until[k]) finish(c, k, now, "time");
-    for (int k : {kSea, kPhantom, kLeviathan, kMolgera, kCalm, kCyclone, kMaelstrom, kArmada, kOcto})
+    for (int k : {kSea, kPhantom, kLeviathan, kMolgera, kCalm, kCyclone, kMaelstrom, kArmada, kOcto, kHelmaroc})
         if (g_until[k] > 0) {
             if (ashore || isle < 3500) finish(c, k, now, ashore ? "Link is off the water" : "near an island");
             else if (now >= g_until[k]) finish(c, k, now, "time");
@@ -866,6 +873,7 @@ void direct(Cpu* c, uint32_t sv, uint32_t link, double now, bool night, bool wat
     else if (night && rolls(kMolgera, 0.012 * more)) k = kMolgera;
     else if (night && rolls(kSea, 0.12 * more)) k = kSea;
     else if (night && boat && rolls(kOcto, 0.06 * more)) k = kOcto;
+    else if (boat && rolls(kHelmaroc, 0.02 * more)) k = kHelmaroc;
     else if (boat && rolls(kCalm, 0.04 * more)) k = kCalm;
     else if (boat && rolls(kCyclone, 0.04 * more)) k = kCyclone;
     else if (boat && rolls(kMaelstrom, 0.03 * more)) k = kMaelstrom;
@@ -895,6 +903,7 @@ void horror_audio(Cpu* c, uint32_t link, double now, bool event, bool enabled) {
     near(g_phantom.id);
     near(g_leviathan.id);
     near(g_molgera.id);
+    near(g_helmaroc.id);
     const bool duck = enabled && (event || nearest < 2000);
     if (const float level = duck ? 0.2f : 1.f; (duck || ducked) && std::fabs(ldf32(zel + 0x90) - level) > 0.01f) {
         st32(zel + 0x90, u32_bits(level));
@@ -1230,13 +1239,13 @@ void step(Cpu* c) {
     const uint32_t sv = save();
     static double settle = 0;  // no spawning while a stage is still being entered (the spawns would land in the old one)
     if (fresh) {
-        g_night = Spawner{}, g_sea = Spawner{}, g_armada = Spawner{}, g_boarders = Spawner{}, g_gyctrl = 0xFFFFFFFF, g_ghost = g_bigship = g_phantom = g_leviathan = g_molgera = g_beedle = g_tow_rope = g_cyclone = g_whirl = Single{};
+        g_night = Spawner{}, g_sea = Spawner{}, g_armada = Spawner{}, g_boarders = Spawner{}, g_gyctrl = 0xFFFFFFFF, g_ghost = g_bigship = g_phantom = g_leviathan = g_molgera = g_beedle = g_tow_rope = g_cyclone = g_whirl = g_helmaroc = Single{};
         g_cannon[0] = g_cannon[1] = Single{}, g_manned = -1, g_take_pad = false, g_cannon_btn = 0, g_cannon_cam = false;
         g_balls.clear();
         g_gyorg_ids.clear(), g_giant_ids.clear(), g_big_hits.clear();
         settle = game_time() + 2;
         if (g_warn >= 0) wind(c, 0), g_warn = -1;  // a sea event does not outlive its stage
-        g_until[kSea] = g_until[kPhantom] = g_until[kLeviathan] = g_until[kMolgera] = g_until[kStalker] = g_until[kCalm] = g_until[kCyclone] = g_until[kMaelstrom] = g_until[kArmada] = g_until[kOcto] = 0;
+        g_until[kSea] = g_until[kPhantom] = g_until[kLeviathan] = g_until[kMolgera] = g_until[kStalker] = g_until[kCalm] = g_until[kCyclone] = g_until[kMaelstrom] = g_until[kArmada] = g_until[kOcto] = g_until[kHelmaroc] = 0;
         g_armada_for = g_octo_for = -1, g_whirl_fading = false, g_octo_gyorgs = 0, g_octo = Single{}, g_octo_dead = false;
         remove_molgera(c);
     }
@@ -1735,6 +1744,151 @@ void step(Cpu* c) {
             } else if (always(kMolgera) && g_molgera_gave_up && d > 5000) {  // no event to end: it goes, and comes back later
                 remove_molgera(c);
                 g_molgera.next = now + 300;
+            }
+        }
+    }
+    // Helmaroc King: the Ganon's Tower boss (daBdk, proc 0xEE, param 0) at sea. Its create puts it at its tower's
+    // centre in its tower flight (action +0x3DA 0x64, state +0x3DC) and starts the tower's battle music; here it is
+    // flown by hand, after its execute (position, old position, home, heading), so only its wings and its own stomps
+    // are its: it circles 2500 out and 1500 up, and every 8-12 s dives through Link. Its timer +0x3D8 is held under
+    // 100 (at 100 it sets a zone switch and deletes the gulls); any other action (its tower landings, the Skull Hammer's
+    // down and its demos) is turned back into the flight. Hits on its head, crest, body and feet (+0x13F0, +0x151C,
+    // +0x1648, +0x1774, +0x18A0, 0x12C apart) count as Molgera's do, against kHelmarocHealth. After 100 s unbeaten, with
+    // Link riding the boat, its next dive snatches the boat: it climbs away with it under its feet for 4 s, then drops
+    // him (a stage change) on another square of the sea, in the open water beside his boat or, half the time, ashore
+    // on that square's island (a second stage change once its room is there, onto the first land found on the way in)
+    {
+        static int hop_room = -1;      // the island drop's second hop: the room, and until when it is tried
+        static double hop_until = -1;
+        static V3 hop_from, hop_isle;  // where the boat came in, the island's centre
+        if (hop_until > 0 && now >= hop_until) hop_until = -1, trace("extras: no land found for the Helmaroc King's drop");
+        if (const uint32_t korl = ld32(kPlay + 0x5B3C); hop_until > 0 && settled && !fresh && in_mem2(korl) && now >= hop_until - 18) {
+            static const uint32_t buf = mem::host_alloc(0x10);
+            const double len = std::hypot(hop_isle.x - hop_from.x, hop_isle.z - hop_from.z);
+            for (double t = 0; t < len; t += 400) {
+                const double x = hop_from.x + (hop_isle.x - hop_from.x) * t / len, z = hop_from.z + (hop_isle.z - hop_from.z) * t / len;
+                st32(buf, u32_bits((float)x)), st32(buf + 4, u32_bits(3000.f)), st32(buf + 8, u32_bits((float)z));
+                guest_call(c, GC(0x02549F4C), {buf});
+                if (const float ground = (float)c->f[1].ps0; ground > 20 && ground < 2999) {
+                    const float at[3] = {(float)x, ground + 5, (float)z};
+                    const float ship[3] = {(float)ldf32(korl + kPos), (float)ldf32(korl + kPos + 4), (float)ldf32(korl + kPos + 8)};
+                    std::string why;
+                    if (ss::warp(c, "sea", hop_room, at, (int16_t)(atan2(hop_isle.x - x, hop_isle.z - z) * 32768 / M_PI), ship, false, why))
+                        hop_until = -1, trace("extras: the Helmaroc King drops Link ashore at %.0f %.0f %.0f", x, ground, z);
+                    break;
+                }
+            }
+        }
+        if (g_helmaroc.id != 0xFFFFFFFF && !live(kHelmaroc, now) && g_helmaroc.actor(c)) guest_call(c, GC(0x025D57E4), {g_helmaroc.id});
+        if (live(kHelmaroc, now) && sea && settled) {
+            if (g_helmaroc.wanted(c, now)) {
+                Spawner none;
+                g_helmaroc.id = spawn(c, none, Monster{0xEE, -1, 0}, link, 4000, -1, 1500, false, 0, true);
+                g_helmaroc.next = now + 10;
+            }
+            if (const uint32_t a = g_helmaroc.actor(c)) {
+                enum Flight { kCircle, kDive, kPass, kCarry };
+                static uint32_t placed = 0;
+                static Flight flight = kCircle;
+                static double began = 0, phase_at = 0, last = 0, angle = 0, pecked = 0, last_hit = -1;
+                static V3 at, heading;
+                static int pool = kHelmarocHealth;
+                const uint32_t korl = ld32(kPlay + 0x5B3C);
+                const V3 l = pos_of(link);
+                if (placed != g_helmaroc.id) {
+                    placed = g_helmaroc.id, flight = kCircle, began = last = now, phase_at = now + 8 + rand() % 5, pool = kHelmarocHealth;
+                    angle = atan2(ldf32(a + kPos) - l.x, ldf32(a + kPos + 8) - l.z);
+                    at = {l.x + sin(angle) * 4000, 1500, l.z + cos(angle) * 4000};
+                    trace("extras: the Helmaroc King comes down out of the sky");
+                }
+                const double dt = std::min(0.1, now - last);
+                last = now;
+                if (const int16_t act = (int16_t)ld16(a + 0x3DA); act != 0x64) st16(a + 0x3DA, 0x64), st16(a + 0x3DC, 0);
+                if ((int16_t)ld16(a + 0x3D8) >= 90) st16(a + 0x3D8, 0);
+                const double to_link = std::hypot(l.x - at.x, l.z - at.z);
+                auto toward = [&](V3 goal, double speed) {
+                    const V3 d{goal.x - at.x, goal.y - at.y, goal.z - at.z};
+                    const double n = std::max(1.0, std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z));
+                    heading = {d.x / n, d.y / n, d.z / n};
+                    const double step = std::min(n, speed * dt);
+                    at = {at.x + heading.x * step, at.y + heading.y * step, at.z + heading.z * step};
+                };
+                const bool snatcher = now - began > 100 && riding && in_mem2(korl);
+                switch (flight) {
+                case kCircle: {  // round him, 2500 out and 1500 up, closing on the circle from wherever it is
+                    angle += 1900.0 / 2500 * dt;
+                    toward({l.x + sin(angle) * 2500, 1500, l.z + cos(angle) * 2500}, 3200);
+                    if (now >= phase_at) flight = kDive, trace("extras: the Helmaroc King dives%s", snatcher ? " to snatch the boat" : "");
+                    break;
+                }
+                case kDive:  // straight at him, low over his head
+                    toward({l.x, l.y + 250, l.z}, 2900);
+                    if (to_link < 450) {
+                        if (snatcher) {
+                            flight = kCarry, phase_at = now + 4;
+                            trace("extras: the Helmaroc King snatches the boat");
+                        } else {
+                            if (now - pecked > 3) pecked = now, st16(sv + 2, (uint16_t)std::max(0, ld16(sv + 2) - 4));  // a heart
+                            flight = kPass, phase_at = now + 1.5;
+                        }
+                    }
+                    break;
+                case kPass:  // on past him, climbing again
+                    toward({at.x + heading.x * 3000, 1500, at.z + heading.z * 3000}, 2900);
+                    if (now >= phase_at) flight = kCircle, phase_at = now + 8 + rand() % 5, angle = atan2(at.x - l.x, at.z - l.z);
+                    break;
+                case kCarry: {  // away and up with the boat (and Link in it) under its feet
+                    toward({at.x + heading.x * 2000, 3000, at.z + heading.z * 2000}, 1200);
+                    if (in_mem2(korl)) {
+                        for (uint32_t o : {kPos, 0x300u})
+                            st32(korl + o, u32_bits((float)at.x)), st32(korl + o + 4, u32_bits((float)(at.y - 450))), st32(korl + o + 8, u32_bits((float)at.z));
+                        st32(korl + 0x340, 0), st32(korl + 0x370, 0);
+                    }
+                    if (now < phase_at) break;
+                    // dropped on another square (not this one, not Forsaken Fortress's): its open water 30000 from the
+                    // island, or 14000 out, by boat, for the hop ashore
+                    const int here = sea_room((float)l.x, (float)l.z);
+                    int room;
+                    do room = 1 + rand() % 49; while (room == here || room == 1);
+                    const V3 isle{((room - 1) % 7 - 3) * 1e5, 0, ((room - 1) / 7 - 3) * 1e5};
+                    const bool ashore = rand() % 2;
+                    const double b = rand() / (double)RAND_MAX * 2 * M_PI, out = ashore ? 14000 : 30000;
+                    const float to[3] = {(float)(isle.x + sin(b) * out), 0, (float)(isle.z + cos(b) * out)};
+                    const float ship[3] = {to[0] + (ashore ? 0 : 700.f), 0, to[2]};
+                    std::string why;
+                    if (ss::warp(c, "sea", room, to, (int16_t)(atan2(-sin(b), -cos(b)) * 32768 / M_PI), ship, ashore, why)) {
+                        trace("extras: the Helmaroc King drops Link %s in room %d", ashore ? "by an island" : "in the open sea", room);
+                        if (ashore) hop_room = room, hop_until = now + 25, hop_from = {to[0], 0, to[2]}, hop_isle = isle;
+                        finish(c, kHelmaroc, now, "Link was snatched");
+                    } else if (now - phase_at > 3) {  // not free to go (an event): it lets go of the boat
+                        trace("extras: the Helmaroc King lets go (%s)", why.c_str());
+                        finish(c, kHelmaroc, now, "it let go");
+                    }
+                    break;
+                }
+                }
+                for (uint32_t o : {kPos, 0x300u, 0x2ECu})
+                    st32(a + o, u32_bits((float)at.x)), st32(a + o + 4, u32_bits((float)at.y)), st32(a + o + 8, u32_bits((float)at.z));
+                const uint16_t yaw = (uint16_t)(int16_t)(atan2(heading.x, heading.z) * 32768 / M_PI);
+                st16(a + kAngleY, yaw), st16(a + 0x322, yaw);
+                st8(a + kRoom, ld8(link + kRoom));
+                // its health (as Molgera's, above)
+                int damage = 0;
+                for (uint32_t sph : {0x13F0u, 0x151Cu, 0x1648u, 0x1774u, 0x18A0u}) {
+                    if (!guest_call(c, GC(0x025162A4), {a + sph})) continue;
+                    if (const uint32_t h = guest_call(c, GC(0x02516300), {a + sph}); in_mem2(h)) damage = std::max(damage, std::max<int>(1, ld8(h + 0x14)));
+                    guest_call(c, GC(0x0251621C), {a + sph});
+                }
+                if (damage && now - last_hit >= 0.3) {
+                    last_hit = now, pool -= damage;
+                    trace("extras: the Helmaroc King is hit for %d (%d of %d left)", damage, pool, kHelmarocHealth);
+                    if (pool <= 0) {
+                        loot(c, 300);
+                        effect(c, 0x8265, pos_of(a), 2.5f);
+                        guest_call(c, GC(0x025E1988), {0x591B});
+                        finish(c, kHelmaroc, now, "the Helmaroc King is brought down");
+                    }
+                }
             }
         }
     }
