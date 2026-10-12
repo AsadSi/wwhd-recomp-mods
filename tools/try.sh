@@ -25,7 +25,7 @@ BEEDLE="Beedle's ship (keys: move WASD, A = K/Space, B = J, ZL = Left Shift, pau
   Stop and press B (Get Out) to leap back onto its deck. Walk it and fight from it. A at its bow (the end by the
   Lion, away from the bow gun) leaps you forward into the boat. Fall in: swim to its side and press A to climb aboard.
   Guns: one at the bow, one on the hut's roof. Stand by the bow gun, or in front of the hut for the roof gun, and press A
-  (or your Bomb Bag's button) to man it: stick aims, ZL locks on the nearest monster, A fires (a bomb a shot), B leaves."
+  (or your Bomb Bag's button) to man it: stick aims, ZL locks on the nearest monster (again: the next one), A fires (a bomb a shot), B leaves."
 case "${1:-}" in
   long) ON=(NIGHT_DEAD HAUNTED_SEA STORM FOG GIANT_SEAHATS PHANTOM_GANON HORROR_AUDIO DEEP LEVIATHAN MOLGERA PHANTOM_STALKER RAFT FAIR_WIND
            DEAD_CALM BLOOD_MOON CYCLONES MAELSTROM ARMADA SIREN WRONG_LION DROWNED BOARDING); export WWHD_TEST_CREW=1

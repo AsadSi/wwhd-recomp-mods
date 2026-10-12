@@ -470,7 +470,7 @@ const std::vector<Mod>& catalogue() {
          "down and up, ZL (Shift) held for speed. Link stands still and the world goes on; F7 again gives the camera back.", {}},
         {"second-gunner", "Second gunner", "Experimental",
          "With a second controller connected, player 2 is a gunner on Beedle's ship or the Big ship: the gun Link is not "
-         "at is theirs. Left stick turns and raises it, ZL locks it on the nearest monster (and off again), A or ZR "
+         "at is theirs. Left stick turns and raises it, ZL locks it on the nearest monster (again: the next nearest, and off after the last), A or ZR "
          "fires, from the same Bomb Bag. Player 1 sails and plays on as ever on the first controller.", {}},
         {"blood-moon", "Blood moon", "Spooky",
          "On some nights, most of all at full moon, the moon rises red: the whole world and the sky turn blood red until "
@@ -862,7 +862,7 @@ void horror_audio(Cpu* c, uint32_t link, double now, bool event, bool enabled) {
 // level), its speak prompt (attention flags +0x39C) cleared, put on the deck where the ground check finds it each step.
 // The boat's controls: standing within 220 of one (its cylinder keeps him 110 off), the Bomb Bag's button (or A) mans
 // it; the stick then turns and raises it (Link faces where it points, the camera behind it along its aim), ZL locks it on the nearest
-// of the monsters out (and off again), the Bomb Bag's button (or A) fires and B leaves; the game gets none of these
+// of the monsters out (again: the next by distance, off after the last), the Bomb Bag's button (or A) fires and B leaves; the game gets none of these
 // (filter_pad). A shot is the boat's own cannonball (daShip_c::procCannon): a Bomb (proc 0x126) made in state 4
 // (0x80020004) by fopAcM_fastCreate (025D5928), no gravity for its first 8 steps (020CB89C), then speedF +0x370
 // v cos e, speed.y +0x340 v sin e (v kShotSpeed), gravity +0x374 -2.5; it bursts on what it hits. One bomb from the bag each
@@ -925,6 +925,18 @@ void cannon_hits(Cpu* c, double now) {
         }
         return true;
     });
+}
+// the monster out within 9000 of `from` that comes after `after` by distance (the nearest when `after` is none or gone;
+// none after the last): ZL steps the lock through them all, so one nearer under the water does not hold it
+uint32_t next_monster(Cpu* c, V3 from, uint32_t after) {
+    std::vector<std::pair<double, uint32_t>> by;
+    for (uint32_t id : monsters_out())
+        if (const uint32_t a = guest_call(c, GC(0x025DE50C), {id}))
+            if (const double d = std::hypot(ldf32(a + kPos) - from.x, ldf32(a + kPos + 8) - from.z); d < 9000) by.push_back({d, id});
+    std::sort(by.begin(), by.end());
+    for (size_t i = 0; i < by.size(); i++)
+        if (by[i].second == after) return i + 1 < by.size() ? by[i + 1].second : 0xFFFFFFFF;
+    return by.empty() ? 0xFFFFFFFF : by[0].second;
 }
 // the nearest monster out within 9000 of `from`, by process id (0xFFFFFFFF none)
 uint32_t nearest_monster(Cpu* c, V3 from) {
@@ -1059,7 +1071,7 @@ void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, const Gun* 
     }
     // aiming: the stick (3/4 of a turn a second at full tilt, 40 degrees down to 60 up), or the locked monster
     const V3 from{ldf32(link + kPos), ldf32(link + kPos + 4) + 100, ldf32(link + kPos + 8)};
-    if (pressed & input::kZL) locked = nearest_monster(c, from);
+    if (pressed & input::kZL) locked = next_monster(c, from, locked);
     static Lay lay;
     if (const uint32_t a = locked == 0xFFFFFFFF ? 0 : guest_call(c, GC(0x025DE50C), {locked})) {
         lay_on(a, locked, from, lay, yaw, up);
@@ -1102,7 +1114,7 @@ void crew(Cpu* c, uint32_t link, uint32_t ship, const Gun* guns, double now) {
     }
 }
 // The second gunner: with a second controller (kept apart from the first, input::set_second_player), player 2 has the
-// gun Link is not at: its left stick turns and raises it, ZL locks it on the nearest monster (and off), A or ZR fires,
+// gun Link is not at: its left stick turns and raises it, ZL locks it on the nearest monster (again, the next; off after the last), A or ZR fires,
 // from the same Bomb Bag. Player 1 sails or plays on as ever; the camera stays his
 void second_gunner(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, const Gun* guns, double now) {
     static int16_t yaw = 0, up = 0x0C00;
@@ -1120,7 +1132,7 @@ void second_gunner(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, const Gun*
     const uint32_t pressed = p2.buttons & ~prev;
     prev = p2.buttons;
     const V3 from{ldf32(a + kPos), ldf32(a + kPos + 4) + 100, ldf32(a + kPos + 8)};
-    if (pressed & input::kZL) locked = locked == 0xFFFFFFFF ? nearest_monster(c, from) : 0xFFFFFFFF;
+    if (pressed & input::kZL) locked = next_monster(c, from, locked);
     if (const uint32_t m = locked == 0xFFFFFFFF ? 0 : guest_call(c, GC(0x025DE50C), {locked})) {
         lay_on(m, locked, from, lay, yaw, up);
     } else {
@@ -1413,9 +1425,11 @@ void step(Cpu* c) {
             }
             if (const uint32_t ctrl = ld32(gy + 0x3D4); in_mem2(ctrl) && ld32(gy + 0x3C8) < 8) st8(ctrl + 0x42E + ld32(gy + 0x3C8), 1);
             if (double& at = ram_at[id]; mode == 1 && now >= at) {
-                if (at > 0) guest_call(c, GC(0x02169B68), {gy});
+                if (at > 0) guest_call(c, GC(0x02169B68), {gy}), trace("extras: a Gyorg breaches to ram the boat");
                 at = now + 5 + rand() % 5;
             }
+            if (static double told = 0; now - told > 3)  // (what each is doing, now and then: the trace)
+                told = now, trace("extras: Gyorg %#x mode %u, %.0f off", id, mode, std::hypot(ldf32(gy + kPos) - ldf32(link + kPos), ldf32(gy + kPos + 8) - ldf32(link + kPos + 8)));
             if (const double far = std::hypot(ldf32(gy + kPos) - ldf32(link + kPos), ldf32(gy + kPos + 8) - ldf32(link + kPos + 8)); far > 3000)
                 for (uint32_t o : {kPos, kPos + 8})
                     st32(gy + o, u32_bits((float)(ldf32(link + o) + (ldf32(gy + o) - ldf32(link + o)) * 3000 / far)));
