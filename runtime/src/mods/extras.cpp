@@ -621,9 +621,9 @@ const std::vector<Mod>& catalogue() {
          "and in. Wrench the stick from side to side to break free; held for 45 seconds, it takes two hearts before it "
          "lets go.", {}, true},
         {"armada", "Pirate armada", "Spooky",
-         "Now and then, far out at sea, four cannon boats come over the horizon in formation, close in, heave to and open "
-         "fire, following if Link sails off. Sink them all (with the boat's cannon, bombs or a ship's deck cannons) for "
-         "200 rupees and a blue potion.", {}, true},
+         "Now and then, far out at sea, distant gunfire, then four cannon boats come over the horizon one after another, "
+         "each from its own side: they close in, heave to and open fire, following if Link sails off. Sink all four (with "
+         "the boat's cannon, bombs or a ship's deck cannons) for 200 rupees and a blue potion.", {}, true},
         {"big-octo", "Big Octo", "Spooky",
          "Now and then, far out at sea at night, the sea goes still and dark, then a whirlpool opens by the boat and Big "
          "Octo rises in it, as in its own fight, and Gyorgs with it, ramming the boat. Shoot out its eyes (the Boomerang, "
@@ -2072,42 +2072,48 @@ void step(Cpu* c) {
         }
     }
     // Pirate armada: four cannon boats (daOship, a plain one: angle.x 0xFFFF, model type 0xFF; with 0x00FF it is the
-    // gold-ship kind) made 9000 ahead of Link and sailed in formation by us (without a path nothing moves one, and its
-    // execute never writes its x, z or heading: pos, current.angle.y +0x322 for its colliders, shape_angle.y for its
-    // model and guns): a V led from a point that closes on him at 24 a step (speedF 8 for its wake, which also holds
-    // its fire) until 4000 off, where they heave to (speedF 0) and fire by their own modes; further than 6000 again and
-    // they come on after him. All sunk: the loot, and the event ends
+    // gold-ship kind) come one after another, 30 s apart, each from its own bearing 9000 off (ahead, then to either
+    // side), and each is sailed by us on its own (without a path nothing moves one, and its execute never writes its
+    // x, z or heading: pos, current.angle.y +0x322 for its colliders, shape_angle.y for its model and guns): it closes
+    // on Link at 24 a step (speedF 8 for its wake, which also holds its fire) until 4000 off, where it heaves to
+    // (speedF 0) and fires by its own modes; further than 6000 again and it comes on after him. A boat sunk leaves the
+    // others where they are. All four come and sunk: the loot, and the event ends
     if (live(kArmada, now) && sea && settled) {
-        static double made_at = 0, wait = 0, course = 0;
-        static V3 lead;
-        if (now - made_at > 3) g_armada.prune(c);  // (once they have had time to come to life)
-        if (g_armada_for != g_until[kArmada] && now >= wait) {
-            g_armada_for = g_until[kArmada], made_at = now;
-            const double yaw = (int16_t)ld16(link + kAngleY) * M_PI / 32768;
-            lead = {ldf32(link + kPos) + sin(yaw) * 9000, 0, ldf32(link + kPos + 8) + cos(yaw) * 9000};
-            for (int i = 0; i < 4; i++)  // where spawn() puts them hardly matters: they are put in formation below
-                spawn(c, g_armada, kOship, link, 9000, -1, 0, false, 0, true);
-            g_armada_made = g_armada.ids.size();
-            trace("extras: a pirate armada comes over the horizon");
-        } else if (g_armada_for == g_until[kArmada] && now - made_at > 3 && g_armada.ids.empty()) {
-            if (g_armada_made) loot(c, 200);
-            g_armada_for = -1, g_armada_made = 0, wait = now + 300;  // (Always: the next one a while later)
-            finish(c, kArmada, now, "the armada is sunk");
+        struct Raider { uint32_t id; V3 at; double made; bool hove = false; };
+        static std::vector<Raider> raiders;
+        static double next = 0, wait = 0;
+        constexpr int kBoats = 4;
+        constexpr double kBearing[kBoats] = {0, 0.7, -0.7, 0.3};
+        if (g_armada_for != g_until[kArmada] && now >= wait)
+            g_armada_for = g_until[kArmada], g_armada_made = 0, raiders.clear(), next = now, trace("extras: a pirate armada comes over the horizon");
+        if (g_armada_for == g_until[kArmada]) {
+            if ((int)g_armada_made < kBoats && now >= next) {
+                const double b = (int16_t)ld16(link + kAngleY) * M_PI / 32768 + kBearing[g_armada_made];
+                const V3 at{ldf32(link + kPos) + sin(b) * 9000, 0, ldf32(link + kPos + 8) + cos(b) * 9000};
+                if (const uint32_t id = spawn(c, g_armada, kOship, link, 9000, -1, 0, false, 0, true); id != 0xFFFFFFFF)
+                    raiders.push_back({id, at, now}), g_armada_made++, trace("extras: cannon boat %d of the armada comes", (int)g_armada_made);
+                next = now + 30;
+            }
+            g_armada.prune(c);
+            std::erase_if(raiders, [&](const Raider& r) {  // (sunk: gone, once it has had time to come to life)
+                return now - r.made > 3 && std::find(g_armada.ids.begin(), g_armada.ids.end(), r.id) == g_armada.ids.end();
+            });
+            if ((int)g_armada_made >= kBoats && raiders.empty()) {
+                loot(c, 200);
+                g_armada_for = -1, g_armada_made = 0, wait = now + 300;  // (Always: the next one a while later)
+                finish(c, kArmada, now, "the armada is sunk");
+            }
         }
-        static bool hove_to = false;
-        const double d = std::hypot(ldf32(link + kPos) - lead.x, ldf32(link + kPos + 8) - lead.z);
-        hove_to = d < (hove_to ? 6000 : 4000);
-        course = atan2(ldf32(link + kPos) - lead.x, ldf32(link + kPos + 8) - lead.z);
-        if (!hove_to) lead.x += sin(course) * 24, lead.z += cos(course) * 24;
-        static constexpr V3 kSlot[] = {{0, 0, 0}, {-800, 0, -700}, {800, 0, -700}, {0, 0, -1400}};
-        const int16_t yaw = (int16_t)(course * 32768 / M_PI);
-        size_t slot = 0;
-        for (uint32_t id : g_armada.ids)
-            if (const uint32_t a = guest_call(c, GC(0x025DE50C), {id})) {
-                const V3 w = to_world(lead, yaw, kSlot[slot++ % 4]);
-                st32(a + kPos, u32_bits((float)w.x)), st32(a + kPos + 8, u32_bits((float)w.z));
-                st16(a + 0x322, (uint16_t)yaw), st16(a + kAngleY, (uint16_t)yaw);
-                st32(a + 0x370, u32_bits(hove_to ? 0.f : 8.f));
+        for (Raider& r : raiders)
+            if (const uint32_t a = guest_call(c, GC(0x025DE50C), {r.id})) {
+                const double d = std::hypot(ldf32(link + kPos) - r.at.x, ldf32(link + kPos + 8) - r.at.z);
+                r.hove = d < (r.hove ? 6000 : 4000);
+                const double course = atan2(ldf32(link + kPos) - r.at.x, ldf32(link + kPos + 8) - r.at.z);
+                if (!r.hove) r.at.x += sin(course) * 24, r.at.z += cos(course) * 24;
+                const uint16_t yaw = (uint16_t)(int16_t)(course * 32768 / M_PI);
+                st32(a + kPos, u32_bits((float)r.at.x)), st32(a + kPos + 8, u32_bits((float)r.at.z));
+                st16(a + 0x322, yaw), st16(a + kAngleY, yaw);
+                st32(a + 0x370, u32_bits(r.hove ? 0.f : 8.f));
                 st8(a + kRoom, ld8(link + kRoom));
             }
     }
