@@ -2195,7 +2195,7 @@ void step(Cpu* c) {
             }
             // The helm, the ship's wheel (Kaji, at z -858) on the stern castle: A by it takes it (the stick, A and B are
             // then the helm's, filter_pad). The stick up raises the sail, down lowers it (0.7 s from furled to full);
-            // full sail makes the boat's 40 a step, and it turns quicker the faster it goes (left and right). The hull is
+            // the wind sets how fast she sails (below), and she turns quicker the faster she goes. The hull is
             // moved here, Link standing on it carried by the game's moving-BG rule, the King of Red Lions brought along
             // beside it (eased to his place on its flank, its heading), and the camera is the boat's own
             // (dCamera_c::SetTypeForce 02514EE4 by name, every step, on dCam_getBody 024F8044; WWHD_HELM_CAM=<camera
@@ -2218,9 +2218,21 @@ void step(Cpu* c) {
             if (helm || speed > 0.2) {
                 if (helm) sail = std::clamp(sail + g_pad_ly.load() / 20.0, 0.0, 1.0);
                 if (static double t = 0; now - t >= 1) t = now, trace("extras: Big ship sails: helm %d, sail %.2f, speed %.1f, heading %d", helm, sail, speed, (int16_t)ld16(hull + kAngleY));
-                speed += (sail * 40 - speed) * 0.06;
+                // a heavy ship: it gathers way slowly and carries it, its top speed the boat's 40 (with the sailing
+                // upgrade's share) running before the wind, a third of that into it, slack in a calm
+                // (dKyw_get_wind_vec 0257DAA8, its power dKyw_get_wind_pow 02578348); the wheel turns the rudder over,
+                // and the rudder turns her, slowly from a standstill
                 int16_t a = (int16_t)ld16(hull + kAngleY);
-                if (helm) a = (int16_t)(a - g_pad_lx.load() * 0x100 * std::min(1.0, 0.5 + speed / 40));
+                const uint32_t wv = guest_call(c, GC(0x0257DAA8));
+                guest_call(c, GC(0x02578348));
+                const double power = c->f[1].ps0;
+                const double along = in_mem2(wv) ? sin(a * M_PI / 32768) * ldf32(wv) + cos(a * M_PI / 32768) * ldf32(wv + 8) : 0;
+                const double top = 40 * (1 + kSailBonus[upgrade(kUpSail)]) * (0.35 + 0.65 * (along + 1) / 2) * std::clamp(power / 0.5, 0.1, 1.0);
+                speed += (sail * top - speed) * (sail * top > speed ? 0.02 : 0.012);
+                static double rudder = 0;
+                rudder += ((helm ? g_pad_lx.load() : 0) - rudder) * 0.08;
+                a = (int16_t)(a - rudder * 0xC0 * std::min(1.0, 0.25 + speed / 30));
+                if (static double t = 0; now - t >= 1) t = now, trace("extras: Big ship wind %.2f power %.2f top %.1f rudder %.2f", along, power, top, rudder);
                 if (helm) {
                     static const uint32_t cam_name = [] {
                         const uint32_t b = mem::host_alloc(0x20);
