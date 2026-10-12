@@ -36,14 +36,16 @@
 #include "mods.h"
 #include "../gx2/gx2.h"
 #include "../input.h"
+#include "../input_map.h"
 #include "../true60.h"
 #include "../overlay/overlay.h"
 #include "../platform/keycodes.h"
+#include "imgui.h"
 #include "runtime.h"
 
 namespace mods::extras {
 namespace {
-enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kAudio, kDeep, kLeviathan, kMolgera, kStalker, kBeedle, kCalm, kPhoto, kGunner, kBlood, kCyclone, kMaelstrom, kArmada, kSiren, kWrongLion, kDrowned, kBoarding, kWrecks, kCrew, kRaft, kFairWind, kPacing, kCount };  // the catalogue's order
+enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kAudio, kDeep, kLeviathan, kMolgera, kStalker, kBeedle, kCalm, kPhoto, kGunner, kBlood, kCyclone, kMaelstrom, kArmada, kSiren, kWrongLion, kDrowned, kBoarding, kWrecks, kRaft, kFairWind, kPacing, kUpgrades, kCount };  // the catalogue's order
 std::atomic<bool> g_on[kCount];
 std::atomic<int> g_choice[kCount];
 std::atomic<int> g_often[kCount];
@@ -63,7 +65,7 @@ struct Monster { int16_t proc; int8_t subtype; uint32_t param; int16_t angle_x =
 constexpr Monster kRedead{0xE0, 0, 0xFFFFFFFF}, kStalfos{0xBE, -1, 0xFFFFFFFF}, kPoe{0xD4, -1, 0xFFFFFFFF},
                   kGyorg{0xE4, -1, 0xFFFFFFFF}, kSeahat{0xD1, -1, 0xFFFFFF01}, kKargaroc{0xB5, -1, 0},
                   // a cannon boat (daOship): sub mode 0 (no path), no Triforce / salvage / switch conditions, switch B none
-                  kOship{0xB3, -1, 0x00FFFF00, 0x00FF},
+                  kOship{0xB3, -1, 0x00FFFF00, (int16_t)0xFFFF},  // (angle.x 0xFFFF the plain kind; 0x00FF the gold ship)
                   // the Ghost Ship (daGhostship): no path; its moon phase (low byte) is tonight's when spawned (see below)
                   kAyush{0xB2, -1, 0x00FF0000},
                   // Tetra's pirate ship (daObjPirateship): type 5 (no pirates, no scene, but its wheel Kaji and catapult
@@ -118,6 +120,65 @@ float g_phantom_size = 1, g_fx_size = 1;               // g_fx_size: his size wh
 // the Leviathan and Molgera can be killed, by any weapon (a cannonball or bomb 4, an arrow 2, the sword its power):
 // what is left of their health, and the Leviathan's death as its hit test saw it (loot and the event's end follow)
 constexpr int kLeviathanHealth = 48, kMolgeraHealth = 80;
+// Ship upgrades, bought from Zunari on Windfall (shop below): each 0 to 3, kept in the Quest Log's own save data, two
+// bits each in one byte (upgrade_byte): sailing (the boat carried on by a share of its speed), the guns' reload (a
+// manned gun's; the crew test aid's), and the shots (their burst, their size, and their harm to the sea's bosses)
+enum Upgrade { kUpSail, kUpReload, kUpShot };
+constexpr double kSailBonus[] = {0, 0.15, 0.30, 0.50}, kReload[] = {1, 0.75, 0.5, 0.3}, kCrewReload[] = {4, 3, 2, 1};
+constexpr float kShot[] = {1, 1.5f, 2, 3};
+constexpr int kUpPrice[] = {500, 900, 1500};
+// the byte: the last of the save data's reserve block (dSv_save_c::mReserve, sv +0x724, 0x50 bytes), which is written
+// to the card and read back with the Quest Log (dSv_info_c::memory_to_card 025BA9FC, card_to_memory 025BA7B0),
+// zeroed for a new file, and read by nothing in the game
+uint32_t save();
+uint32_t upgrade_byte() { return save() + 0x773; }
+int upgrade(int k) { return g_on[kUpgrades].load() ? (ld8(upgrade_byte()) >> (2 * k)) & 3 : 0; }
+// The shop: our panel over the game (overlay::show_panel), drawn on the render thread from what the game step last
+// told it (levels, rupees, a line of news); a buy it asks for (g_buy) is made by the game step
+const char* const kUpName[] = {"Faster sailing", "Faster guns", "Bigger shots"};
+std::atomic<int> g_shop_level[3], g_shop_rupees{0}, g_shop_sel{0}, g_buy{-1};
+std::atomic<const char*> g_shop_news{""};
+bool shop_draw(const float* pad) {
+    using namespace input_map;
+    static float prev[kPadCount];
+    static bool keys_prev[256], fresh = true;
+    bool keys[256];
+    input::held_keys(keys);
+    if (fresh) std::copy(pad, pad + kPadCount, prev), std::copy(keys, keys + 256, keys_prev), fresh = false;  // (the A that opened it)
+    auto hit = [&](int p, std::initializer_list<int> ks) {
+        bool k = false;
+        for (int c : ks) k |= keys[c] && !keys_prev[c];
+        return (pad[p] > 0.5f && prev[p] <= 0.5f) || k;
+    };
+    int sel = g_shop_sel;
+    if (hit(kPadDDown, {kVK_ANSI_S, kVK_DownArrow}) || hit(kPadLSDown, {})) sel = (sel + 1) % 3;
+    if (hit(kPadDUp, {kVK_ANSI_W, kVK_UpArrow}) || hit(kPadLSUp, {})) sel = (sel + 2) % 3;
+    g_shop_sel = sel;
+    if (hit(kPadA, {kVK_ANSI_K, kVK_Space, kVK_Return})) g_buy = sel;
+    const bool close = hit(kPadB, {kVK_ANSI_J, kVK_Escape});
+    std::copy(pad, pad + kPadCount, prev), std::copy(keys, keys + 256, keys_prev);
+    if (close) fresh = true;
+    const ImGuiIO& io = ImGui::GetIO();
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowBgAlpha(0.85f);
+    if (ImGui::Begin("##ship_shop", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav)) {
+        ImGui::TextUnformatted("Zunari's ship fittings");
+        ImGui::Separator();
+        for (int i = 0; i < 3; i++) {
+            const int lv = g_shop_level[i];
+            char line[96];
+            if (lv >= 3) snprintf(line, sizeof line, "%-15s  level 3 (best)", kUpName[i]);
+            else snprintf(line, sizeof line, "%-15s  level %d -> %d   %d rupees", kUpName[i], lv, lv + 1, kUpPrice[lv]);
+            ImGui::Selectable(line, i == sel);
+        }
+        ImGui::Separator();
+        ImGui::Text("You have %d rupees", g_shop_rupees.load());
+        if (const char* news = g_shop_news; *news) ImGui::TextUnformatted(news);
+        ImGui::TextDisabled("A buy    B leave");
+    }
+    ImGui::End();
+    return close;
+}
 int g_leviathan_pool = kLeviathanHealth, g_molgera_pool = kMolgeraHealth;
 bool g_leviathan_slain = false;
 double g_step_time = 0;  // game time at the last step, for the hooks
@@ -254,7 +315,7 @@ constexpr Craft kBeedleCraft{kBeedleShip, 1.5f, -60, 130 * 1.5 - 60, 575 * 1.5, 
                              {{{-120, 0, 880}, 0}, {{0, 0, -60}, (int16_t)0x8000, true, {0, 0, 560}}}};
 // the raft 2x (a deck about 1700 x 1400, 2000 x 1800 with its rim), lowered 40
 constexpr Craft kRaftCraft{kRaftShip, 2.f, -40, 60 * 2 - 40, 1020, 900, 1450, 880, 650, 300, 600, 300, 650,
-                           {{{-500, 0, 450}, 0}, {{500, 0, -450}, (int16_t)0x8000}}};
+                           {{{760, 0, 550}, (int16_t)0x4000}, {{-760, 0, -550}, (int16_t)0xC000}}};  // right and left, at its edges, off the mast's line
 const Craft* g_craft = &kBeedleCraft;  // the one in tow (or last in tow)
 bool on_beedle(uint32_t ship, uint32_t link) {  // anywhere on board, the hut's roof too
     const V3 l = to_local(ship, link);
@@ -440,9 +501,6 @@ const std::vector<Mod>& catalogue() {
         {"wrecks", "Shipwreck graveyard", "Spooky",
          "Now and then, far out at sea, Link sails into fog over a graveyard of ships: hulks lying tilted and half sunk all "
          "about, and at night Poes drifting among them.", {}, true},
-        {"crew", "Ship's crew", "Gameplay",
-         "Beedle's ship and the Big ship have gunners of their own: a gun nobody is at fires by itself at the nearest "
-         "monster within 6000, every few seconds, with its own powder (not Link's bombs).", {}},
         {"raft", "Raft in tow", "Experimental",
          "Out at sea the King of Red Lions tows a big flagged raft behind him on a rope. Stop and get out to leap onto "
          "it, walk it and fight from its two guns; A at its front leaps Link back to the boat. Fall in, and A by its side "
@@ -453,6 +511,10 @@ const std::vector<Mod>& catalogue() {
          "How long the sea stays quiet after a scare before the next can begin. Off, scares are rare: about 12 quiet "
          "minutes after each. None comes in the first 4 minutes after a file loads, and only one at a time.",
          {"Now and then (6 min)", "Often (3 min)", "Very rare (20 min)"}},
+        {"ship-upgrades", "Ship upgrades", "Gameplay",
+         "Zunari on Windfall (who sells the sail) also fits out your ship: after you talk to him, buy faster sailing, faster "
+         "guns and bigger shots, three levels each (500, 900 and 1500 rupees). They are kept in your Quest Log when you save.",
+         {}},
     };
     return mods;
 }
@@ -838,12 +900,25 @@ void cannon_hits(Cpu* c, double now) {
     static uint32_t counted = 0xFFFFFFFF;
     static int hits = 0;
     if (counted != g_phantom.id) counted = g_phantom.id, hits = 0;
-    const uint32_t pg = g_phantom.actor(c);
+    const uint32_t pg = g_phantom.actor(c), lev = g_leviathan.actor(c), mol = g_molgera.actor(c);
+    // Bigger shots: a ball's colliders (its burst's too) bigger through the SetR hooks, as the Gyorgs' are; a burst by
+    // Phantom Ganon counts as that many shots, and by the Leviathan or Molgera does its share more harm than a bomb's 4
+    const float shot = kShot[upgrade(kUpShot)];
     std::erase_if(g_balls, [&](auto& b) {
-        if (const uint32_t a = guest_call(c, GC(0x025DE50C), {b.first})) return b.second = pos_of(a), false;
+        if (const uint32_t a = guest_call(c, GC(0x025DE50C), {b.first})) {
+            if (shot > 1) g_big_hits.push_back({a, a + 0x1000, shot});
+            return b.second = pos_of(a), false;
+        }
+        for (auto [m, pool] : {std::pair{lev, &g_leviathan_pool}, std::pair{mol, &g_molgera_pool}})
+            if (m && shot > 1 && std::hypot(b.second.x - ldf32(m + kPos), b.second.z - ldf32(m + kPos + 8)) < 1500 * shot) {
+                *pool -= (int)std::lround(4 * (shot - 1));
+                if (m == lev && g_leviathan_pool <= 0) g_leviathan_slain = true;
+                trace("extras: a bigger shot bursts by %s (%d left)", m == lev ? "the Leviathan" : "Molgera", *pool);
+            }
         if (pg && std::hypot(b.second.x - ldf32(pg + 0x37C), b.second.y - ldf32(pg + 0x37C + 4), b.second.z - ldf32(pg + 0x37C + 8)) <
-                      std::min(2500.f, 300 * g_phantom_size)) {
-            trace("extras: a deck cannon shot bursts on Phantom Ganon (%d of %d)", ++hits, kPhantomShots);
+                      std::min(2500.f, 300 * g_phantom_size * shot)) {
+            hits += (int)std::lround(shot);
+            trace("extras: a deck cannon shot bursts on Phantom Ganon (%d of %d)", hits, kPhantomShots);
             if (hits >= kPhantomShots && (g_until[kPhantom] > 0 || g_until[kStalker] > 0))
                 finish(c, g_until[kPhantom] > 0 ? kPhantom : kStalker, now, "driven off by the deck cannons");
         }
@@ -898,6 +973,7 @@ void fire(Cpu* c, uint32_t sv, uint32_t link, V3 from, int16_t yaw, int16_t up, 
     guest_call(c, GC(0x025DEAB4), {layer});
     if (!in_mem2(ball)) return;
     g_balls.push_back({ld32(ball + 4), pos_of(ball)});
+    for (int i = 0; i < 3; i++) st32(ball + 0x330 + 4 * i, u32_bits(kShot[upgrade(kUpShot)]));  // (Bigger shots: bigger balls)
     guest_call(c, GC(0x020CB89C), {ball, 8});
     st32(ball + 0x370, u32_bits((float)(kShotSpeed * cos(e)))), st32(ball + 0x340, u32_bits((float)(kShotSpeed * sin(e)))), st32(ball + 0x374, u32_bits(-2.5f));
     guest_call(c, GC(0x025E1988), {0x2852});
@@ -998,7 +1074,7 @@ void deck_cannons(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, const Gun* 
     }
     g_cannon_x = (float)from.x, g_cannon_y = (float)from.y, g_cannon_z = (float)from.z;
     g_cannon_yaw = yaw, g_cannon_up = up, g_cannon_cam = true;
-    if (!(pressed & (g_cannon_btn.load() | input::kA)) || now < fired + 1) return;
+    if (!(pressed & (g_cannon_btn.load() | input::kA)) || now < fired + kReload[upgrade(kUpReload)]) return;
     fired = now;
     fire(c, sv, link, from, yaw, up, locked);
 }
@@ -1019,7 +1095,7 @@ void crew(Cpu* c, uint32_t link, uint32_t ship, const Gun* guns, double now) {
         // only out over its own side of the ship (within 90 degrees of the way it rests): never across its deck
         if (std::abs((int16_t)(g_crew_yaw[i] - (int16_t)(ld16(ship + kAngleY) + guns[i].face))) > 0x4000) continue;
         g_crew_aims[i] = true;
-        if (now >= fired[i] + 4) fired[i] = now, fire(c, 0, link, from, g_crew_yaw[i], g_crew_up[i], id);
+        if (now >= fired[i] + kCrewReload[upgrade(kUpReload)]) fired[i] = now, fire(c, 0, link, from, g_crew_yaw[i], g_crew_up[i], id);
     }
 }
 // The second gunner: with a second controller (kept apart from the first, input::set_second_player), player 2 has the
@@ -1050,7 +1126,7 @@ void second_gunner(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, const Gun*
         up = (int16_t)std::clamp(up + (int)(p2.ly * 0x100), -kDown, 0x2AAA);
     }
     g_p2_gun = gun, g_p2_yaw = yaw, g_p2_up = up;
-    if (!(pressed & (input::kA | input::kZR)) || now < fired + 1) return;
+    if (!(pressed & (input::kA | input::kZR)) || now < fired + kReload[upgrade(kUpReload)]) return;
     fired = now;
     fire(c, sv, link, from, yaw, up, locked);
     trace("extras: the second gunner fires the %s gun", gun == 0 ? "bow" : "other");
@@ -1187,6 +1263,14 @@ void step(Cpu* c) {
         }
         fair = want;
     }
+    // Faster sailing (the upgrade): under sail (SHIP_PADDLE, 0x88) the boat is carried on along its heading by a share of
+    // the speed it made this step (speedF +0x370), after its execute; its own collision puts it back if that is into land
+    if (const uint32_t korl = ld32(kPlay + 0x5B3C); proc == 0x88 && stage == "sea" && in_mem2(korl) && !ld8(kPlay + 0x5292))
+        if (const double k = kSailBonus[upgrade(kUpSail)] * ldf32(korl + 0x370); k > 0) {
+            const double t = (int16_t)ld16(korl + kAngleY) * M_PI / 32768;
+            st32(korl + kPos, u32_bits((float)(ldf32(korl + kPos) + sin(t) * k)));
+            st32(korl + kPos + 8, u32_bits((float)(ldf32(korl + kPos + 8) + cos(t) * k)));
+        }
     // stormy weather: the rain count (dKyw_rain_set, 0257E7C0; 250 is a downpour) set every step while it rains, eased
     // up and down over 30 s, and 0 once at the end
     static float rain = 0;
@@ -1542,7 +1626,7 @@ void step(Cpu* c) {
             static double last_hit = -1;  // one hit per 0.3 s: a bomb's burst, a sword's swing last a few steps
             if (died >= 0) damage = 0;
             if (damage && now - last_hit >= 0.3) trace("extras: Molgera is hit for %d (%d of %d left)", damage, g_molgera_pool - damage, kMolgeraHealth);
-            if (damage && now - last_hit >= 0.3 && (last_hit = now, g_molgera_pool -= damage) <= 0) {
+            if ((damage && now - last_hit >= 0.3 && (last_hit = now, g_molgera_pool -= damage) <= 0) || (died < 0 && g_molgera_pool <= 0)) {
                 trace("extras: Molgera is slain");
                 loot(c, 300);
                 died = blast = now, g_molgera_dying = true;
@@ -1640,7 +1724,7 @@ void step(Cpu* c) {
             const double yaw = (int16_t)ld16(link + kAngleY) * M_PI / 32768;
             lead = {ldf32(link + kPos) + sin(yaw) * 9000, 0, ldf32(link + kPos + 8) + cos(yaw) * 9000};
             for (int i = 0; i < 4; i++)  // where spawn() puts them hardly matters: they are put in formation below
-                spawn(c, g_armada, Monster{kOship.proc, -1, kOship.param, (int16_t)0xFFFF}, link, 9000, -1, 0, false, 0, true);
+                spawn(c, g_armada, kOship, link, 9000, -1, 0, false, 0, true);
             g_armada_made = g_armada.ids.size();
             trace("extras: a pirate armada comes over the horizon");
         } else if (g_armada_for == g_until[kArmada] && now - made_at > 3 && g_armada.ids.empty()) {
@@ -2057,13 +2141,55 @@ void step(Cpu* c) {
         input::set_second_player(on<kGunner>());
         if (on<kGunner>() && settled) second_gunner(c, sv, link, ship, guns, now);
         else g_p2_gun = -1;
-        if (ship && on<kCrew>() && settled) crew(c, link, ship, guns, now);
+        // the ship's crew: a test aid now (WWHD_TEST_CREW=1), so a test clears the sea quickly; in play a second player
+        // mans the other gun (Second gunner)
+        static const bool crewed = getenv("WWHD_TEST_CREW") != nullptr;
+        if (ship && crewed && settled) crew(c, link, ship, guns, now);
         else g_crew_aims[0] = g_crew_aims[1] = false;
     }
     if (static double t = 0; hull && now - t >= 1) {  // where Link is about the Big ship, once a second (the trace)
         t = now;
         const V3 l = to_local(hull, link);
         trace("extras: Big ship: Link proc %#x deck %d swim %d at %.0f %.0f %.0f, cannon %d, bombs %u", proc, deck, swimming, l.x, l.y, l.z, g_manned, ld8(sv + 0x6A));
+    }
+    // The ship upgrade shop: as a talk with Zunari (daNpc_Rsh1_c, proc 0x160, Windfall; his mode +0xAC4 is 2 while he
+    // talks) ends, the panel opens, unless he is about to hand something over (+0xAC3 4: the sail's demo) or Link has no
+    // sail yet. A buy: the rupees (sv +4) taken, the level set in the save data, the rupee sound
+    {
+        static const uint32_t out = mem::host_alloc(4);
+        static uint8_t talk_was = 0;
+        st32(out, 0);
+        guest_call(c, GC(0x025D5578), {0x160, out});
+        const uint32_t z = ld32(out);
+        const uint8_t talk = in_mem2(z) ? ld8(z + 0xAC4) : 0;
+        bool has_sail = false;
+        for (int i = 0; i < 21; i++) has_sail |= ld8(sv + 0x3C + i) == 0x78;
+        // (test aid: WWHD_TEST_SHOP=1 opens it 5 s after a file loads)
+        static const bool test_shop = getenv("WWHD_TEST_SHOP") != nullptr;
+        static double test_at = -1;
+        if (fresh && test_shop) test_at = now + 5;
+        const bool test_now = test_at > 0 && now >= test_at;
+        if (test_now) test_at = -1;
+        if (on<kUpgrades>() && ((talk_was == 2 && talk != 2 && ld8(z + 0xAC3) != 4 && has_sail) || test_now)) {
+            g_shop_news = "", g_shop_sel = 0, g_buy = -1;
+            overlay::show_panel(shop_draw);
+            trace("extras: Zunari's ship fittings open (%u rupees, upgrades %#x)", ld16(sv + 4), ld8(upgrade_byte()));
+        }
+        talk_was = talk;
+        for (int i = 0; i < 3; i++) g_shop_level[i] = (ld8(upgrade_byte()) >> (2 * i)) & 3;
+        g_shop_rupees = ld16(sv + 4);
+        if (const int b = g_buy.exchange(-1); b >= 0) {
+            const int lv = g_shop_level[b];
+            if (lv >= 3) g_shop_news = "That one is as good as it gets.";
+            else if (ld16(sv + 4) < kUpPrice[lv]) g_shop_news = "Not enough rupees.";
+            else {
+                st16(sv + 4, (uint16_t)(ld16(sv + 4) - kUpPrice[lv]));
+                st8(upgrade_byte(), (uint8_t)((ld8(upgrade_byte()) & ~(3 << (2 * b))) | ((lv + 1) << (2 * b))));
+                guest_call(c, GC(0x025E1988), {0x836});
+                g_shop_news = "Fitted! Save your game to keep it.";
+                trace("extras: bought %s level %d for %d rupees", kUpName[b], lv + 1, kUpPrice[lv]);
+            }
+        }
     }
     // test aid: WWHD_EXTRAS_SPAWN=proc:param:dist:dy[:anglex] (hex) spawns that once, 3 s after Link appears
     static const char* test_spawn = getenv("WWHD_EXTRAS_SPAWN");

@@ -1745,7 +1745,9 @@ void set_open(bool open) {
     LOG("[overlay] %s", open ? "opened" : "closed");
 }
 bool blocks_input() { return captures() || g_wait_release.load(std::memory_order_relaxed); }
-bool captures() { return is_open() || text_entry::active(); }
+std::atomic<bool (*)(const float*)> g_panel{nullptr};
+void show_panel(bool (*draw)(const float*)) { g_panel = draw; }
+bool captures() { return is_open() || text_entry::active() || g_panel.load(); }
 bool alive() { return now_s() - g_last_frame.load(std::memory_order_relaxed) < 1.0; }
 bool perf_shown() { return g_perf.load(std::memory_order_relaxed); }
 void set_perf_shown(bool on) {
@@ -1855,11 +1857,12 @@ ImDrawData* frame(float pw, float ph, void (*renderer_init)()) {
     read_controller();
     // the game's text prompt shows unless the menu is open over it (the menu has the input then)
     const bool open = is_open(), perf = perf_shown(), text = !open && text_entry::active();
+    const auto panel = open || text ? nullptr : g_panel.load();
     // save state notices (saved, refused during a cutscene, loaded into another Quest Log) show over the
     // game for a few seconds while the menu is closed (the window title is not visible everywhere)
     const std::string toast = open ? std::string() : ss::last_message();
     U.linearized = false;
-    if (!open && !perf && !text && toast.empty()) {
+    if (!open && !perf && !text && !panel && toast.empty()) {
         if (U.init) {  // forget events and pressed keys while nothing is shown
             std::lock_guard<std::mutex> lk(g_mu);
             g_events.clear();
@@ -1908,6 +1911,15 @@ ImDrawData* frame(float pw, float ph, void (*renderer_init)()) {
         if (g_no_host) test_pad(pad);  // WWHD_TEST_PAD drives the on-screen keyboard in test runs
         if (text_entry::draw(pad)) {
             // answered: the game sees no buttons until the one that confirmed is released
+            for (auto& k : g_held_keys) k = false;
+            g_wait_release = true;
+        }
+    }
+    if (panel) {
+        float pad[input_map::kPadCount];
+        std::copy(std::begin(U.values), std::end(U.values), pad);
+        if (panel(pad)) {  // closed: the game sees no buttons until the one that closed it is released
+            g_panel = nullptr;
             for (auto& k : g_held_keys) k = false;
             g_wait_release = true;
         }

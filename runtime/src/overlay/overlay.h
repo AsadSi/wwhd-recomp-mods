@@ -28,6 +28,9 @@ bool blocks_input();
 // the overlay has keyboard, mouse and controller: the menu is open or the game's text prompt shows
 // (text_entry.h); hosts route the pointer by this
 bool captures();
+// a small panel of a mod's (the ship upgrade shop): `draw` runs on the render thread inside the overlay's frame with
+// the controller's values (input_map pad codes) and returns true to close; while shown it has the input. Any thread
+void show_panel(bool (*draw)(const float* pad));
 // the renderer draws the overlay (frame() ran within the last second): the text prompt can show
 bool alive();
 bool perf_shown();          // performance overlay (FPS, frame time) on
