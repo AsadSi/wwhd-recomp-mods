@@ -579,7 +579,7 @@ PadState read() {
         if (render::frame_count() >= p.from && render::frame_count() <= p.to) { s.rx = p.x; s.ry = p.y; }
     apply_scenario(s);
     // debug: WWHD_LIVE_PAD=<file> holds what the file says, "<buttons hex> <lx> <ly> [<rx> <ry>]", read again
-    // whenever it changes (a test driver plays the game live by rewriting it)
+    // whenever it changes (a test driver plays the game live by rewriting it); buttons bit 31 takes a screenshot
     static const char* live = getenv("WWHD_LIVE_PAD");
     if (live) {
         static PadState lp;
@@ -590,6 +590,7 @@ PadState read() {
                 seen = st.st_mtimespec, lp = PadState{};
                 if (fscanf(f, "%x %f %f %f %f", &lp.buttons, &lp.lx, &lp.ly, &lp.rx, &lp.ry) < 1) lp = PadState{};
                 fclose(f);
+                if (lp.buttons & 0x80000000u) screenshot::request(), lp.buttons &= ~0x80000000u;  // bit 31: a screenshot
             }
         s.buttons |= lp.buttons;
         if (lp.lx || lp.ly) { s.lx = lp.lx; s.ly = lp.ly; }
