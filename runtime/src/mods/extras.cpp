@@ -138,7 +138,8 @@ uint32_t save();
 void pay(int rupees) { st32(kPlay + 0x5B48, ld32(kPlay + 0x5B48) - rupees); }
 int wallet() { return ld16(save() + 4) + (int32_t)ld32(kPlay + 0x5B48); }  // what Link has once the meter is done
 uint32_t upgrade_byte() { return save() + 0x773; }
-int upgrade(int k) { return g_on[kUpgrades].load() ? (ld8(upgrade_byte()) >> (2 * k)) & 3 : 0; }
+int level(int k) { return (ld8(upgrade_byte()) >> (2 * k)) & 3; }  // as bought (0..3), the toggle on or off
+int upgrade(int k) { return g_on[kUpgrades].load() ? level(k) : 0; }  // as it works
 // Tetra's ship, bought at the Bomb Shop on Windfall (bit 0 of the reserve block's byte before, kept the same way)
 constexpr int kShipPrice = 2500;
 bool owns_ship() { return ld8(save() + 0x772) & 1; }
@@ -2560,6 +2561,7 @@ void step(Cpu* c) {
             cabin = {next, sea_room((float)ldf32(hull + kPos), (float)ldf32(hull + kPos + 8)), pos_of(korl), pos_of(hull), (int16_t)ld16(hull + kAngleY)};
             trace("extras: Link goes below into %s (room %d)", next.c_str(), cabin.room);
         }
+        if (fresh && stage != cabin.stage) cabin.stage.clear();  // (a file or state loaded, gone elsewhere)
         if (!cabin.stage.empty() && stage == cabin.stage) {
             if (fresh) arrived = now + 2, souped = false;
             if ((arrived > 0 && now >= arrived) || (keys[kVK_F10] && !f10_was && !overlay::captures()))
@@ -2581,12 +2583,13 @@ void step(Cpu* c) {
                 trace("extras: Link sleeps in the cabin (%s)", act == 0 ? "morning" : "nightfall");
                 break;
             case 2: {  // every empty bottle (0x50, items 14..17) Elixir Soup (0x55)
-                int filled = 0;
+                int filled = 0;  // (through the game's own bottle fill, setEmptyBottleItemIn 025B5448, which minds the item buttons)
                 for (int i = 14; i < 18 && !souped; i++)
-                    if (ld8(sv + 0x3C + i) == 0x50) st8(sv + 0x3C + i, 0x55), filled++;
+                    if (ld8(sv + 0x3C + i) == 0x50) guest_call(c, GC(0x025B5448), {sv + 0x3C, 0x55}), filled++;
                 if (filled) guest_call(c, GC(0x025E1988), {0x827});
                 g_shop_news = souped ? "The pot is empty until your next visit." : filled ? "Your bottles are full of hot soup." : "You have no empty bottle.";
                 souped = souped || filled;
+                trace("extras: cabin soup: %d bottles filled", filled);
                 break;
             }
             case 3:  // bombs from the bag into the store
@@ -2603,8 +2606,6 @@ void step(Cpu* c) {
                 break;
             default: break;
             }
-        } else if (!cabin.stage.empty() && stage != "sea" && !fresh) {
-            cabin.stage.clear();  // gone on somewhere else
         }
         f10_was = keys[kVK_F10];
     }
@@ -2815,10 +2816,6 @@ struct Fitting {
     uint8_t item;                // the model shown
 };
 Fitting g_fit_sail{0, 0, 0xF6D, 0xF6E, 0x78}, g_fit_guns{0, 0, 0xF69, 0xF6A, 0x0E};
-constexpr uint16_t kTextF6D[] = {0x000e, 0x0000, 0x0003, 0x0002, 0x0001, 0x0052, 0x0065, 0x0064, 0x0020, 0x0050, 0x006f, 0x0074, 0x0069, 0x006f, 0x006e, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0033, 0x0030, 0x0020, 0x0052, 0x0075, 0x0070, 0x0065, 0x0065, 0x0073, 0x000a, 0x000e, 0x0000, 0x0003, 0x0002, 0xffff, 0x000e, 0x0000, 0x0003, 0x0002, 0x0000, 0x0057, 0x0068, 0x0065, 0x006e, 0x0020, 0x0069, 0x0074, 0x0020, 0x0063, 0x006f, 0x006d, 0x0065, 0x0073, 0x0020, 0x0074, 0x006f, 0x0020, 0x0072, 0x0065, 0x0070, 0x006c, 0x0065, 0x006e, 0x0069, 0x0073, 0x0068, 0x0069, 0x006e, 0x0067, 0x0020, 0x0068, 0x0065, 0x0061, 0x0072, 0x0074, 0x0073, 0x002c, 0x000a, 0x006e, 0x006f, 0x0074, 0x0068, 0x0069, 0x006e, 0x0067, 0x0020, 0x0069, 0x0073, 0x0020, 0x006d, 0x006f, 0x0072, 0x0065, 0x0020, 0x0070, 0x006f, 0x0074, 0x0065, 0x006e, 0x0074, 0x0021, 0x0020, 0x0044, 0x006f, 0x0020, 0x0079, 0x006f, 0x0075, 0x0020, 0x0068, 0x0061, 0x0076, 0x0065, 0x0020, 0x0061, 0x006e, 0x000a, 0x0065, 0x006d, 0x0070, 0x0074, 0x0079, 0x0020, 0x0062, 0x006f, 0x0074, 0x0074, 0x006c, 0x0065, 0x003f, 0x0020, 0x0049, 0x0066, 0x0020, 0x0079, 0x006f, 0x0075, 0x0020, 0x0064, 0x006f, 0x002c, 0x0020, 0x0074, 0x0068, 0x0065, 0x006e, 0x0020, 0x0042, 0x0055, 0x0059, 0x0021, 0x000e, 0x0000, 0x0003, 0x0002, 0xffff, 0x0000};
-constexpr uint16_t kTextF6E[] = {0x0052, 0x0065, 0x0064, 0x0020, 0x0050, 0x006f, 0x0074, 0x0069, 0x006f, 0x006e, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0033, 0x0030, 0x0020, 0x0052, 0x0075, 0x0070, 0x0065, 0x0065, 0x0073, 0x000a, 0x0057, 0x0069, 0x006c, 0x006c, 0x0020, 0x0079, 0x006f, 0x0075, 0x0020, 0x0062, 0x0075, 0x0079, 0x0020, 0x0069, 0x0074, 0x003f, 0x000a, 0x000e, 0x0001, 0x0007, 0x0000, 0x0049, 0x0027, 0x006c, 0x006c, 0x0020, 0x0062, 0x0075, 0x0079, 0x0020, 0x0069, 0x0074, 0x000a, 0x004e, 0x006f, 0x0020, 0x0074, 0x0068, 0x0061, 0x006e, 0x006b, 0x0073, 0x0000};
-constexpr uint16_t kTextF69[] = {0x000e, 0x0000, 0x0003, 0x0002, 0x0001, 0x0031, 0x0030, 0x0020, 0x0041, 0x0072, 0x0072, 0x006f, 0x0077, 0x0073, 0x0020, 0x0020, 0x0020, 0x0033, 0x0030, 0x0020, 0x0052, 0x0075, 0x0070, 0x0065, 0x0065, 0x0073, 0x000a, 0x000e, 0x0000, 0x0003, 0x0002, 0xffff, 0x000e, 0x0000, 0x0003, 0x0002, 0x0000, 0x004f, 0x0075, 0x0072, 0x0073, 0x0020, 0x0066, 0x006c, 0x0079, 0x0020, 0x0066, 0x0061, 0x0072, 0x0074, 0x0068, 0x0065, 0x0072, 0x0020, 0x0074, 0x0068, 0x0061, 0x006e, 0x0020, 0x0074, 0x0068, 0x0065, 0x0020, 0x006f, 0x006e, 0x0065, 0x0073, 0x0020, 0x0073, 0x006f, 0x006c, 0x0064, 0x0020, 0x0061, 0x0074, 0x000a, 0x006f, 0x0074, 0x0068, 0x0065, 0x0072, 0x0020, 0x0073, 0x0068, 0x006f, 0x0070, 0x0073, 0x002c, 0x0020, 0x0049, 0x0020, 0x0073, 0x0077, 0x0065, 0x0061, 0x0072, 0x002e, 0x0020, 0x0049, 0x0066, 0x0020, 0x0079, 0x006f, 0x0075, 0x0020, 0x0068, 0x0061, 0x0076, 0x0065, 0x0020, 0x0061, 0x0020, 0x0062, 0x006f, 0x0077, 0x002c, 0x000a, 0x0079, 0x006f, 0x0075, 0x0027, 0x0064, 0x0020, 0x0062, 0x0065, 0x0074, 0x0074, 0x0065, 0x0072, 0x0020, 0x0062, 0x0075, 0x0079, 0x0020, 0x0074, 0x0068, 0x0065, 0x006d, 0x0021, 0x0020, 0x0042, 0x0075, 0x0079, 0x0021, 0x0020, 0x0042, 0x0075, 0x0079, 0x0020, 0x0062, 0x0075, 0x0079, 0x0020, 0x0062, 0x0075, 0x0079, 0x0021, 0x000e, 0x0000, 0x0003, 0x0002, 0xffff, 0x0000};
-constexpr uint16_t kTextF6A[] = {0x0031, 0x0030, 0x0020, 0x0041, 0x0072, 0x0072, 0x006f, 0x0077, 0x0073, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0033, 0x0030, 0x0020, 0x0052, 0x0075, 0x0070, 0x0065, 0x0065, 0x0073, 0x000a, 0x0059, 0x006f, 0x0075, 0x0020, 0x0067, 0x006f, 0x0069, 0x006e, 0x0067, 0x0020, 0x0074, 0x006f, 0x0020, 0x0062, 0x0075, 0x0079, 0x0020, 0x0074, 0x0068, 0x0065, 0x006d, 0x003f, 0x000a, 0x000e, 0x0001, 0x0007, 0x0000, 0x0049, 0x0027, 0x006c, 0x006c, 0x0020, 0x0062, 0x0075, 0x0079, 0x0020, 0x0074, 0x0068, 0x0065, 0x006d, 0x000a, 0x004e, 0x006f, 0x0020, 0x0074, 0x0068, 0x0061, 0x006e, 0x006b, 0x0073, 0x0000};
 void make_fitting(Fitting& f) {
     if (f.rec) return;
     f.data = mem::host_alloc(16), f.rec = mem::host_alloc(20);
@@ -2827,10 +2824,12 @@ void make_fitting(Fitting& f) {
 }
 // the fitting a cannon slot sells: the lower of the guns and the shots (the guns first); -1 both at the top
 int cannon_fitting() {
-    const int g = upgrade(kUpReload), s = upgrade(kUpShot);
+    const int g = level(kUpReload), s = level(kUpShot);
     return g >= 3 && s >= 3 ? -1 : g <= s ? kUpReload : kUpShot;
 }
-int fitting_of(uint32_t rec) { return rec && rec == g_fit_sail.rec ? kUpSail : rec && rec == g_fit_guns.rec ? cannon_fitting() : -1; }
+int fitting_of(uint32_t rec) {  // (-1 at the top: bought up while on the shelf)
+    return rec && rec == g_fit_sail.rec ? (level(kUpSail) < 3 ? kUpSail : -1) : rec && rec == g_fit_guns.rec ? cannon_fitting() : -1;
+}
 // the Bs1 on the shelf of which a record of ours lies (the selected slot's, or any)
 bool shelved(uint32_t bs1, uint32_t rec) {
     for (uint32_t i = 0; i < 3; i++) if (ld32(bs1 + 0x988 + 4 * i) == rec) return true;
@@ -2850,8 +2849,8 @@ std::vector<uint16_t> fitting_text(int up, bool buy) {
     static const char* const kWords[] = {"Wind in the sails, fine customer! Faster\nsailing for your ship, fitted as you sail.",
                                           "Your ship's guns reload faster with this!\nPirates fear a quick gunner. Buy it!",
                                           "Bigger shots for your ship's guns: they\nhit harder and burst wider. Buy it!"};
-    const int lv = upgrade(up);
-    const std::string head = std::string(kName[up]) + " " + std::to_string(lv + 1) + "  " + std::to_string(kUpPrice[std::min(lv, 2)]) + " Rupees";
+    const int lv = level(up);
+    const std::string head = std::string(kName[up]) + " " + std::to_string(lv + 1) + "  " + std::to_string(kUpPrice[lv]) + " Rupees";
     std::vector<uint16_t> v;
     auto add = [&](std::initializer_list<uint16_t> u) { v.insert(v.end(), u); };
     auto text = [&](const std::string& t) { const auto u = utf16(t); v.insert(v.end(), u.begin(), u.end()); };
@@ -2866,29 +2865,39 @@ std::vector<uint16_t> fitting_text(int up, bool buy) {
     v.push_back(0);
     return v;
 }
-// a fetched message: ours written in (or the original back) and the buy message's price set
-void shop_message(Cpu* c, uint32_t out) {
-    struct Text { uint16_t id; const uint16_t* orig; size_t len; Fitting* f; bool buy; uint32_t at; };
-    static Text texts[] = {{0xF6D, kTextF6D, std::size(kTextF6D), &g_fit_sail, false, 0}, {0xF6E, kTextF6E, std::size(kTextF6E), &g_fit_sail, true, 0},
-                           {0xF69, kTextF69, std::size(kTextF69), &g_fit_guns, false, 0}, {0xF6A, kTextF6A, std::size(kTextF6A), &g_fit_guns, true, 0}};
+// a message's length in UTF-16 words, its end included: its tags (0x000E, group, type, a size in bytes, the size's
+// params) may hold zeros
+size_t text_len(uint32_t at) {
+    size_t n = 0;
+    for (uint16_t u; (u = ld16(at + 2 * n)) != 0 && n < 4096;) n += u == 0x000E ? 4 + ld16(at + 2 * n + 6) / 2 : 1;
+    return n + 1;
+}
+// a fetched message (`id` its number): ours written in, in no more room than the game's own (whose words are kept, in
+// whatever language, to write back while the slot is not ours), and the buy message's price set
+void shop_message(Cpu* c, uint32_t out, int id) {
+    struct Text { uint16_t id; Fitting* f; bool buy; uint32_t at; std::vector<uint16_t> orig; };
+    static Text texts[] = {{0xF6D, &g_fit_sail, false, 0, {}}, {0xF6E, &g_fit_sail, true, 0, {}},
+                           {0xF69, &g_fit_guns, false, 0, {}}, {0xF6A, &g_fit_guns, true, 0, {}}};
+    Text* t = nullptr;
+    for (Text& x : texts) if (x.id == id) t = &x;
     const uint32_t file = ld32(out + 8);
-    if (!in_mem2(file) || !in_mem2(ld32(file))) return;
+    if (!t || !in_mem2(file) || !in_mem2(ld32(file))) return;
     const uint32_t at = guest_call(c, GC(0x0273A2E8), {ld32(file), ld32(out + 0x118)});
     if (!in_mem2(at)) return;
-    for (Text& t : texts) {
-        if (!t.at) {  // found by its original words, the first time it is fetched
-            bool same = true;
-            for (size_t i = 0; i < t.len && same; i++) same = ld16(at + 2 * i) == t.orig[i];
-            if (same) t.at = at;
-        }
-        if (t.at != at) continue;
-        const uint32_t bs1 = beedle_shop(c);
-        const int up = bs1 && t.f->rec && shelved(bs1, t.f->rec) ? fitting_of(t.f->rec) : -1;
-        const std::vector<uint16_t> ours = up >= 0 ? fitting_text(up, t.buy) : std::vector<uint16_t>(t.orig, t.orig + t.len);
-        for (size_t i = 0; i < t.len; i++) st16(at + 2 * i, i < ours.size() ? ours[i] : 0);
-        if (const uint32_t rec = ld32(out + 0x22C); t.buy && in_mem2(rec))
-            st16(rec + 4, (uint16_t)(up >= 0 ? kUpPrice[std::min(upgrade(up), 2)] : 30));
-        return;
+    if (t->at != at) {  // first seen (or moved): the game's own words, kept
+        t->at = at, t->orig.resize(text_len(at));
+        for (size_t i = 0; i < t->orig.size(); i++) t->orig[i] = ld16(at + 2 * i);
+    }
+    const uint32_t bs1 = beedle_shop(c);
+    const int up = bs1 && t->f->rec && shelved(bs1, t->f->rec) ? fitting_of(t->f->rec) : -1;
+    std::vector<uint16_t> words = up >= 0 ? fitting_text(up, t->buy) : t->orig;
+    if (words.size() > t->orig.size()) words = t->orig;  // (no room in this language: its own words, our price)
+    for (size_t i = 0; i < t->orig.size(); i++) st16(at + 2 * i, i < words.size() ? words[i] : 0);
+    if (const uint32_t rec = ld32(out + 0x22C); t->buy && in_mem2(rec)) {
+        static uint16_t own[2] = {0, 0};  // the buy messages' own prices (F6E, F6A)
+        uint16_t& price = own[t->id == 0xF6A];
+        if (!price) price = ld16(rec + 4);
+        st16(rec + 4, (uint16_t)(up >= 0 ? kUpPrice[level(up)] : price));
     }
 }
 }  // namespace mods::extras
@@ -2900,17 +2909,31 @@ extern "C" void hook_02212BA0(Cpu* c) {
     using namespace mods::extras;
     const uint8_t shop = ld8(c->r[3] + 0x99F);
     uint32_t slot = 0, was = 0;
-    if (on<kUpgrades>() && shop == 5 && upgrade(kUpSail) < 3) make_fitting(g_fit_sail), slot = GD(0x101BD56C) + 8, was = ld32(slot), st32(slot, g_fit_sail.rec);
+    if (on<kUpgrades>() && shop == 5 && level(kUpSail) < 3) make_fitting(g_fit_sail), slot = GD(0x101BD56C) + 8, was = ld32(slot), st32(slot, g_fit_sail.rec);
     if (on<kUpgrades>() && shop == 3 && cannon_fitting() >= 0) make_fitting(g_fit_guns), slot = GD(0x101BD548) + 0x14, was = ld32(slot), st32(slot, g_fit_guns.rec);
     f_02212BA0_orig(c);
     if (slot) st32(slot, was), mods::trace("extras: Beedle's shop %u shelves a ship fitting", shop);
 }
 extern "C" void f_025F50E8_orig(Cpu* c);
 extern "C" void hook_025F50E8(Cpu* c) {
-    const uint32_t out = c->r[4];
+    const uint32_t out = c->r[4], label = c->r[6];
     f_025F50E8_orig(c);
+    if (!mods::extras::g_fit_sail.rec && !mods::extras::g_fit_guns.rec) return;
+    // its label: "%05d" of the message's number, the chars or an object whose first word points at them
+    auto number = [](uint32_t a) {
+        int n = 0;
+        for (int i = 0; i < 5; i++) {
+            const uint8_t ch = mods::extras::in_mem2(a) ? ld8(a + i) : 0;
+            if (ch < '0' || ch > '9') return -1;
+            n = n * 10 + (ch - '0');
+        }
+        return n;
+    };
+    int id = number(label);
+    if (id < 0 && mods::extras::in_mem2(label)) id = number(ld32(label));
+    if (static bool told = false; !told && id >= 0) told = true, mods::trace("extras: getMessage label read (%05d)", id);
     const uint32_t r3 = c->r[3];
-    if (mods::extras::g_fit_sail.rec || mods::extras::g_fit_guns.rec) mods::extras::shop_message(c, out);
+    if (id >= 0) mods::extras::shop_message(c, out, id);
     c->r[3] = r3;
 }
 // Bs1's buy (r27 Beedle): the selected slot's record, ours or not
@@ -2933,12 +2956,12 @@ extern "C" void site_02215484(Cpu* c) {  // execItemGet(r3): ours fitted instead
     const uint32_t rec = idx >= 0 && idx < 3 ? ld32(bs1 + 0x988 + 4 * idx) : 0;
     if (!rec || (rec != g_fit_sail.rec && rec != g_fit_guns.rec)) return;
     const int up = fitting_of(rec);
-    if (up < 0 || upgrade(up) >= 3) {
+    if (up < 0 || level(up) >= 3) {
         st32(kPlay + 0x5B48, ld32(kPlay + 0x5B48) + (uint32_t)(int16_t)ld16(kPlay + 0x5BA4));
         mods::trace("extras: a fitting bought at the top level: paid back");
     } else {
-        st8(upgrade_byte(), (uint8_t)((ld8(upgrade_byte()) & ~(3 << (2 * up))) | ((upgrade(up) + 1) << (2 * up))));
-        mods::trace("extras: bought %s level %d at Beedle's", kUpName[up], upgrade(up));
+        st8(upgrade_byte(), (uint8_t)((ld8(upgrade_byte()) & ~(3 << (2 * up))) | ((level(up) + 1) << (2 * up))));
+        mods::trace("extras: bought %s level %d at Beedle's", kUpName[up], level(up));
     }
     c->r[3] = 0x13;
 }

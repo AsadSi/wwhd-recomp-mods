@@ -596,7 +596,7 @@ PadState read() {
                 fclose(f);
                 if (lp.buttons & 0x80000000u) screenshot::request(), lp.buttons &= ~0x80000000u;  // bit 31: a screenshot
             }
-        s.buttons |= lp.buttons;
+        s.buttons |= lp.buttons & ~0x38000000u;  // (bits 27-29 are the mods' test aids, and the VPAD's stick bits)
         if (lp.lx || lp.ly) { s.lx = lp.lx; s.ly = lp.ly; }
         if (lp.rx || lp.ry) { s.rx = lp.rx; s.ry = lp.ry; }
     }
