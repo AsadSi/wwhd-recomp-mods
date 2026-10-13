@@ -131,7 +131,14 @@ void hello(const sockaddr_in& from, const uint8_t* d, size_t n, Handler& h) {
     }
     Link& l = g_link[id];
     l = Link{}, l.on = true, l.addr = from, l.heard = now_ms();
-    g_player[id] = {true, std::string((const char*)b + 7, len - 7), b[6] % 4};
+    // the tunic asked for, or the next one no one wears (green, red, blue, purple)
+    int tunic = b[6] % 4;
+    for (int k = 0; k < 4; k++, tunic = (b[6] + k) % 4) {
+        bool worn = false;
+        for (int i = 0; i < kMaxPlayers; i++) worn |= i != id && g_player[i].on && g_player[i].tunic == tunic;
+        if (!worn) break;
+    }
+    g_player[id] = {true, std::string((const char*)b + 7, len - 7), tunic};
     (void)h;  // (the hello itself is taken below, as message 1 of the new link)
 }
 
@@ -152,13 +159,13 @@ void take(int li, const uint8_t* d, size_t n, Handler& h) {
         l.got = id;
         if (type == kHello) {  // host: the new guest in, everyone told
             g_link[li].heard = now_ms();
-            queue(l, kWelcome, 0, std::string(1, (char)li));
+            queue(l, kWelcome, 0, std::string{(char)li, (char)g_player[li].tunic});
             for (int i = 0; i < kMaxPlayers; i++) if (g_player[i].on && i != li) queue(l, kJoined, 0, player_line(i));
             for (int i = 1; i < kMaxPlayers; i++) if (i != li && g_link[i].on) queue(g_link[i], kJoined, 0, player_line(li));
             mods::trace("coop: %s joined as player %d from %s:%d", g_player[li].name.c_str(), li, inet_ntoa(l.addr.sin_addr), ntohs(l.addr.sin_port));
             h.joined(li);
-        } else if (type == kWelcome && len >= 1) {
-            g_me = b[0], g_player[g_me] = {true, g_my_name, g_my_tunic}, g_player[0].on = true;
+        } else if (type == kWelcome && len >= 2) {
+            g_me = b[0], g_player[g_me] = {true, g_my_name, b[1] % 4}, g_player[0].on = true;
             mods::trace("coop: welcomed as player %d", g_me);
         } else if (type == kJoined && len >= 2) {
             g_player[b[0] % kMaxPlayers] = {true, std::string((const char*)b + 2, len - 2), b[1] % 4};
@@ -166,7 +173,7 @@ void take(int li, const uint8_t* d, size_t n, Handler& h) {
         } else if (type == kLeft && len >= 1) {
             drop(b[0] % kMaxPlayers, "left", h);
         } else {
-            if (g_role == Role::kHost && type == kFired)  // passed on to the other guests
+            if (g_role == Role::kHost && (type == kFired || type == kEffect || type == kBoatShot))  // passed on to the other guests
                 for (int i = 1; i < kMaxPlayers; i++) if (i != li && g_link[i].on) queue(g_link[i], type, origin, std::string((const char*)b, len));
             h.message(origin, type, b, len);
         }

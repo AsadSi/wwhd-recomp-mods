@@ -224,4 +224,7 @@ if [ -n "${RECORD:-}" ]; then
   (sleep 5; "$ROOT/tools/rec.sh" "$ROOT/build/try/shots$T" "${TRACE%.txt}-rec") &
   echo "Recording: ${TRACE%.txt}-rec/"
 fi
-cd "$ROOT" && env $EXTRA ${MORE:-} $SKIP WWHD_SCREENSHOT_DIR="$ROOT/build/try/shots$T" WWHD_LIVE_PAD="$ROOT/build/try/pad$T.txt" WWHD_PORTABLE_LOAD="$ROOT/save/haunted.wwstate" WWHD_MODS_TRACE="$TRACE" ./build/cmake/wwhd ${SAVE:+--save "$SAVE"}
+# OWN_SAVE=1: no test state and no presses through the title: you pick and play a Quest Log yourself
+STATE="WWHD_PORTABLE_LOAD=$ROOT/save/haunted.wwstate"
+[ -n "${OWN_SAVE:-}" ] && STATE= SKIP=
+cd "$ROOT" && env $EXTRA ${MORE:-} $SKIP WWHD_SCREENSHOT_DIR="$ROOT/build/try/shots$T" WWHD_LIVE_PAD="$ROOT/build/try/pad$T.txt" $STATE WWHD_MODS_TRACE="$TRACE" ./build/cmake/wwhd ${SAVE:+--save "$SAVE"}

@@ -59,5 +59,20 @@
 023D9820  # daPy_lk_c::draw: the puppets' models Link did not draw himself, after him
 025E2E5C  # mDoExt_modelEntryDL: Link's body, entered straight (his pose)
 025E2DE0  # mDoExt_modelUpdateDL: the same
-027F583C  # J3DModel entry of one material's shapes: Link's face and blade, the puppets' copies after his
+027F583C  # J3DModel entry of one material's shapes: Link's face, the puppets' copies after his
+027F50F8  # J3DModel texture lists (viewCalc): Link's body texture in each wearer's tunic colour (co-op)
 025202F8  # dComIfG_resetToOpening (mods/coop_sync.cpp): a guest's way back to the title
+025D5928  # fopAcM_fastCreate: the boat's own cannon ball, for the other players (online co-op, extras.cpp)
+# Online co-op, the host's monsters (extras.cpp): their executes with Link where the player they go for is
+021689C8  # daGy execute (Gyorg)
+0216C13C  # daGy_Ctrl execute
+0211AE68  # daDaiocta execute (Big Octo)
+020FA614  # daBwd execute (Molgera)
+023CC070  # ph_class execute (Seahat)
+0209BD1C  # daBk execute (the Shadow stalker's body)
+02168938  # daGy modeProcCall: not on a guest's copy
+0211889C  # daDaiocta modeProc: no updates on a guest's copy
+023C58DC  # daOship modeProc: the same
+02134108  # daFganon anm_init: the host's animation, for the guests
+020F9AF4  # daBwd anm_init
+023C9AD8  # ph_class anm_init

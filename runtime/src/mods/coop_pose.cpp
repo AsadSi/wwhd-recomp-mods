@@ -18,7 +18,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <unordered_map>
 
+#include "coop_tunic_masks.h"
 #include "guest_addr.h"
 #include "extras.h"
 #include "mods.h"
@@ -34,6 +36,7 @@ namespace {
 constexpr uint32_t kPos = 0x314, kRoom = 0x326, kAngleY = 0x32A, kCurProc = 0x65F0, kEquip = 0x69B0;
 constexpr uint32_t kMdlJoints = 0x2C, kJntMtx = 0x10, kJntNum = 0x2C, kMdlBase = 0xC8;
 constexpr int kMaxModels = 64, kMaxJoints = 128;
+constexpr uint32_t kSwBlur = 0x73EC, kTrailPts = 2 * 60 * 3;  // Link's sword trail; its points (base, tip) at +0xBC, +0x38C
 const uint32_t kPlay = GD(0x1046F0B0);
 const uint32_t kStage = kPlay + 0x5134;
 
@@ -43,6 +46,7 @@ struct Made { uint16_t file; uint32_t diff; };
 std::map<uint32_t, Made> g_link_files;  // Link's models by initModel: their files
 struct Held { uint16_t file; uint32_t model, heap; };
 std::vector<Held> g_held[kPuppets];  // each puppet's copies of what its player held
+std::unordered_map<uint32_t, int> g_wearer;  // Link's models (-1) and the puppets' copies (their slot): whose tunic
 bool g_in_heap = false;
 
 bool g_want = false;  // take a pose at Link's next draw
@@ -52,6 +56,7 @@ Pose g_pose, g_taking;
 
 struct Puppet {
     bool shown = false;
+    int tunic = 0;
     Pose pose;
     float pos[3] = {};
     int16_t yaw = 0;
@@ -176,10 +181,151 @@ void make_held(Cpu* c, int i, const Model& m) {
         if (!model) guest_call(c, GC(0x025E3868), {heap}), heap = 0;
     }
     g_held[i].push_back({m.file, model, heap});
+    if (model) g_wearer[model] = i;
     trace("coop: puppet %d holds file %u: %s", i, m.file, model ? "its copy made" : "no copy");
 }
 
+// The tunics (docs/multiplayer.md): Link's body texture (hero's clothes, linktexS3TC) recoloured where the TWWHD
+// Randomizer's mask marks the tunic and hat (they share that part of it), one copy a colour, made the first time
+// it is worn; a model's texture list (written by viewCalc, 027F50F8) then points at its wearer's. The recolouring is
+// the randomizer's (customizer/model.cpp, utility/color.cpp; MIT licence, Copyright (c) SuperDude88 and
+// contributors): each marked colour block's endpoints (RGB565) take the colour's hue, their saturation and value moved
+// as much as the base colour's are; a BC1 block whose endpoints swap order has its index 3 (transparent) made 2.
+int g_own_tunic = -1;
+struct Clothes {
+    uint32_t base;  // the colour the mask's parts have, 0xRRGGBB
+    const uint8_t* mask;
+    uint32_t bytes, fmt;
+    uint32_t tex = 0;            // Link's texture object (its GX2Texture at +4)
+    uint32_t worn[4] = {};       // its copies, by tunic (0: none), each in memory of its own for good
+    uint32_t img[4] = {}, mip[4] = {};
+    bool made[4] = {};
+    uint32_t made_from = 0;      // the texture they are copies of
+    bool fresh = false;          // to be made again (another texture)
+} g_clothes[1] = {{0x5AB24A, masks::kHeroTunic, masks::kHeroTunicBytes, 0x31}};
+constexpr uint32_t kTunicRgb[4] = {0x5AB24A, 0xE52B36, 0x698DB9, 0x9A4F9F};  // green; the randomizer's Red/Blue/Purple Link
+
+void hsv(uint16_t c, double& h, double& s, double& v) {
+    const double r = (c >> 11) / 31.0, g = (c >> 5 & 63) / 63.0, b = (c & 31) / 31.0;
+    const double mx = std::max({r, g, b}), d = mx - std::min({r, g, b});
+    v = mx, s = mx > 0 ? d / mx : 0, h = 0;
+    if (d < 0.001) return;
+    h = 60 * (r >= mx ? (g - b) / d : g >= mx ? 2 + (b - r) / d : 4 + (r - g) / d);
+    if (h < 0) h += 360;
+}
+uint16_t rgb565(double h, double s, double v) {
+    double r = v, g = v, b = v;
+    if (s > 0) {
+        const double hh = (h >= 360 ? 0 : h) / 60, f = hh - (int)hh, p = v * (1 - s), q = v * (1 - s * f), t = v * (1 - s * (1 - f));
+        switch ((int)hh) {
+        case 0: r = v, g = t, b = p; break;
+        case 1: r = q, g = v, b = p; break;
+        case 2: r = p, g = v, b = t; break;
+        case 3: r = p, g = q, b = v; break;
+        case 4: r = t, g = p, b = v; break;
+        default: r = v, g = p, b = q; break;
+        }
+    }
+    return (uint16_t)(std::lround(r * 31) << 11 | std::lround(g * 63) << 5 | std::lround(b * 31));
+}
+uint16_t rgb565(uint32_t rgb) {
+    return (uint16_t)(std::lround((rgb >> 16) / 255.0 * 31) << 11 | std::lround((rgb >> 8 & 255) / 255.0 * 63) << 5 | std::lround((rgb & 255) / 255.0 * 31));
+}
+uint16_t exchange(uint16_t base, uint16_t want, uint16_t cur) {
+    double bh, bs, bv, wh, ws, wv, ch, cs, cv;
+    hsv(base, bh, bs, bv), hsv(want, wh, ws, wv), hsv(cur, ch, cs, cv);
+    if (cs == 0) cs = bs;
+    return rgb565(wh, std::clamp(cs + ws - bs, 0.0, 1.0), std::clamp(cv + wv - bv, 0.0, 1.0));
+}
+
+// Link's texture object of these clothes as tunic t (0: his own), the copy made the first time
+uint32_t worn(Clothes& k, int t) {
+    if (!k.tex || (t == 0 && k.base == kTunicRgb[0])) return k.tex;
+    if (k.fresh) k.fresh = false, std::fill(std::begin(k.made), std::end(k.made), false);
+    if (k.made[t]) return k.worn[t];
+    const uint32_t gx = k.tex + 4, size = ld32(gx + 0x20), mips = ld32(gx + 0x28), align = std::max<uint32_t>(ld32(gx + 0x38), 0x100);
+    if (!k.worn[t]) k.worn[t] = mem::host_alloc(0xC0, 0x20), k.img[t] = mem::host_alloc(size, align), k.mip[t] = mips ? mem::host_alloc(mips, align) : 0;
+    k.made[t] = true;
+    const uint32_t obj = k.worn[t], img = k.img[t], mip = k.mip[t];
+    memcpy(mem::ptr(obj), mem::ptr(k.tex), 0xC0);
+    memcpy(mem::ptr(img), mem::ptr(ld32(gx + 0x24)), size);
+    if (mip) memcpy(mem::ptr(mip), mem::ptr(ld32(gx + 0x2C)), mips);
+    st32(obj + 4 + 0x24, img), st32(obj + 4 + 0x2C, mip);
+    const uint16_t base = rgb565(k.base), want = rgb565(kTunicRgb[t]);
+    const uint32_t block = 8;  // (BC1)
+    for (uint32_t n = 0, at = 0; at < size + mips; n++, at += block) {
+        const uint8_t bits = k.mask[n / 4] >> (n % 4 * 2) & 3;
+        if (!bits) continue;
+        uint8_t* b = mem::ptr(at < size ? img + at : mip + at - size) + block - 8;
+        uint16_t c[2];
+        memcpy(c, b, 4);  // (little-endian: the GPU's)
+        const bool before = c[0] > c[1];
+        for (int e = 0; e < 2; e++) if (bits >> e & 1) c[e] = exchange(base, want, c[e]);
+        memcpy(b, c, 4);
+        if (before && c[0] <= c[1]) {  // (BC1: no transparent texels where there were none)
+            uint32_t idx;
+            memcpy(&idx, b + 4, 4);
+            for (int i = 0; i < 32; i += 2) if ((idx >> i & 3) == 3) idx &= ~(1u << i);
+            memcpy(b + 4, &idx, 4);
+        }
+    }
+    trace("coop: Link's clothes (%06X) in tunic %d made", k.base, t);
+    return obj;
+}
+
+// Link's body texture, found among his models' (each model data's texture table, md +0x30: a u16 count, then 0x24-byte
+// entries from +4 whose +0x20 is the texture object), by size and format, as the mask is. (His island clothes are not
+// among them in HD: left as they are.)
+void find_clothes() {
+    for (Clothes& k : g_clothes) k.tex = 0;
+    for (const LinkModel& lm : g_models) {
+        const uint32_t table = ld32(ld32(lm.model + 0xAC) + 0x30), n = table ? std::min<uint32_t>(ld16(table), 64) : 0;
+        for (uint32_t j = 0; j < n; j++)
+            if (const uint32_t tex = ld32(ld32(table + 4) + j * 0x24 + 0x20))
+                for (Clothes& k : g_clothes)
+                    if (!k.tex && ld32(tex + 4 + 4) == 640 && ld32(tex + 4 + 8) == 384 && (ld32(tex + 4 + 0x14) & 0x3F) == k.fmt &&
+                        ld32(tex + 4 + 0x20) + ld32(tex + 4 + 0x28) == k.bytes)
+                        k.tex = tex;
+    }
+    for (Clothes& k : g_clothes)  // (its copies made from another texture: made again, in the same memory)
+        if (k.tex != k.made_from) k.made_from = k.tex, k.fresh = true;
+    trace("coop: Link's clothes: %08X", g_clothes[0].tex);
+}
+
 }  // namespace
+
+void own_tunic(int t) { g_own_tunic = t; }
+
+// Link's particles: each one dPa_control_c::set (025A847C: r4 group, r5 id, r6 pos, r7 angle) starts while he executes,
+// relative to him, for the others to start at his puppet; theirs started the same way (group 0, alpha 0xFF, no callback)
+static uint32_t g_exec_link = 0;
+static std::vector<Effect> g_effects;
+void link_executes(uint32_t link) { g_exec_link = link; }
+void particle(Cpu* c) {
+    const uint32_t link = g_exec_link, pos = c->r[6], angle = c->r[7];
+    if (!link || !g_want || !pos || g_effects.size() >= 32) return;
+    float s, co;
+    rot_y((int16_t)ld16(link + kAngleY), s, co);
+    const float d[3] = {f32(pos) - f32(link + kPos), f32(pos + 4) - f32(link + kPos + 4), f32(pos + 8) - f32(link + kPos + 8)};
+    Effect e{(uint16_t)c->r[5], {}, {}};
+    const float l[3] = {co * d[0] - s * d[2], d[1], s * d[0] + co * d[2]};
+    for (int i = 0; i < 3; i++) e.at[i] = (int16_t)std::clamp<long>(std::lround(l[i] * 4), -32768, 32767);
+    if (angle) for (int i = 0; i < 3; i++) e.angle[i] = (int16_t)ld16(angle + 2 * i);
+    e.angle[1] = (int16_t)(e.angle[1] - (int16_t)ld16(link + kAngleY));
+    g_effects.push_back(e);
+}
+std::vector<Effect> take_effects() { return std::move(g_effects); }
+void effect_at(Cpu* c, const Effect& e, const float pos[3], int16_t yaw) {
+    static const uint32_t buf = mem::host_alloc(0x20);  // pos +0, angle +0xC
+    float s, co;
+    rot_y(yaw, s, co);
+    const float l[3] = {e.at[0] / 4.f, e.at[1] / 4.f, e.at[2] / 4.f};
+    const float w[3] = {pos[0] + co * l[0] + s * l[2], pos[1] + l[1], pos[2] - s * l[0] + co * l[2]};
+    for (int i = 0; i < 3; i++) st32(buf + 4 * i, bits(w[i]));
+    st16(buf + 0xC, (uint16_t)e.angle[0]), st16(buf + 0xE, (uint16_t)(e.angle[1] + yaw)), st16(buf + 0x10, (uint16_t)e.angle[2]);
+    st32(c->r[1] - 0x40 + 8, 0xFFFFFFFF), st32(c->r[1] - 0x40 + 0xC, 0), st32(c->r[1] - 0x40 + 0x10, 0), st32(c->r[1] - 0x40 + 0x14, 0);
+    guest_call(c, GC(0x025A847C), {ld32(kPlay + 0x5AB0), 0, e.id, buf, buf + 0xC, 0, 0xFF, 0});
+}
 
 void pack(const Pose& p, std::string& out) {
     auto put_bytes = [&](const void* v, size_t n) { out.append((const char*)v, n); };
@@ -195,6 +341,11 @@ void pack(const Pose& p, std::string& out) {
         put_bytes(&m.k, 1), put_bytes(&m.shown, 4), put_bytes(&nj, 1);
         if (m.k == kHeld) put_bytes(&m.file, 2), put_bytes(&m.diff, 4);
         for (const Joint& j : m.j) put_bytes(j.q, 8), put_bytes(j.t, 6), put_bytes(&j.s, 1);
+    }
+    put_bytes(&p.trail, 4);
+    if (p.trail > 0) {
+        put_bytes(&p.trail_idx, 4), put_bytes(&p.trail_color, 4), put_bytes(&p.trail_top, 4);
+        put_bytes(p.trail_pts.data(), 2 * p.trail_pts.size());
     }
     size = (uint32_t)(out.size() - start);
     memcpy(&out[start], &size, 4);
@@ -222,6 +373,11 @@ bool unpack(const uint8_t* d, size_t n, Pose& p, size_t* used) {
         m.j.resize(nj);
         for (Joint& j : m.j)
             if (!get(j.q, 8) || !get(j.t, 6) || !get(&j.s, 1)) return false;
+    }
+    if (!get(&p.trail, 4)) return false;
+    if (p.trail > 0) {
+        p.trail_pts.resize(kTrailPts);
+        if (!get(&p.trail_idx, 4) || !get(&p.trail_color, 4) || !get(&p.trail_top, 4) || !get(p.trail_pts.data(), 2 * kTrailPts)) return false;
     }
     if (used) *used = size;
     return o == size;
@@ -251,10 +407,11 @@ bool own_pose(Pose& out) {
     return g_have;
 }
 
-void show(int i, const Pose* p, const float pos[3], int16_t yaw) {
+void show(int i, const Pose* p, const float pos[3], int16_t yaw, int tunic) {
     Puppet& u = g_puppet[i];
     u.shown = p != nullptr;
     if (!p) return;
+    u.tunic = tunic & 3;
     u.pose = *p;
     memcpy(u.pos, pos, sizeof u.pos), u.yaw = yaw;
 }
@@ -280,7 +437,8 @@ void step(Cpu* c, uint32_t link, bool on) {
         const Pose& p = g_ghost[g_ghost_at++ % g_ghost.size()];
         const float at[3] = {p.pos[0] + g_ghost_off[0], p.pos[1] + g_ghost_off[1], p.pos[2] + g_ghost_off[2]};
         const bool here = strncmp(p.stage, (const char*)mem::ptr(kStage), 8) == 0;
-        show(0, here ? &p : nullptr, at, p.yaw);
+        static const int tunic = getenv("WWHD_COOP_GHOST_TUNIC") ? atoi(getenv("WWHD_COOP_GHOST_TUNIC")) : 1;
+        show(0, here ? &p : nullptr, at, p.yaw, tunic);
         static int n = 0;
         if (++n % 150 == 0)
             trace("coop: ghost step %zu at %.0f %.0f %.0f, %zu models, %s", g_ghost_at, at[0], at[1], at[2], p.models.size(),
@@ -315,6 +473,12 @@ extern "C" void hook_023D5548(Cpu* c) {
         for (LinkModel& m : g_models)
             for (uint32_t& t : m.twin) (t = guest_call(c, GC(0x025E38E0), {m.data, m.flags, m.diff})) ? made++ : missed++;
     c->r[3] = ok;
+    g_wearer.clear();
+    for (const LinkModel& m : g_models) {
+        g_wearer[m.model] = -1;
+        for (int i = 0; i < kPuppets; i++) if (m.twin[i]) g_wearer[m.twin[i]] = i;
+    }
+    find_clothes();
     mods::trace("coop: Link made %zu models; %d puppet copies made, %d did not fit", g_models.size(), made, missed);
 }
 
@@ -411,6 +575,24 @@ extern "C" void hook_025E2DE0(Cpu* c) {
     if (g_in_draw) entered(c, g_link_drawing, model);
 }
 
+// J3DModel's texture list of each material (027F50F8, in viewCalc): a puppet's copies in its player's tunic, Link's
+// in this game's while a session is on
+extern "C" void f_027F50F8_orig(Cpu* c);
+extern "C" void hook_027F50F8(Cpu* c) {
+    const uint32_t model = c->r[3];
+    f_027F50F8_orig(c);
+    const auto it = g_wearer.find(model);
+    if (it == g_wearer.end()) return;
+    const int t = it->second < 0 ? g_own_tunic : g_puppet[it->second].tunic;
+    if (t < 0) return;
+    for (uint32_t i = 0, n = ld16(model + 0x2A); i < n; i++) {
+        const uint32_t mi = ld32(model + 0x34) + i * 0x3C, list = ld32(mi + 0x2C), count = list ? ld8(ld32(mi) + 0x11) : 0;
+        for (uint32_t j = 0; j < count; j++)
+            for (Clothes& k : g_clothes)
+                if (k.tex && ld32(list + 4 * j) == k.tex) st32(list + 4 * j, worn(k, t));
+    }
+}
+
 // J3DModel's entry of one material's shapes (027F583C): Link's draw enters his face (eyes, brows, mouth over his hair)
 // this way (before his body), into its own buffers; each puppet's copy of that model the same
 extern "C" void f_027F583C_orig(Cpu* c);
@@ -443,10 +625,44 @@ extern "C" void hook_023D9820(Cpu* c) {
         for (int i = 0; i < 3; i++) g_taking.pos[i] = f32(link + kPos + 4 * i);
         g_taking.yaw = (int16_t)ld16(link + kAngleY);
         g_taking.proc = (uint16_t)ld32(link + kCurProc), g_taking.equip = ld16(link + kEquip);
+        if (const uint32_t blur = ld32(link + kSwBlur); blur && (int32_t)ld32(blur + 0x9C) > 0) {
+            g_taking.trail = (int32_t)ld32(blur + 0x9C), g_taking.trail_idx = (int32_t)ld32(blur + 0xA0);
+            g_taking.trail_color = (int32_t)ld32(blur + 0xA4), g_taking.trail_top = f32(blur + 0xA8);
+            float s, co;
+            rot_y((int16_t)ld16(link + kAngleY), s, co);
+            g_taking.trail_pts.resize(kTrailPts);
+            for (uint32_t i = 0; i < kTrailPts / 3; i++) {
+                const uint32_t v = blur + 0xBC + 12 * i;  // (base 0..59, then tip 0..59: +0x38C = +0xBC + 60*12)
+                const float d[3] = {f32(v) - g_taking.pos[0], f32(v + 4) - g_taking.pos[1], f32(v + 8) - g_taking.pos[2]};
+                const float l[3] = {co * d[0] - s * d[2], d[1], s * d[0] + co * d[2]};
+                for (int e = 0; e < 3; e++) g_taking.trail_pts[3 * i + e] = (int16_t)std::clamp<long>(std::lround(l[e] * 4), -32768, 32767);
+            }
+        }
         g_pose = std::move(g_taking), g_have = true, g_want = false;
     }
     for (int i = 0; i < kPuppets; i++)
         if (g_puppet[i].shown)
             for (const Model& m : g_puppet[i].pose.models) enter(c, link, i, m);
+    // their sword trails: each puppet's own trail object (made once as the game makes Link's: 0240F564 on 0x1243C bytes),
+    // its points from the pose, entered as Link's draw enters his (0252F3B0 into the z-sorted translucent list)
+    static uint32_t blurs[kPuppets];
+    for (int i = 0; i < kPuppets; i++) {
+        const Puppet& u = g_puppet[i];
+        const uint32_t mine = ld32(link + kSwBlur);
+        if (!u.shown || u.pose.trail <= 0 || u.pose.trail_pts.size() != kTrailPts || !mine) continue;
+        uint32_t& b = blurs[i];
+        if (!b) b = mem::host_alloc(0x1243C, 0x20), guest_call(c, GC(0x0240F564), {b});
+        st32(b + 0x9C, (uint32_t)u.pose.trail), st32(b + 0xA0, (uint32_t)u.pose.trail_idx), st32(b + 0xA4, (uint32_t)u.pose.trail_color);
+        st32(b + 0xA8, bits(u.pose.trail_top)), st32(b + 0xAC, ld32(mine + 0xAC));
+        float s, co;
+        rot_y(u.yaw, s, co);
+        for (uint32_t k = 0; k < kTrailPts / 3; k++) {
+            const float l[3] = {u.pose.trail_pts[3 * k] / 4.f, u.pose.trail_pts[3 * k + 1] / 4.f, u.pose.trail_pts[3 * k + 2] / 4.f};
+            const float w[3] = {u.pos[0] + co * l[0] + s * l[2], u.pos[1] + l[1], u.pos[2] - s * l[0] + co * l[2]};
+            for (int e = 0; e < 3; e++) st32(b + 0xBC + 12 * k + 4 * e, bits(w[e]));
+        }
+        const uint32_t gi = guest_call(c, GC(0x025200D4));
+        guest_call(c, GC(0x0252F3B0), {gi + 0x5D30, ld32(gi + 0x5D7C), b, b + 0x38C});
+    }
     c->r[3] = ret;
 }

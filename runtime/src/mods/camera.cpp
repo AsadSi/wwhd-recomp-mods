@@ -42,6 +42,7 @@
 #include <mutex>
 #include <vector>
 
+#include "coop_pose.h"
 #include "extras.h"
 #include "input.h"
 #include "mods.h"
@@ -342,6 +343,8 @@ namespace mods { void link_executed(uint32_t link); }  // turbo.cpp: control tra
 extern "C" void hook_0240EBB0(Cpu* c) {
     uint32_t l = c->r[3];
     g_link.store(l, std::memory_order_relaxed);
+    mods::coop::link_executes(l);  // (online co-op: his particles, for the other players)
     f_0240EBB0_orig(c);
+    mods::coop::link_executes(0);
     link_executed(l);
 }

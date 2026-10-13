@@ -35,7 +35,7 @@ namespace {
 
 const uint32_t kPlay = GD(0x1046F0B0), kStage = kPlay + 0x5134;
 constexpr uint32_t kPos = 0x314, kRoom = 0x326, kAngleY = 0x32A;
-constexpr int32_t kBehind = 100, kReach = 250;
+constexpr int32_t kBehind = 100, kReach = 250, kStale = 500;  // a player with no pose for kStale is loading or away
 constexpr size_t kChunk = 1000;
 
 std::mutex g_mu;  // the settings (the menu writes them on the main thread)
@@ -60,10 +60,13 @@ struct Remote {
     std::deque<std::pair<uint32_t, Pose>> poses;  // by their time
     bool shown = false;
     float at[3] = {};
+    int16_t yaw = 0;
 };
 Remote g_remote[net::kMaxPlayers];
 std::deque<std::pair<uint32_t, std::string>> g_host[4];  // the host's states by kind, by its time
 std::vector<WorldMsg> g_world;
+struct Effects { int from; uint32_t at; std::string body; };
+std::vector<Effects> g_effects_in;  // the others' particles, started at their puppets as those are shown (kBehind)
 
 std::vector<int> g_send_join;    // host: guests the world is still to go to
 std::string g_join;              // guest: the host's portable state as it comes
@@ -118,15 +121,18 @@ bool pose_at(const Remote& r, uint32_t rt, Pose& out) {
     return true;
 }
 
+std::atomic<bool> g_hud_hidden{false};
+uint32_t g_hud_link = 0;  // Link when it was hidden: shown again once there is another (the guest plays again)
 bool g_to_title = false;  // asked for at the play scene's next execute (below)
 void back_to_title(const std::string& why) {
     ss::notice(why);
     mods::trace("coop: back to the title: %s", why.c_str());
-    g_to_title = true;
+    g_to_title = true, g_hud_hidden = true, g_hud_link = ld32(kPlay + 0x5B34);
 }
 
 struct Handler : net::Handler {
     void message(int from, net::Msg type, const uint8_t* d, size_t n) override {
+        if (type == net::kEffect) return g_effects_in.push_back({from, net::now_ms(), std::string((const char*)d, n)});
         if (type != net::kJoinState) {
             g_world.push_back({from, type, std::string((const char*)d, n)});
             return;
@@ -168,6 +174,13 @@ struct Handler : net::Handler {
             else r.heard = now;
             r.size = n;
             if (!r.poses.empty() && (int32_t)(ms - r.poses.back().first) <= 0) return;  // (out of order: dropped)
+            // that player came into this game's stage or left it: told by name
+            const std::string mine = stage_now(), now_at(p.stage, strnlen(p.stage, 8));
+            if (const std::string was = r.poses.empty() ? now_at : std::string(r.poses.back().second.stage, strnlen(r.poses.back().second.stage, 8));
+                was != now_at && !mine.empty()) {
+                if (now_at == mine) ss::notice(net::name(from) + " is back");
+                else if (was == mine) ss::notice(net::name(from) + (now_at == "sea" ? " went out to sea" : " went inside"));
+            }
             r.poses.emplace_back(ms, std::move(p));
             while (r.poses.size() > 2 && (int32_t)(ms - r.poses.front().first) > 1000) r.poses.pop_front();
         } else if (from == 0 && kind < 4) {
@@ -233,6 +246,25 @@ bool place(int id, float out[3]) {
     memcpy(out, g_remote[id].at, 12);
     return true;
 }
+
+void nearest(const float at[3], uint32_t link, int& target, float out[3]) {
+    const int me = net::role() == net::Role::kOff ? 0 : net::my_id();
+    auto where = [&](int id, float p[3]) {
+        if (id == me) return p[0] = f32(link + kPos), p[1] = f32(link + kPos + 4), p[2] = f32(link + kPos + 8), true;
+        return id >= 0 && id < net::kMaxPlayers && g_remote[id].shown && (memcpy(p, g_remote[id].at, 12), true);
+    };
+    auto dist = [&](const float p[3]) { return std::hypot(p[0] - at[0], p[2] - at[2]); };
+    float p[3], best[3];
+    int pick = -1;
+    for (int id = 0; id < net::kMaxPlayers; id++)
+        if (where(id, p) && (pick < 0 || dist(p) < dist(best))) pick = id, memcpy(best, p, 12);
+    if (pick < 0) pick = me, where(me, best);
+    if (float cur[3]; target != pick && where(target, cur) && dist(best) > 0.7f * dist(cur)) pick = target, memcpy(best, cur, 12);
+    target = pick;
+    memcpy(out, best, 12);
+}
+
+bool arrived() { return host() || (guest() && g_join_link && ld32(kPlay + 0x5B34) != g_join_link); }
 
 bool take_deck_drop(float local[3]) {
     if (!g_deck_drop || ld32(kPlay + 0x5B34) == g_join_link) return false;
@@ -300,13 +332,21 @@ void poll(Cpu* c, bool on) {
     }
     if (!on && net::role() == net::Role::kOff && g_status.rfind("Not started", 0) != 0) g_status = "Off";
     net::poll(g_handler);
+    if (static bool told = false; !arrived()) told = false;
+    else if (guest() && !told) told = true, net::send(0, net::kArrived, std::string());
+    own_tunic(host() ? net::tunic(0) : guest() ? net::tunic(net::my_id()) : -1);
+    if (guest() && !g_was_guest && net::tunic(net::my_id()) != s.tunic)
+        ss::notice(std::string(kTunics[s.tunic]) + " was taken, you're " + kTunics[net::tunic(net::my_id())]);
     if (guest()) g_was_guest = true;
     if (net::role() != net::Role::kOff)
         g_status = std::string(net::status()) + (guest() && g_join_total && g_join.size() < g_join_total ? ", loading the host's world" : "");
     else if (!g_back.empty() || failed != want_gen) g_status = net::status();
 }
 
+bool hud_hidden() { return g_hud_hidden.load(std::memory_order_relaxed); }
+
 void step(Cpu* c, uint32_t link, uint32_t hull) {
+    if (link != g_hud_link) g_hud_hidden = false;  // (playing again)
     if (net::role() == net::Role::kOff) return;
     // this game's pose out (on Tetra's ship's deck: in her frame)
     Pose me;
@@ -323,6 +363,8 @@ void step(Cpu* c, uint32_t link, uint32_t hull) {
         pack(me, b);
         net::put_state(kPose, b);
     }
+    if (const std::vector<Effect> fx = take_effects(); !fx.empty())
+        net::send(-1, net::kEffect, std::string((const char*)fx.data(), fx.size() * sizeof(Effect)));
     // the host: its world to each guest that has just joined (once Link is free to have it taken)
     for (size_t i = 0; i < g_send_join.size();) {
         std::string text, why;
@@ -359,7 +401,7 @@ void step(Cpu* c, uint32_t link, uint32_t hull) {
         Remote& r = g_remote[id];
         Pose p;
         const bool was = r.shown;
-        r.shown = net::connected(id) && pose_at(r, r.clock.shown(now), p) && !strncmp(p.stage, stage.c_str(), 8) &&
+        r.shown = net::connected(id) && now - r.heard < (uint32_t)kStale && pose_at(r, r.clock.shown(now), p) && !strncmp(p.stage, stage.c_str(), 8) &&
                   ((p.flags & 1) ? hull != 0 : p.room == room);
         if (!r.shown) {
             if (was) show(slot, nullptr, nullptr, 0);  // (only the ones it showed: the ghost test aid has slot 0 to itself)
@@ -368,7 +410,20 @@ void step(Cpu* c, uint32_t link, uint32_t hull) {
         int16_t yaw = p.yaw;
         if (p.flags & 1) to_world(hull, p.pos, r.at), yaw = (int16_t)(yaw + (int16_t)ld16(hull + kAngleY));
         else memcpy(r.at, p.pos, 12);
-        show(slot, &p, r.at, yaw);
+        r.yaw = yaw;
+        show(slot, &p, r.at, yaw, net::tunic(id));
+    }
+    // their particles, as their puppets are where they were made (dropped for a player not shown here)
+    for (size_t i = 0; i < g_effects_in.size();) {
+        const Effects& e = g_effects_in[i];
+        if (now - e.at < (uint32_t)kBehind) { i++; continue; }
+        if (e.from >= 0 && e.from < net::kMaxPlayers && g_remote[e.from].shown)
+            for (size_t o = 0; o + sizeof(Effect) <= e.body.size(); o += sizeof(Effect)) {
+                Effect fx;
+                memcpy(&fx, e.body.data() + o, sizeof fx);
+                effect_at(c, fx, g_remote[e.from].at, g_remote[e.from].yaw);
+            }
+        g_effects_in.erase(g_effects_in.begin() + i);
     }
 }
 

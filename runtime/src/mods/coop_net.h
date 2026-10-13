@@ -9,12 +9,12 @@ struct Cpu;
 
 namespace mods::coop::net {
 
-constexpr int kProto = 1, kPort = 7777, kMaxPlayers = 4;
+constexpr int kProto = 2, kPort = 7777, kMaxPlayers = 4;
 
 // the reliable messages (the game's side reads them through on_message)
 enum Msg : uint8_t {
     kHello = 1,   // guest -> host: {u16 proto, u32 build, name, u8 tunic} (sent unreliably until answered)
-    kWelcome,     // host -> guest: {u8 id}
+    kWelcome,     // host -> guest: {u8 id, u8 tunic: the one asked for, or the next no one wears}
     kReject,      // host -> guest: text
     kJoinState,   // host -> guest: {u32 total, u32 at, bytes}: the host's portable state, in pieces
     kJoined,      // host -> all: {u8 id, u8 tunic, name}
@@ -25,6 +25,10 @@ enum Msg : uint8_t {
     kHit,         // guest -> host (step 4)
     kSpawn,       // host -> guests: one of the host's monsters made (step 4)
     kKill,        // host -> guests: it is gone
+    kEffect,      // any -> host -> others: the particles a player's Link started in a step (relative to him)
+    kArrived,     // guest -> host: its Link is in the host's world (the join): the running event and monsters to it
+    kBoatShot,    // any -> host -> others: the boat's own cannon fired {f32 pos[3], s16 angle[3], f32 speedF, speed y, gravity}
+    kDamage,      // guest -> host: {u16 n, u8 health}: its hit on the host's monster n (the host's health counts)
 };
 
 enum class Role { kOff, kHost, kGuest };

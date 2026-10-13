@@ -421,7 +421,7 @@ V3 to_world(V3 o, int16_t yaw, V3 l) {
 V3 pos_of(uint32_t a) { return {ldf32(a + kPos), ldf32(a + kPos + 4), ldf32(a + kPos + 8)}; }
 // online co-op (below): a shot fired here, an event's sign, start or end on the host, the host's ship on a guest
 void coop_fired(Cpu* c, V3 from, int16_t yaw, int16_t up);
-void coop_event(int op, int k, double now);
+void coop_event(int op, int k, double now, int to = -1);
 bool coop_host_ship(V3& pos, int16_t& yaw, bool& sail);
 // back up from Tetra's cabin: where she lay, for the Big ship to be made there again
 struct CabinReturn { V3 ship; int16_t yaw; bool pending; } g_cabin_return{};
@@ -1382,7 +1382,7 @@ void second_gunner(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, const Gun*
 // on the guests, where their own mods' spawns take it (coop_adopt); every step the host's place and heading of each go
 // out and a guest's copies are put there, 100 ms behind; one gone on the host goes on the guests; one killed on a guest
 // (gone there first) goes on the host too: the shooter is favoured.
-struct Shared { uint16_t n; uint32_t id; int16_t proc; bool adopted; };
+struct Shared { uint16_t n; uint32_t id; int16_t proc; bool adopted; Monster m; uint16_t up; int8_t hp = -128; uint8_t anm_seq = 0; };
 std::vector<Shared> g_coop;  // the host's monsters out, or a guest's copies of them
 bool g_coop_remote_shot = false;
 struct Bytes {  // a message's fields, in order
@@ -1397,14 +1397,18 @@ struct Reader {
 bool coop_shared(const Monster& m) {  // not the ships and their parts, which each game makes for itself
     return m.proc != 0x3D && m.proc != kPirates.proc && m.proc != 0x1BF && m.proc != kRaftCraft.m.proc && m.proc != kBeedleCraft.m.proc;
 }
+void coop_spawn_msg(int to, const Shared& s, float x, float y, float z, int16_t yaw) {
+    const Monster& m = s.m;
+    mods::coop::net::send(to, mods::coop::net::kSpawn,
+                          Bytes{}.put(s.n).put(s.up).put(m.proc).put(m.subtype).put(m.param).put(m.angle_x).put(x).put(y).put(z).put(yaw).b);
+}
 uint32_t coop_spawned(Cpu* c, Monster m, uint32_t id, uint32_t parent, float x, float y, float z, int16_t yaw) {
     if (id == 0xFFFFFFFF || !mods::coop::sync::host() || !coop_shared(m)) return id;
     static uint16_t next = 0;
     uint16_t up = 0;
     for (const Shared& s : g_coop) if (parent && s.id == parent) up = s.n;
-    g_coop.push_back({++next, id, m.proc, false});
-    mods::coop::net::send(-1, mods::coop::net::kSpawn,
-                          Bytes{}.put(next).put(up).put(m.proc).put(m.subtype).put(m.param).put(m.angle_x).put(x).put(y).put(z).put(yaw).b);
+    g_coop.push_back({++next, id, m.proc, false, m, up});
+    coop_spawn_msg(-1, g_coop.back(), x, y, z, yaw);
     (void)c;
     return id;
 }
@@ -1424,14 +1428,114 @@ void coop_fired(Cpu* c, V3 from, int16_t yaw, int16_t up) {
     const int16_t a = aboard ? (int16_t)(yaw - (int16_t)ld16(hull + kAngleY)) : yaw;
     mods::coop::net::send(-1, mods::coop::net::kFired, Bytes{}.put<uint8_t>(aboard).put((float)at.x).put((float)at.y).put((float)at.z).put(a).put(up).b);
 }
-void coop_event(int op, int k, double now) {
+// The host's monsters, type by type (docs/multiplayer.md): each step, with its place, its health (+0x3A1), its mode
+// fields, its animation's frame and rate (mDoExt_McaMorf: +0x98 rate, +0x9C frame) and the last animation its anm_init
+// set; a guest's copy is put in that state and makes no choices of its own (its mode procedure is not run, or its
+// fields are overwritten each step); a hit on it there is sent to the host, whose health counts. On the host each
+// monster goes for the nearest player: around its execute, Link's place is that player's (every one of these reads
+// Link's place through play +0x5B2C / +0x5B34), then his own again.
+struct CoopKind {
+    int16_t proc;
+    uint32_t mode, mode2;   // its mode fields (0 none); the first s32 or (mode_s16) s16, the second s16
+    bool mode_s16;
+    uint32_t morf;          // its mDoExt_McaMorf pointer (0 none)
+    uint32_t anm_init;      // its anm_init(this, idx, f1 morf, loop, f2 speed, flag) (0 none)
+};
+constexpr CoopKind kCoopKinds[] = {
+    {0xE4, 0x3CC, 0, false, 0x3F0, 0},                 // Gyorg (daGy): mode; its one animation
+    {0xE1, 0x688, 0, false, 0x6A8, 0},                 // Big Octo (daDaiocta): mode
+    {0xB3, 0x3C8, 0x3CC, false, 0, 0},                 // a cannon boat (daOship): mode, submode
+    {0xF1, 0x5BA, 0x5BC, true, 0x3DC, 0x02134108},     // Phantom Ganon (daFganon): action, mode
+    {0xD9, 0x1B32, 0x1B34, true, 0x3DC, 0x020F9AF4},   // Molgera (daBwd): state, substate
+    {0xD1, 0x45B, 0x462, false, 0x3D8, 0x023C9AD8},    // a Seahat (ph_class): u8 mode, s16 submode; its body's morf
+};
+const CoopKind* coop_kind(int16_t proc) {
+    for (const CoopKind& k : kCoopKinds) if (k.proc == proc) return &k;
+    return nullptr;
+}
+Shared* coop_find(uint32_t actor) {
+    if (!actor) return nullptr;
+    for (Shared& s : g_coop) if (s.id == ld32(actor + 4)) return &s;
+    return nullptr;
+}
+// a guest's copy of the host's monster: no choices of its own
+bool coop_puppet(uint32_t actor) { return mods::coop::sync::guest() && coop_find(actor); }
+// the last animation each of the host's monsters set (its anm_init), by actor id
+struct CoopAnm { uint8_t idx, loop, flag, seq; float morf, speed; };
+std::unordered_map<uint32_t, CoopAnm> g_coop_anm;
+// the host: Link stands where the player a monster goes for is, for its execute (nothing when that is Link himself)
+std::unordered_map<uint32_t, int> g_coop_target;  // by actor id: the player it goes for
+struct CoopStandIn {
+    uint32_t link = 0;
+    float was[3];
+    explicit CoopStandIn(uint32_t actor) {
+        if (!mods::coop::sync::host() || !coop_find(actor)) return;
+        const uint32_t l = ld32(kPlay + 0x5B34);
+        if (!in_mem2(l)) return;
+        const float at[3] = {(float)ldf32(actor + kPos), (float)ldf32(actor + kPos + 4), (float)ldf32(actor + kPos + 8)};
+        int& target = g_coop_target.try_emplace(ld32(actor + 4), -1).first->second;
+        float to[3];
+        mods::coop::sync::nearest(at, l, target, to);
+        if (target == mods::coop::net::my_id()) return;
+        link = l;
+        for (int i = 0; i < 3; i++) was[i] = (float)ldf32(l + kPos + 4 * i), st32(l + kPos + 4 * i, u32_bits(to[i]));
+    }
+    ~CoopStandIn() { if (link) for (int i = 0; i < 3; i++) st32(link + kPos + 4 * i, u32_bits(was[i])); }
+};
+// a guest's copy into the host's mode: by the type's own mode change where it has one (its init procedure runs)
+void coop_set_mode(Cpu* c, uint32_t a, const CoopKind& k, uint32_t mode, uint16_t mode2) {
+    static constexpr uint32_t kGyorgInit[] = {0x02167258, 0x021695C0, 0x02169B68, 0x02169B48, 0x02169EE8,
+                                              0x0216A674, 0x02169AA8, 0x0216810C, 0x02167FE0, 0x02167F30};
+    const uint32_t now = k.mode_s16 ? ld16(a + k.mode) : k.proc == 0xD1 ? ld8(a + k.mode) : ld32(a + k.mode);
+    if (now != mode) {
+        if (k.proc == 0xE4 && mode < 10) guest_call(c, GC(kGyorgInit[mode]), {a});
+        else if (k.proc == 0xE1) guest_call(c, GC(0x0211889C), {a, 0, mode});  // daDaiocta modeProc(init)
+        else if (k.proc == 0xB3) guest_call(c, GC(0x023C58DC), {a, 0, mode});  // daOship modeProc(init)
+        else if (k.mode_s16) st16(a + k.mode, (uint16_t)mode);
+        else if (k.proc == 0xD1) st8(a + k.mode, (uint8_t)mode);
+        else st32(a + k.mode, mode);
+    }
+    if (k.mode2) k.proc == 0xB3 ? st32(a + k.mode2, mode2) : st16(a + k.mode2, mode2);
+}
+
+// the boat's own cannon (daShip's execute creates its ball at 02479680, as fire() does): the ball made, sent once its
+// speeds are set (the next mods' step), and fired the same on the others
+struct BoatShot { uint32_t ball = 0; float pos[3]; int16_t angle[3]; } g_boat_shot;
+void coop_boat_shot(Cpu* c, uint32_t link) {
+    namespace net = mods::coop::net;
+    const uint32_t ball = std::exchange(g_boat_shot.ball, 0);
+    if (!ball || net::role() == net::Role::kOff || !in_mem2(ball)) return;
+    Bytes b;
+    for (float v : g_boat_shot.pos) b.put(v);
+    for (int16_t v : g_boat_shot.angle) b.put(v);
+    b.put((float)ldf32(ball + 0x370)).put((float)ldf32(ball + 0x340)).put((float)ldf32(ball + 0x374));
+    net::send(-1, net::kBoatShot, b.b);
+    (void)c, (void)link;
+}
+void boat_shot_from(Cpu* c, uint32_t link, Reader& r) {
+    static const uint32_t buf = mem::host_alloc(0x20);  // pos at +0, angle at +0x10
+    for (int i = 0; i < 3; i++) st32(buf + 4 * i, u32_bits(r.get<float>()));
+    for (int i = 0; i < 3; i++) st16(buf + 0x10 + 2 * i, (uint16_t)r.get<int16_t>());
+    const float f = r.get<float>(), y = r.get<float>(), g = r.get<float>();
+    const uint32_t layer = guest_call(c, GC(0x025DED64));
+    guest_call(c, GC(0x025DEAB4), {ld32(link + 0x2C)});
+    st32(c->r[1] - 0x40 + 8, 0);
+    const uint32_t ball = guest_call(c, GC(0x025D5928), {0x126, 0x80020004, buf, (uint32_t)(int8_t)ld8(link + kRoom), buf + 0x10, 0, 0xFFFFFFFF, 0});
+    guest_call(c, GC(0x025DEAB4), {layer});
+    if (!in_mem2(ball)) return;
+    guest_call(c, GC(0x020CB89C), {ball, 8});
+    st32(ball + 0x370, u32_bits(f)), st32(ball + 0x340, u32_bits(y)), st32(ball + 0x374, u32_bits(g));
+    guest_call(c, GC(0x025E1988), {0x2852});
+}
+void coop_event(int op, int k, double now, int to) {
     if (!mods::coop::sync::host()) return;
     const double left = op == 0 ? g_warn_end - now : k == kNight || k == kBlood ? 1e9 : g_until[k] - now;
-    mods::coop::net::send(-1, mods::coop::net::kSeaEvent,
+    mods::coop::net::send(to, mods::coop::net::kSeaEvent,
                           Bytes{}.put<uint8_t>(op).put<uint8_t>(k).put(left).put(g_warn_x).put(g_warn_z).put(g_warn_far).put<uint8_t>(g_giant_spell).b);
 }
 // the host's snapshots: a then b, t of the way (over 1: on past b)
 template <class T> T mix(T a, T b, float t) { return (T)(a + (b - a) * t); }
+constexpr size_t kRecord = 2 + 12 + 2 + 2 + 1 + 4 + 2 + 4 + 4 + 4 + 4 + 4;  // a monster's record in kMonsters
 bool coop_host_ship(V3& pos, int16_t& yaw, bool& sail) {
     std::string a, b;
     float t;
@@ -1451,6 +1555,8 @@ void coop_world(Cpu* c, uint32_t link, bool settled, bool riding, double now) {
     if (net::role() == net::Role::kOff) { g_coop.clear(); return; }
     static std::vector<sync::WorldMsg> held;  // (until this game is settled in its stage)
     for (auto& m : sync::take_world()) held.push_back(std::move(m));
+    if (!sync::arrived()) held.clear();
+    coop_boat_shot(c, link);
     for (size_t i = 0; settled && i < held.size(); i++) {
         const sync::WorldMsg& m = held[i];
         Reader r{m.body};
@@ -1465,6 +1571,17 @@ void coop_world(Cpu* c, uint32_t link, bool settled, bool riding, double now) {
             g_coop_remote_shot = true;
             fire(c, 0, link, aboard ? to_world(pos_of(hull), (int16_t)ld16(hull + kAngleY), at) : at, yaw, up, 0xFFFFFFFF);
             g_coop_remote_shot = false;
+        } else if (m.type == net::kDamage && sync::host()) {  // a guest's hit on one of ours
+            const uint16_t n = r.get<uint16_t>();
+            const int dmg = r.get<uint8_t>();
+            for (const Shared& sh : g_coop)
+                if (const uint32_t a = sh.n == n ? guest_call(c, GC(0x025DE50C), {sh.id}) : 0) {
+                    const int hp = (int8_t)ld8(a + 0x3A1) - dmg;
+                    if (hp <= 0) delete_actor(c, sh.id);  // (gone: to the guests as killed)
+                    else st8(a + 0x3A1, (uint8_t)hp);
+                }
+        } else if (m.type == net::kBoatShot) {
+            boat_shot_from(c, link, r);
         } else if (m.type == net::kSeaEvent) {
             const int op = r.get<uint8_t>(), k = r.get<uint8_t>();
             const double left = r.get<double>(), wx = r.get<double>(), wz = r.get<double>(), far = r.get<double>();
@@ -1485,8 +1602,15 @@ void coop_world(Cpu* c, uint32_t link, bool settled, bool riding, double now) {
             for (const Shared& s : g_coop) if (up && s.n == up) parent = s.id;
             if (up && !parent) continue;  // (its parent is gone here)
             const uint32_t id = create_at(c, mo, link, x, y, z, yaw, parent);
-            if (id != 0xFFFFFFFF) g_coop.push_back({n, id, mo.proc, false});
+            if (id != 0xFFFFFFFF) g_coop.push_back({n, id, mo.proc, false, mo, up});
             trace("extras: co-op: the host's monster %u (proc %#x) made here, id %#x", n, mo.proc, id);
+        } else if (m.type == net::kArrived && sync::host()) {  // a guest joined: what is going on now, to it
+            for (int k = 0; k < kCount; k++) if (g_until[k] > now) coop_event(1, k, now, m.from);
+            if (g_warn >= 0) coop_event(0, g_warn, now, m.from);
+            for (const Shared& s : g_coop)
+                if (const uint32_t a = guest_call(c, GC(0x025DE50C), {s.id}))
+                    coop_spawn_msg(m.from, s, ldf32(a + kPos), ldf32(a + kPos + 4), ldf32(a + kPos + 8), (int16_t)ld16(a + kAngleY));
+            trace("extras: co-op: player %d arrived: %zu monsters sent", m.from, g_coop.size());
         } else if (m.type == net::kKill || m.type == net::kHit) {  // gone on the host; or (the host) killed on a guest
             const uint16_t n = r.get<uint16_t>();
             for (size_t j = 0; j < g_coop.size(); j++)
@@ -1510,36 +1634,62 @@ void coop_world(Cpu* c, uint32_t link, bool settled, bool riding, double now) {
         const Shared& s = g_coop[j];
         const uint32_t m = guest_call(c, GC(0x025DE50C), {s.id});
         if (!m) {  // gone: on the host, from the guests too; on a guest, killed here, from the host too
+            g_coop_anm.erase(s.id);
             if (sync::host() || settled) net::send(-1, sync::host() ? net::kKill : net::kHit, Bytes{}.put(s.n).b);
             g_coop.erase(g_coop.begin() + j);
             continue;
         }
         j++;
-        if (sync::host()) {
-            if (out.b.size() < 1100)
-                out.put(s.n).put((float)ldf32(m + kPos)).put((float)ldf32(m + kPos + 4)).put((float)ldf32(m + kPos + 8))
-                    .put((int16_t)ld16(m + 0x322)).put((int16_t)ld16(m + kAngleY));
+        const CoopKind* kind = coop_kind(s.proc);
+        const uint32_t morf = kind && kind->morf ? ld32(m + kind->morf) : 0;
+        if (sync::host()) {  // its record: n, place, two angles, health, mode, mode2, frame, rate, last animation
+            if (out.b.size() >= kRecord * 30) continue;
+            const CoopAnm an = g_coop_anm.count(s.id) ? g_coop_anm[s.id] : CoopAnm{0xFF, 0, 0, 0, 0, 0};
+            out.put(s.n).put((float)ldf32(m + kPos)).put((float)ldf32(m + kPos + 4)).put((float)ldf32(m + kPos + 8))
+                .put((int16_t)ld16(m + 0x322)).put((int16_t)ld16(m + kAngleY)).put((int8_t)ld8(m + 0x3A1))
+                .put(!kind || !kind->mode ? 0u : kind->mode_s16 ? (uint32_t)ld16(m + kind->mode) : kind->proc == 0xD1 ? (uint32_t)ld8(m + kind->mode) : ld32(m + kind->mode))
+                .put(kind && kind->mode2 ? (uint16_t)(kind->proc == 0xB3 ? ld32(m + kind->mode2) : ld16(m + kind->mode2)) : (uint16_t)0)
+                .put(morf ? (float)ldf32(morf + 0x9C) : 0.f).put(morf ? (float)ldf32(morf + 0x98) : 0.f)
+                .put(an.idx).put(an.loop).put(an.flag).put(an.seq).put(an.morf).put(an.speed);
             continue;
         }
         if (!have) continue;
-        auto find = [n = s.n](const std::string& snap, float p[3], int16_t& yaw, int16_t& shape) {
-            for (Reader r{snap}; r.o + 18 <= snap.size();) {
+        struct Rec { float p[3]; int16_t yaw, shape; int8_t hp; uint32_t mode; uint16_t mode2; float frame, rate; CoopAnm an; };
+        auto find = [n = s.n](const std::string& snap, Rec& o) {
+            for (Reader r{snap}; r.o + kRecord <= snap.size();) {
                 const uint16_t k = r.get<uint16_t>();
-                for (int i = 0; i < 3; i++) p[i] = r.get<float>();
-                yaw = r.get<int16_t>(), shape = r.get<int16_t>();
+                for (float& v : o.p) v = r.get<float>();
+                o.yaw = r.get<int16_t>(), o.shape = r.get<int16_t>(), o.hp = r.get<int8_t>(), o.mode = r.get<uint32_t>(), o.mode2 = r.get<uint16_t>();
+                o.frame = r.get<float>(), o.rate = r.get<float>();
+                o.an.idx = r.get<uint8_t>(), o.an.loop = r.get<uint8_t>(), o.an.flag = r.get<uint8_t>(), o.an.seq = r.get<uint8_t>();
+                o.an.morf = r.get<float>(), o.an.speed = r.get<float>();
                 if (k == n) return true;
             }
             return false;
         };
-        float pa[3], pb[3];
-        int16_t ya, yb, sa, sb;
-        if (!find(b, pb, yb, sb)) continue;
-        if (!find(a, pa, ya, sa)) memcpy(pa, pb, 12), ya = yb, sa = sb;
+        Rec ra, rb;
+        if (!find(b, rb)) continue;
+        if (!find(a, ra)) ra = rb;
         for (int i = 0; i < 3; i++) {
-            const float v = mix(pa[i], pb[i], t);
+            const float v = mix(ra.p[i], rb.p[i], t);
             st32(m + kPos + 4 * i, u32_bits(v)), st32(m + 0x300 + 4 * i, u32_bits(v));
         }
-        st16(m + 0x322, (uint16_t)(int16_t)(ya + (int16_t)(yb - ya) * t)), st16(m + kAngleY, (uint16_t)(int16_t)(sa + (int16_t)(sb - sa) * t));
+        st16(m + 0x322, (uint16_t)(int16_t)(ra.yaw + (int16_t)(rb.yaw - ra.yaw) * t)), st16(m + kAngleY, (uint16_t)(int16_t)(ra.shape + (int16_t)(rb.shape - ra.shape) * t));
+        // a hit here since the host's health was last put in: to the host, whose health counts
+        if (Shared& sh = g_coop[j - 1]; sh.hp != -128 && (int8_t)ld8(m + 0x3A1) < sh.hp)
+            net::send(0, net::kDamage, Bytes{}.put(sh.n).put<uint8_t>((uint8_t)(sh.hp - (int8_t)ld8(m + 0x3A1))).b);
+        st8(m + 0x3A1, (uint8_t)rb.hp), g_coop[j - 1].hp = rb.hp;
+        if (!kind) continue;
+        if (kind->mode) coop_set_mode(c, m, *kind, rb.mode, rb.mode2);
+        if (Shared& sh = g_coop[j - 1]; kind->anm_init && rb.an.idx != 0xFF && rb.an.seq != sh.anm_seq) {
+            sh.anm_seq = rb.an.seq;
+            c->f[1].ps0 = rb.an.morf, c->f[2].ps0 = rb.an.speed;
+            guest_call(c, GC(kind->anm_init), {m, rb.an.idx, rb.an.loop, rb.an.flag});
+        }
+        if (morf) {
+            st32(morf + 0x98, u32_bits(rb.rate));
+            if (std::fabs((float)ldf32(morf + 0x9C) - rb.frame) > 2) st32(morf + 0x9C, u32_bits(rb.frame));
+        }
     }
     if (sync::host()) net::put_state(sync::kMonsters, out.b);
     // the players push each other: this game moves only its own Link out of the others' room (radius 35 each)
@@ -1823,7 +1973,7 @@ void step(Cpu* c) {
     // on a ship): then, as the Leviathan does, they circle the boat (their controller's clear-line flag for them set,
     // +0x42E + the child index +0x3C8) and each breaches and rams it every 5-9 s (modeAttackInit 02169B68, mode 2), from
     // a dive or its circle, kept within 2000 of him so a sailing boat does not leave them behind; attacks, damage and deletion as the game decides
-    if (sea && settled) {
+    if (sea && settled && !mods::coop::sync::guest()) {  // (a guest's are the host's: their modes come from it)
         static std::unordered_map<uint32_t, double> ram_at;
         for (uint32_t id : g_gyorg_ids) {
             const uint32_t gy = id == g_gyctrl || id == g_leviathan.id ? 0 : guest_call(c, GC(0x025DE50C), {id});
@@ -1946,7 +2096,7 @@ void step(Cpu* c) {
         // slain: the game's own death (its burst and cry, and it sinks) plays for 4 s at its size, then it goes and
         // the event ends with it
         static double died = -1;
-        if (counted == g_leviathan.id && g_leviathan_slain && died < 0) {
+        if (counted == g_leviathan.id && g_leviathan_slain && died < 0 && !mods::coop::sync::guest()) {  // (a guest's: gone with the host's)
             died = now;
             trace("extras: the Leviathan is slain");
             loot(c, 200);
@@ -1991,7 +2141,7 @@ void step(Cpu* c) {
             g_molgera.id = spawn(c, none, Monster{0xD9, -1, 0}, link, 2000, -1, 0, false);
             g_molgera.next = now + 10;
         }
-        if (const uint32_t a = g_molgera_actor = g_molgera.actor(c)) {
+        if (const uint32_t a = g_molgera_actor = g_molgera.actor(c); a && !mods::coop::sync::guest()) {  // (a guest's: the host's)
             st8(a + 0x1B5C, 1), st32(a + 0x3EC8, 0);
             st32(GD(kMolgeraScale), u32_bits(1.3f * 2.5f)), st32(GD(kMolgeraPush), 0), st32(GD(kMolgeraBite), u32_bits(1300.f));
             // It makes itself at the world's origin (its boss room's centre) and is put far off ahead of Link, then
@@ -3393,6 +3543,7 @@ extern "C" void f_02134B28_orig(Cpu* c);
 extern "C" void hook_02134B28(Cpu* c) {
     using namespace mods::extras;
     g_fx_size = g_phantom_actor && c->r[3] == g_phantom_actor ? g_phantom_size : 1;
+    CoopStandIn s(c->r[3]);
     f_02134B28_orig(c);
     g_fx_size = 1;
 }
@@ -3405,6 +3556,7 @@ static bool titanic_effect(uint32_t id) {
 extern "C" void f_025A847C_orig(Cpu* c);
 extern "C" void hook_025A847C(Cpu* c) {
     using namespace mods::extras;
+    mods::coop::particle(c);
     if (g_fx_size > 1 && titanic_effect(c->r[5] & 0xFFFF)) {
         static const uint32_t buf = mem::host_alloc(0x10);
         const uint32_t s = c->r[8];
@@ -3440,6 +3592,7 @@ extern "C" void hook_023C68B8(Cpu* c) {
         st32(a + 0xE98, 10 + rand() % 20);
         it->second = g_deck_shots;
     }
+    CoopStandIn s(a);
     f_023C68B8_orig(c);
 }
 
@@ -3566,3 +3719,62 @@ extern "C" void hook_0211BFFC(Cpu* c) {
     if (c->r[3] && c->r[3] == g_octo_actor) g_octo_dead = true;
     f_0211BFFC_orig(c);
 }
+
+// fopAcM_fastCreate (025D5928): the boat's own cannon making its ball (daShip execute, returning to 02479684), for the
+// other players (online co-op)
+extern "C" void f_025D5928_orig(Cpu* c);
+extern "C" void hook_025D5928(Cpu* c) {
+    const bool boat = c->lr == GC(0x02479684) && c->r[3] == 0x126, coop = mods::coop::net::role() != mods::coop::net::Role::kOff;
+    const uint32_t pos = c->r[5], angle = c->r[7];
+    if (boat && coop) {
+        auto& b = mods::extras::g_boat_shot;
+        for (int i = 0; i < 3; i++) b.pos[i] = (float)ldf32(pos + 4 * i), b.angle[i] = (int16_t)ld16(angle + 2 * i);
+    }
+    f_025D5928_orig(c);
+    if (boat && coop) mods::extras::g_boat_shot.ball = c->r[3];
+}
+
+// Online co-op, the host's monsters (extras.cpp, "The host's monsters, type by type"): each execute with Link standing
+// where the player it goes for is (CoopStandIn): Gyorg 021689C8, its controller 0216C13C, Big Octo 0211AE68, Molgera
+// 020FA614, a Seahat 023CC070, the Shadow stalker's Bokoblin body 0209BD1C (its mind reads Link's place there too);
+// Phantom Ganon and the cannon boats in their hooks above
+#define COOP_STAND_IN(addr)                                                   \
+    extern "C" void f_##addr##_orig(Cpu* c);                                  \
+    extern "C" void hook_##addr(Cpu* c) {                                     \
+        mods::extras::CoopStandIn s(c->r[3]);                                 \
+        f_##addr##_orig(c);                                                   \
+    }
+COOP_STAND_IN(021689C8)
+COOP_STAND_IN(0216C13C)
+COOP_STAND_IN(0211AE68)
+COOP_STAND_IN(020FA614)
+COOP_STAND_IN(023CC070)
+COOP_STAND_IN(0209BD1C)
+// a guest's copies choose nothing: Gyorg's mode procedure (modeProcCall 02168938), Big Octo's and a cannon boat's mode
+// updates (their modeProc, 0211889C / 023C58DC, with 1: update; a mode's init, 0, is how the host's mode is put in)
+extern "C" void f_02168938_orig(Cpu* c);
+extern "C" void hook_02168938(Cpu* c) {
+    if (!mods::extras::coop_puppet(c->r[3])) f_02168938_orig(c);
+}
+extern "C" void f_0211889C_orig(Cpu* c);
+extern "C" void hook_0211889C(Cpu* c) {
+    if (c->r[4] != 1 || !mods::extras::coop_puppet(c->r[3])) f_0211889C_orig(c);
+}
+extern "C" void f_023C58DC_orig(Cpu* c);
+extern "C" void hook_023C58DC(Cpu* c) {
+    if (c->r[4] != 1 || !mods::extras::coop_puppet(c->r[3])) f_023C58DC_orig(c);
+}
+// the animations the host's monsters set (their anm_init: r4 index, f1 morf, r5 loop, f2 speed, r6 flag), for the guests
+#define COOP_ANM(addr)                                                                                          \
+    extern "C" void f_##addr##_orig(Cpu* c);                                                                    \
+    extern "C" void hook_##addr(Cpu* c) {                                                                       \
+        using namespace mods::extras;                                                                           \
+        if (mods::coop::sync::host() && coop_find(c->r[3])) {                                                   \
+            CoopAnm& a = g_coop_anm[ld32(c->r[3] + 4)];                                                         \
+            a = {(uint8_t)c->r[4], (uint8_t)c->r[5], (uint8_t)c->r[6], (uint8_t)(a.seq + 1), (float)c->f[1].ps0, (float)c->f[2].ps0}; \
+        }                                                                                                       \
+        f_##addr##_orig(c);                                                                                     \
+    }
+COOP_ANM(02134108)
+COOP_ANM(020F9AF4)
+COOP_ANM(023C9AD8)

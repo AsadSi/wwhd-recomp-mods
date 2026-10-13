@@ -397,6 +397,7 @@ extern "C" void hook_028766CC(Cpu* c) {
 // Pane::Draw(this, DrawInfo&): the render thread reports where each layout root is drawn. The
 // game thread can't tell: TV and GamePad layouts share DrawInfos and are recorded on threads that
 // don't bind the targets.
+namespace mods::coop::sync { bool hud_hidden(); }
 extern "C" void hook_02877100(Cpu* c) {
     using namespace aspect;
     uint32_t pane = c->r[3];
@@ -413,6 +414,13 @@ extern "C" void hook_02877100(Cpu* c) {
     if (original()) { f_02877100_orig(c); return; }
     uint32_t parent = ld32(pane + kPaneParent);
     if (!parent) {
+        // online co-op: a guest sent back to the title keeps the HUD's screens (they live until shutdown): not drawn
+        // until it plays again (mods::coop::sync::hud_hidden; the HUD's root holds N_TV_00 / N_Default_00 / N_DRC_00)
+        if (mods::coop::sync::hud_hidden()) {
+            const uint32_t end = pane + kPaneChildren;
+            for (uint32_t ch = ld32(end); ch != end; ch = ld32(ch))
+                if (name_is(ch, "N_TV_00") || name_is(ch, "N_Default_00") || name_is(ch, "N_DRC_00")) return;
+        }
         gx2::emit(gx2::OP_LAYOUT_ROOT, {pane});
     } else {
         // Preserve the existing hiding rule for anchored HUD/world markers. Menu containers
