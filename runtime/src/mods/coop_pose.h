@@ -14,7 +14,14 @@ namespace mods::coop {
 constexpr int kPuppets = 3;  // up to three other players
 
 struct Joint { int16_t q[4], t[3]; uint8_t s; };  // rotation (x32767), translation (x8), uniform scale (x64)
-struct Model { uint8_t k = 0, param = 0; std::vector<Joint> j; };  // k: Link's model by creation order
+constexpr uint8_t kHeld = 0xFF;  // a model's k: one Link makes as he takes it out (his sword, an item), by its file
+struct Model {
+    uint8_t k = 0;            // Link's model by creation order, or kHeld
+    uint16_t file = 0;        // kHeld: its file in Link's archive, made with these differed-list flags
+    uint32_t diff = 0;
+    uint32_t shown = ~0u;     // its materials shown (the sheath's blade...)
+    std::vector<Joint> j;
+};
 struct Pose {
     char stage[8] = {};
     int8_t room = 0;

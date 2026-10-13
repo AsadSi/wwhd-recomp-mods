@@ -52,10 +52,12 @@
 @025D4ABC # fopAc_Execute position check: the actor about to halt the game, traced (extras.cpp)
 # Online co-op (mods/coop_pose.cpp): Link's pose, and puppets drawn from it
 023D5548  # daPy_lk_c::createHeap: a copy of each of Link's models for every puppet, on his heap
+023D4BB8  # daPy_lk_c::initModel: which file each of Link's models is (what he holds, for the puppets)
 025E38E0  # mDoExt_J3DModel__create: the models Link's createHeap makes
 023D8DF0  # daPy_lk_c::entryDLSetLight: each model Link draws (his pose, once a step), the puppets' after it
 023D8454  # daPy_lk_c::updateDLSetLight: the same
 023D9820  # daPy_lk_c::draw: the puppets' models Link did not draw himself, after him
 025E2E5C  # mDoExt_modelEntryDL: Link's body, entered straight (his pose)
 025E2DE0  # mDoExt_modelUpdateDL: the same
+027F583C  # J3DModel entry of one material's shapes: Link's face and blade, the puppets' copies after his
 025202F8  # dComIfG_resetToOpening (mods/coop_sync.cpp): a guest's way back to the title

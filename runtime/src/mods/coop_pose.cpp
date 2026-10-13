@@ -6,8 +6,10 @@
 // each model's world joint matrices (model +0x2C -> block +0x10, count block +0x2C) are taken relative to Link's place
 // and heading. Right after each of his models is entered, each puppet's copy of it gets its matrices from the puppet's
 // pose at its own place and is entered the same way (Link as the light's owner), the ones he did not draw after his
-// draw: his sword and shield, and no calc (Link's joint callbacks take any model they run on for his). Known: the
-// copies draw in one blue (docs/multiplayer.md, Status).
+// draw: his sword and shield, and no calc (Link's joint callbacks take any model they run on for his). What he holds
+// (his drawn sword, an item) is made as he takes it out (daPy_lk_c::initModel, 023D4BB8, a file of Link's archive): a
+// pose names its file, and each puppet gets its own copy of that file's model the first time it holds it, on a heap
+// of its own, given back as Link is made again.
 #include "coop_pose.h"
 
 #include <algorithm>
@@ -15,6 +17,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 
 #include "guest_addr.h"
 #include "extras.h"
@@ -36,6 +39,10 @@ const uint32_t kStage = kPlay + 0x5134;
 
 struct LinkModel { uint32_t model, data, flags, diff; uint32_t twin[kPuppets]; };
 std::vector<LinkModel> g_models;  // Link's, in the order createHeap made them
+struct Made { uint16_t file; uint32_t diff; };
+std::map<uint32_t, Made> g_link_files;  // Link's models by initModel: their files
+struct Held { uint16_t file; uint32_t model, heap; };
+std::vector<Held> g_held[kPuppets];  // each puppet's copies of what its player held
 bool g_in_heap = false;
 
 bool g_want = false;  // take a pose at Link's next draw
@@ -53,21 +60,27 @@ struct Puppet {
 float f32(uint32_t a) { return (float)ldf32(a); }
 uint32_t bits(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
 
+// a material's shown flag: the model data's (shared by Link's model and its copies), Link's draw sets it as he is
+uint32_t shown_flag(uint32_t model, uint32_t i) { return ld32(ld32(ld32(model + 0xAC) + 0x10) + i * 0x39C + 8) + 4; }
+uint32_t materials(uint32_t model) { return std::min<uint32_t>(ld32(ld32(model + 0xAC) + 0xC), 32); }
+
 void rot_y(int16_t yaw, float& s, float& c) {
     const float a = yaw * (float)M_PI / 32768;
     s = std::sin(a), c = std::cos(a);
 }
 
 // a model's joints, relative to Link's place and heading (inverse of T(pos) * Ry(yaw), then the world matrix)
-void take(int k, uint32_t model, uint32_t param, uint32_t link) {
+void take(int k, const Made* held, uint32_t model, uint32_t link) {
     const uint32_t jnt = ld32(model + kMdlJoints), mtx = jnt ? ld32(jnt + kJntMtx) : 0, n = jnt ? ld16(jnt + kJntNum) : 0;
     if (!mtx || !n || n > kMaxJoints) return;
-    for (const Model& m : g_taking.models) if (m.k == k) return;  // (entered twice in one draw)
+    for (const Model& m : g_taking.models) if (held ? m.k == kHeld && m.file == held->file : m.k == k) return;  // (entered twice in one draw)
     float s, c;
     rot_y((int16_t)ld16(link + kAngleY), s, c);
     const float p[3] = {f32(link + kPos), f32(link + kPos + 4), f32(link + kPos + 8)};
     Model out;
-    out.k = (uint8_t)k, out.param = param ? 1 : 0;
+    out.k = held ? kHeld : (uint8_t)k;
+    if (held) out.file = held->file, out.diff = held->diff;
+    for (uint32_t i = 0; i < materials(model); i++) if (!ld8(shown_flag(model, i))) out.shown &= ~(1u << i);
     out.j.resize(n);
     for (uint32_t i = 0; i < n; i++) {
         float w[12], r[12];
@@ -144,6 +157,28 @@ void load_ghost(const char* spec) {
     trace("coop: ghost %s, %zu steps, offset %.0f %.0f", path.c_str(), g_ghost.size(), g_ghost_off[0], g_ghost_off[2]);
 }
 
+// puppet i's copy of a held model: made from its file of Link's archive (dComIfG_getObjectRes, 026066C4, as initModel
+// asks) the first time, on a solid heap of its own from the game heap (a file that makes none is not tried again)
+void make_held(Cpu* c, int i, const Model& m) {
+    for (const Held& h : g_held[i]) if (h.file == m.file) return;
+    static const uint32_t arc = [] {  // "Link", as initModel passes it (the text, then the string class's vtable)
+        const uint32_t b = mem::host_alloc(8);
+        st32(b, GD(0x101CEB48)), st32(b + 4, GD(0x10034B24));
+        return b;
+    }();
+    const uint32_t data = guest_call(c, GC(0x026066C4), {ld32(GD(0x101F4F28)), arc, m.file});
+    uint32_t heap = data ? guest_call(c, GC(0x025E3528), {0, 0}) : 0, model = 0;  // mDoExt_createSolidHeapFromGame
+    if (heap) {
+        const uint32_t was = guest_call(c, GC(0x027EC220), {heap});  // JKRHeap::becomeCurrentHeap
+        model = guest_call(c, GC(0x025E38E0), {data, 0x80000, m.diff});
+        guest_call(c, GC(0x027EC220), {was});
+        guest_call(c, GC(0x025E3678), {heap});  // mDoExt_adjustSolidHeap
+        if (!model) guest_call(c, GC(0x025E3868), {heap}), heap = 0;
+    }
+    g_held[i].push_back({m.file, model, heap});
+    trace("coop: puppet %d holds file %u: %s", i, m.file, model ? "its copy made" : "no copy");
+}
+
 }  // namespace
 
 void pack(const Pose& p, std::string& out) {
@@ -157,7 +192,8 @@ void pack(const Pose& p, std::string& out) {
     put_bytes(&nm, 1);
     for (const Model& m : p.models) {
         const uint8_t nj = (uint8_t)m.j.size();
-        put_bytes(&m.k, 1), put_bytes(&m.param, 1), put_bytes(&nj, 1);
+        put_bytes(&m.k, 1), put_bytes(&m.shown, 4), put_bytes(&nj, 1);
+        if (m.k == kHeld) put_bytes(&m.file, 2), put_bytes(&m.diff, 4);
         for (const Joint& j : m.j) put_bytes(j.q, 8), put_bytes(j.t, 6), put_bytes(&j.s, 1);
     }
     size = (uint32_t)(out.size() - start);
@@ -181,7 +217,8 @@ bool unpack(const uint8_t* d, size_t n, Pose& p, size_t* used) {
     p.models.resize(nm);
     for (Model& m : p.models) {
         uint8_t nj = 0;
-        if (!get(&m.k, 1) || !get(&m.param, 1) || !get(&nj, 1)) return false;
+        if (!get(&m.k, 1) || !get(&m.shown, 4) || !get(&nj, 1)) return false;
+        if (m.k == kHeld && (!get(&m.file, 2) || !get(&m.diff, 4))) return false;
         m.j.resize(nj);
         for (Joint& j : m.j)
             if (!get(j.q, 8) || !get(j.t, 6) || !get(&j.s, 1)) return false;
@@ -196,7 +233,7 @@ void blend(const Pose& a, const Pose& b, float t, Pose& out) {
     out.yaw = (int16_t)(a.yaw + (int16_t)(b.yaw - a.yaw) * t);
     for (Model& m : out.models)
         for (const Model& n : a.models) {
-            if (n.k != m.k || n.j.size() != m.j.size()) continue;
+            if (n.k != m.k || n.file != m.file || n.j.size() != m.j.size()) continue;
             for (size_t i = 0; i < m.j.size(); i++) {
                 const Joint &x = n.j[i], &y = m.j[i];
                 const int dot = x.q[0] * y.q[0] + x.q[1] * y.q[1] + x.q[2] * y.q[2] + x.q[3] * y.q[3], sign = dot < 0 ? -1 : 1;
@@ -222,7 +259,7 @@ void show(int i, const Pose* p, const float pos[3], int16_t yaw) {
     memcpy(u.pos, pos, sizeof u.pos), u.yaw = yaw;
 }
 
-void step(Cpu*, uint32_t link, bool on) {
+void step(Cpu* c, uint32_t link, bool on) {
     static bool init = false;
     if (!init) {
         init = true;
@@ -249,6 +286,9 @@ void step(Cpu*, uint32_t link, bool on) {
             trace("coop: ghost step %zu at %.0f %.0f %.0f, %zu models, %s", g_ghost_at, at[0], at[1], at[2], p.models.size(),
                   here ? "shown" : "another stage");
     }
+    for (int i = 0; i < kPuppets; i++)
+        if (g_puppet[i].shown)
+            for (const Model& m : g_puppet[i].pose.models) if (m.k == kHeld) make_held(c, i, m);
 }
 
 }  // namespace mods::coop
@@ -258,6 +298,11 @@ using namespace mods::coop;
 // daPy_lk_c::createHeap: Link's models, then a copy of each for every puppet on his heap
 extern "C" void f_023D5548_orig(Cpu* c);
 extern "C" void hook_023D5548(Cpu* c) {
+    for (auto& held : g_held) {
+        for (const Held& h : held) if (h.heap) guest_call(c, GC(0x025E3868), {h.heap});  // mDoExt_destroySolidHeap
+        held.clear();
+    }
+    g_link_files.clear();
     g_models.clear();
     g_have = false;
     g_in_heap = true;
@@ -281,18 +326,28 @@ extern "C" void hook_025E38E0(Cpu* c) {
     if (g_in_heap && c->r[3] && g_models.size() < kMaxModels) g_models.push_back({c->r[3], data, flags, diff, {}});
 }
 
+// daPy_lk_c::initModel(this, J3DModel**, file, differed-list flags): which file each of Link's models is
+extern "C" void f_023D4BB8_orig(Cpu* c);
+extern "C" void hook_023D4BB8(Cpu* c) {
+    const uint32_t out = c->r[4], file = c->r[5], diff = c->r[6];
+    f_023D4BB8_orig(c);
+    if (const uint32_t model = ld32(out)) g_link_files[model] = {(uint16_t)file, diff};
+}
+
 extern "C" void f_023D8DF0_orig(Cpu* c);
 extern "C" void f_025E2E5C_orig(Cpu* c);
 
-// puppet i's copy of Link's model k, posed and entered as Link's own was (param 0/1: entryDLSetLight with Link as the
-// light's owner; 2: straight through modelEntryDL), each once a draw
+// puppet i's copy of Link's model k, posed and entered as Link's own, each once a draw
 static uint32_t g_link_drawing = 0;
 static uint64_t g_entered[kPuppets];  // models entered this draw, by bit k
 static void enter(Cpu* c, uint32_t link, int i, const Model& m) {
     const Puppet& u = g_puppet[i];
-    if (m.k >= g_models.size() || m.k >= 64 || (g_entered[i] >> m.k & 1)) return;
-    g_entered[i] |= 1ull << m.k;
-    const uint32_t twin = g_models[m.k].twin[i];
+    uint32_t twin = 0;
+    if (m.k == kHeld) {
+        for (const Held& h : g_held[i]) if (h.file == m.file) twin = h.model;
+    } else if (m.k < g_models.size() && m.k < 64 && !(g_entered[i] >> m.k & 1)) {
+        g_entered[i] |= 1ull << m.k, twin = g_models[m.k].twin[i];
+    }
     const uint32_t jnt = twin ? ld32(twin + kMdlJoints) : 0, mtx = jnt ? ld32(jnt + kJntMtx) : 0;
     if (!mtx || ld16(jnt + kJntNum) != m.j.size()) return;
     float s, co;
@@ -302,52 +357,74 @@ static void enter(Cpu* c, uint32_t link, int i, const Model& m) {
     const float base[12] = {co, 0, s, u.pos[0], 0, 1, 0, u.pos[1], -s, 0, co, u.pos[2]};
     for (int e = 0; e < 12; e++) st32(twin + kMdlBase + 4 * e, bits(base[e]));
     // its packets' draw flags as Link's model has them (027F596C: model +0x74 into each shape packet)
-    const uint32_t fl = ld32(g_models[m.k].model + 0x74);
-    st32(twin + 0x74, fl), guest_call(c, GC(0x027F596C), {twin, fl});
-    const uint32_t r3 = c->r[3], r4 = c->r[4], r5 = c->r[5];
-    if (m.param == 2) {
-        guest_call(c, GC(0x02562F5C), {guest_call(c, GC(0x02555D0C)), twin, link + 0x110});  // setLightTevColorType
-        c->r[3] = twin;
-        f_025E2E5C_orig(c);
-    } else {
-        c->r[3] = link, c->r[4] = twin, c->r[5] = m.param;
-        f_023D8DF0_orig(c);
+    if (m.k != kHeld) {
+        const uint32_t fl = ld32(g_models[m.k].model + 0x74);
+        st32(twin + 0x74, fl), guest_call(c, GC(0x027F596C), {twin, fl});
     }
+    // its materials shown as that player's were (his sword drawn: the blade), Link's put back after
+    const uint32_t n = materials(twin);
+    uint8_t was[32];
+    for (uint32_t k = 0; k < n; k++) was[k] = ld8(shown_flag(twin, k)), st8(shown_flag(twin, k), m.shown >> k & 1);
+    // entryDLSetLight(Link, twin, 0): lit as Link, entered into the draw buffers current now, Link's. (Its other way,
+    // 0259130C, enters into the actors' buffers, drawn after the sea and in the sea's state: the copies drew in one blue.)
+    const uint32_t r3 = c->r[3], r4 = c->r[4], r5 = c->r[5];
+    c->r[3] = link, c->r[4] = twin, c->r[5] = 0;
+    f_023D8DF0_orig(c);
     c->r[3] = r3, c->r[4] = r4, c->r[5] = r5;
+    for (uint32_t k = 0; k < n; k++) st8(shown_flag(twin, k), was[k]);
 }
 // Link's model just entered in his draw: taken into the pose, and each puppet's copy of it entered right after it
-static void entered(Cpu* c, uint32_t link, uint32_t model, uint32_t param) {
+static void entered(Cpu* c, uint32_t link, uint32_t model) {
     const int k = index_of(model);
-    if (k < 0) return;
-    if (g_want) take(k, model, param, link);
+    if (k < 0) {
+        if (const auto it = g_link_files.find(model); g_want && it != g_link_files.end()) take(-1, &it->second, model, link);
+        return;
+    }
+    if (g_want) take(k, nullptr, model, link);
     for (int i = 0; i < kPuppets; i++)
         if (g_puppet[i].shown)
             for (const Model& m : g_puppet[i].pose.models) if (m.k == k) enter(c, link, i, m);
 }
 extern "C" void hook_023D8DF0(Cpu* c) {
-    const uint32_t link = c->r[3], model = c->r[4], param = c->r[5];
+    const uint32_t link = c->r[3], model = c->r[4];
     f_023D8DF0_orig(c);
-    if (g_in_draw) entered(c, link, model, param);
+    if (g_in_draw) entered(c, link, model);
 }
 extern "C" void f_023D8454_orig(Cpu* c);
 extern "C" void hook_023D8454(Cpu* c) {
-    const uint32_t link = c->r[3], model = c->r[4], param = c->r[5];
+    const uint32_t link = c->r[3], model = c->r[4];
     f_023D8454_orig(c);
-    if (g_in_draw) entered(c, link, model, param);
+    if (g_in_draw) entered(c, link, model);
 }
 
 // mDoExt_modelEntryDL (025E2E5C) / modelUpdateDL (025E2DE0): Link's draw enters his body (+0x448) and a few others
-// straight through these, without entryDLSetLight (param 2 in a pose: entered the same way)
+// straight through these, without entryDLSetLight
 extern "C" void hook_025E2E5C(Cpu* c) {
     const uint32_t model = c->r[3];
     f_025E2E5C_orig(c);
-    if (g_in_draw) entered(c, g_link_drawing, model, 2);
+    if (g_in_draw) entered(c, g_link_drawing, model);
 }
 extern "C" void f_025E2DE0_orig(Cpu* c);
 extern "C" void hook_025E2DE0(Cpu* c) {
     const uint32_t model = c->r[3];
     f_025E2DE0_orig(c);
-    if (g_in_draw) entered(c, g_link_drawing, model, 2);
+    if (g_in_draw) entered(c, g_link_drawing, model);
+}
+
+// J3DModel's entry of one material's shapes (027F583C): Link's draw enters his face (eyes, brows, mouth over his hair)
+// this way (before his body), into its own buffers; each puppet's copy of that model the same
+extern "C" void f_027F583C_orig(Cpu* c);
+extern "C" void hook_027F583C(Cpu* c) {
+    const uint32_t model = c->r[3], mat = c->r[4];
+    f_027F583C_orig(c);
+    const int k = g_in_draw ? index_of(model) : -1;
+    if (k < 0 || k >= 64) return;
+    const uint32_t r3 = c->r[3], r4 = c->r[4];
+    for (int i = 0; i < kPuppets; i++)
+        if (g_puppet[i].shown && g_models[k].twin[i])
+            for (const Model& m : g_puppet[i].pose.models)
+                if (m.k == k) c->r[3] = g_models[k].twin[i], c->r[4] = mat, f_027F583C_orig(c);
+    c->r[3] = r3, c->r[4] = r4;
 }
 
 // daPy_lk_c::draw: the pose taken; the puppets' models Link did not draw himself this time entered after him
@@ -373,4 +450,3 @@ extern "C" void hook_023D9820(Cpu* c) {
             for (const Model& m : g_puppet[i].pose.models) enter(c, link, i, m);
     c->r[3] = ret;
 }
-
