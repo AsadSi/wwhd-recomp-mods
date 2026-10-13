@@ -31,6 +31,9 @@ extern "C" uint64_t g_shader_state_gen;  // gx2_core.cpp: bumped by shader-relev
 #include <sys/stat.h>
 #include <unistd.h>
 #include <zlib.h>
+#if WWHD_FIXFRAME
+#include "fixframe_sdk.h"  // (namespace-level: its declarations must not land in gfx)
+#endif
 
 LatteDecompilerShader* FinishDecompiledShader(LatteDecompilerOutput_t& decompilerOutput);
 LatteFetchShader* LatteShaderRecompiler_createFetchShader(LatteFetchShader::CacheHash fsHash, uint32* contextRegister,
@@ -1567,8 +1570,176 @@ void report_skips() {
     g_stat_full_checks = g_stat_uploads = g_stat_invalidates = g_stat_invalidated_surfaces = g_stat_hashed_bytes = 0;
 }
 
+
+// Fixframe (render debugger, github.com/AsadSi/fixframe), built in with -DFIXFRAME_DIR and on with FIXFRAME=1: while
+// a capture is recorded, every draw the game asks for goes into it, drawn or skipped (with the g_skip reason), with
+// the state Metal draws it with. FF(...) code exists only in Fixframe builds.
+#if WWHD_FIXFRAME
+#define FF(...) __VA_ARGS__
+namespace ffhook {
+const bool g_on = [] { const char* e = getenv("FIXFRAME"); return e && atoi(e); }();
+
+std::string fmt(const char* f, ...) {
+    char b[256];
+    va_list a;
+    va_start(a, f);
+    vsnprintf(b, sizeof b, f, a);
+    va_end(a);
+    return b;
+}
+
+uint64_t texture(fixframe::Capture& c, const Surface* s) {
+    uint64_t id = (uint64_t)(uintptr_t)s;
+    if (!c.textures.count(id)) {
+        fixframe::Texture t;
+        t.id = id;
+        t.name = fmt("%08X%s", s->addr, s->isDepth ? " depth" : "");
+        t.format = fmt("GX2 %03X, MTL %lu", s->format, (unsigned long)s->tex.pixelFormat);
+        t.width = (uint32_t)s->tex.width, t.height = (uint32_t)s->tex.height, t.mips = s->mips, t.layers = s->slices;
+        c.textures[id] = t;
+    }
+    return id;
+}
+
+const char* kFactor[] = {"ZERO", "ONE", "SRC_COLOR", "ONE_MINUS_SRC_COLOR", "SRC_ALPHA", "ONE_MINUS_SRC_ALPHA", "DST_ALPHA",
+                         "ONE_MINUS_DST_ALPHA", "DST_COLOR", "ONE_MINUS_DST_COLOR", "SRC_ALPHA_SATURATE", "SRC_ALPHA",
+                         "ONE_MINUS_SRC_ALPHA", "CONSTANT_COLOR", "ONE_MINUS_CONSTANT_COLOR", "SRC1_COLOR",
+                         "ONE_MINUS_SRC1_COLOR", "SRC1_ALPHA", "ONE_MINUS_SRC1_ALPHA", "CONSTANT_ALPHA", "ONE_MINUS_CONSTANT_ALPHA"};
+const char* kOp[] = {"ADD", "SUBTRACT", "MIN", "MAX", "REVERSE_SUBTRACT"};
+const char* kCompare[] = {"NEVER", "LESS", "EQUAL", "LESS_OR_EQUAL", "GREATER", "NOT_EQUAL", "GREATER_OR_EQUAL", "ALWAYS"};
+const char* factor(uint32_t f) { return f < 21 ? kFactor[f] : "ONE"; }
+const char* op(uint32_t f) { return f < 5 ? kOp[f] : "ADD"; }
+
+// A stage's uniforms as bind_stage() hands them to the shader: "<n> vec4, hash <h>: <the first few>".
+std::string uniforms(const uint32_t* regs, const Shader* sh, bool vertex) {
+    if (!sh || !sh->dec) return "?";
+    const LatteDecompilerShader* dec = sh->dec;
+    uint32_t aluBase = mmSQ_ALU_CONSTANT0_0 + (vertex ? 0x400 : 0);
+    uint32_t blockBase = vertex ? mmSQ_VTX_UNIFORM_BLOCK_START : mmSQ_PS_UNIFORM_BLOCK_START;
+    std::vector<float> v;
+    auto add = [&](const void* p) { v.insert(v.end(), (const float*)p, (const float*)p + 4); };
+    for (auto& e : dec->list_remappedUniformEntries_register) add(&regs[aluBase + e.indexOffset / 4]);
+    for (auto& g : dec->list_remappedUniformEntries_bufferGroups)
+        if (uint32_t addr = regs[blockBase + g.kcacheBankIdOffset / 4])
+            for (auto& e : g.entries) add(mem::ptr(addr + e.indexOffset));
+    if (v.empty()) return "none";
+    std::string out = fmt("%zu vec4, hash %016llx:", v.size() / 4, (unsigned long long)hash_bytes(v.data(), v.size() * 4));
+    for (size_t i = 0; i < v.size() && i < 8; i++) out += fmt(" %g", v[i]);
+    return v.size() > 8 ? out + " ..." : out;
+}
+
+// One draw, recorded as draw() goes and committed when it returns (whichever return).
+struct DrawRec {
+    const uint32_t* regs;
+    uint32_t prim, count, instances, indexType;
+    bool active, hires;
+    const char *skipped = nullptr, *note = nullptr;
+    Shader *vs = nullptr, *ps = nullptr;
+    Surface* colors[8] = {};
+    Surface* depth = nullptr;
+    struct Tex { bool vertex; uint8_t unit; Surface* s; };
+    std::vector<Tex> textures;
+
+    DrawRec(const uint32_t* r, uint32_t p, uint32_t c, uint32_t i, uint32_t it)
+        : regs(r), prim(p), count(c), instances(i), indexType(it), active(g_on && fixframe::sdk::capturing()), hires(g_hires_redraw) {}
+    ~DrawRec() {
+        if (active) commit();
+    }
+
+    void commit() {
+        using namespace fixframe;
+        Capture& c = *sdk::capture();
+        Draw d;
+        d.kind = indexType ? "indexed" : "draw";
+        d.count = count, d.instances = instances;
+        d.label = hires ? "hi-res redraw" : "";
+        if (skipped) d.skipped = skipped;
+        if (note) d.dynamic.push_back({"renderer note", note});
+        uint32_t vsAddr = regs[mmSQ_PGM_START_VS] << 8, psAddr = regs[mmSQ_PGM_START_PS] << 8;
+        auto p = std::make_shared<Program>();
+        p->name = fmt("VS %08X, PS %08X", vsAddr, psAddr);
+        p->shaders.push_back({"vertex", fmt("vs_%08X", vsAddr), vs ? vs->key : 0, 0});
+        p->shaders.push_back({"fragment", fmt("ps_%08X", psAddr), ps ? ps->key : 0, 0});
+        // the state as Metal draws it (get_pipeline, get_depth_state, the rasterizer settings in draw())
+        auto& st = p->state;
+        st.push_back({"primitive", fmt("%X", prim)});
+        LATTE_PA_SU_SC_MODE_CNTL pm;
+        uint32_t pmr = regs[REGADDR::PA_SU_SC_MODE_CNTL];
+        memcpy(&pm, &pmr, 4);
+        st.push_back({"cull", pm.get_CULL_FRONT() && pm.get_CULL_BACK() ? "FRONT_AND_BACK" : pm.get_CULL_FRONT() ? "FRONT"
+                              : pm.get_CULL_BACK() ? "BACK" : "NONE"});
+        st.push_back({"front face", pm.get_FRONT_FACE() == LATTE_PA_SU_SC_MODE_CNTL::E_FRONTFACE::CCW ? "COUNTER_CLOCKWISE" : "CLOCKWISE"});
+        st.push_back({"depth bias", pm.get_OFFSET_FRONT_ENABLED() ? "on" : "off"});
+        LATTE_DB_DEPTH_CONTROL dc;
+        uint32_t dcr = regs[REGADDR::DB_DEPTH_CONTROL];
+        memcpy(&dc, &dcr, 4);
+        bool z = depth && dc.get_Z_ENABLE();
+        st.push_back({"depth test", z ? "on" : "off"});
+        st.push_back({"depth write", z && dc.get_Z_WRITE_ENABLE() ? "on" : "off"});
+        if (z) st.push_back({"depth compare", kCompare[(uint32_t)dc.get_Z_FUNC() & 7]});
+        st.push_back({"stencil test", depth && dc.get_STENCIL_ENABLE() ? "on" : "off"});
+        uint32_t blendMask = (regs[REGADDR::CB_COLOR_CONTROL] >> 8) & 0xFF, targetMask = regs[REGADDR::CB_TARGET_MASK];
+        for (int i = 0; i < 8; i++) {
+            if (!colors[i]) continue;
+            std::string blend = "off";
+            if ((blendMask & (1 << i)) && colors[i]->fmt.kind == FormatInfo::FLOAT) {
+                LATTE_CB_BLENDN_CONTROL b;
+                uint32_t raw = regs[REGADDR::CB_BLEND0_CONTROL + i];
+                memcpy(&b, &raw, 4);
+                uint32_t cs = (uint32_t)b.get_COLOR_SRCBLEND(), cd = (uint32_t)b.get_COLOR_DSTBLEND(), co = (uint32_t)b.get_COLOR_COMB_FCN();
+                bool sep = b.get_SEPARATE_ALPHA_BLEND();
+                uint32_t as = sep ? (uint32_t)b.get_ALPHA_SRCBLEND() : cs, ad = sep ? (uint32_t)b.get_ALPHA_DSTBLEND() : cd,
+                         ao = sep ? (uint32_t)b.get_ALPHA_COMB_FCN() : co;
+                blend = fmt("color %s %s %s, alpha %s %s %s", factor(cs), op(co), factor(cd), factor(as), op(ao), factor(ad));
+            }
+            uint32_t m = (targetMask >> (4 * i)) & 0xF;
+            st.push_back({fmt("blend %d", i), blend});
+            st.push_back({fmt("write mask %d", i), m ? fmt("%s%s%s%s", m & 1 ? "R" : "", m & 2 ? "G" : "", m & 4 ? "B" : "", m & 8 ? "A" : "") : "none"});
+        }
+        uint32_t at = regs[REGADDR::SX_ALPHA_TEST_CONTROL];
+        st.push_back({"alpha test", at & 8 ? fmt("%s %g", kCompare[at & 7], gx2::bitsf(regs[REGADDR::SX_ALPHA_REF])) : "off"});
+        uint64_t parts[] = {vs ? vs->key : vsAddr, ps ? ps->key : psAddr, prim, pmr, dcr, regs[REGADDR::CB_COLOR_CONTROL], targetMask, at};
+        p->id = hash_bytes(parts, sizeof parts);
+        d.program = p;
+        // where it draws
+        Pass pass;
+        for (Surface* s : colors)
+            if (s) {
+                pass.colors.push_back(texture(c, s));
+                if (!pass.width) pass.width = (uint32_t)s->tex.width, pass.height = (uint32_t)s->tex.height;
+            }
+        if (depth) {
+            pass.depth = texture(c, depth);
+            if (!pass.width) pass.width = (uint32_t)depth->tex.width, pass.height = (uint32_t)depth->tex.height;
+        }
+        if (pass.width) d.pass = sdk::pass(pass);
+        for (const Tex& t : textures)
+            if (t.s) d.textures.push_back({fmt("%s unit %u", t.vertex ? "vertex" : "fragment", t.unit), std::to_string(texture(c, t.s))});
+        d.dynamic.push_back({"vertex uniforms", uniforms(regs, vs, true)});
+        d.dynamic.push_back({"fragment uniforms", uniforms(regs, ps, false)});
+        float xs = gx2::bitsf(regs[REGADDR::PA_CL_VPORT_XSCALE]), xo = gx2::bitsf(regs[REGADDR::PA_CL_VPORT_XOFFSET]);
+        float ys = gx2::bitsf(regs[REGADDR::PA_CL_VPORT_YSCALE]), yo = gx2::bitsf(regs[REGADDR::PA_CL_VPORT_YOFFSET]);
+        d.dynamic.push_back({"viewport", fmt("%g %g %g x %g", xo - xs, yo + ys, xs * 2, ys * -2)});
+        uint32_t tl = regs[REGADDR::PA_SC_GENERIC_SCISSOR_TL], br = regs[REGADDR::PA_SC_GENERIC_SCISSOR_BR];
+        d.dynamic.push_back({"scissor", fmt("%u %u %u x %u", tl & 0x7FFF, (tl >> 16) & 0x7FFF, (br & 0x7FFF) - (tl & 0x7FFF),
+                                             ((br >> 16) & 0x7FFF) - ((tl >> 16) & 0x7FFF))});
+        uint64_t key[] = {vsAddr, psAddr, count, instances};
+        d.key = hash_bytes(key, sizeof key);
+        c.draws.push_back(std::move(d));
+    }
+};
+}  // namespace ffhook
+#define FF_SKIP(k) (ff.skipped = kSkipNames[k], g_skip[k]++)
+#define FF_NOTE(k) (ff.note = kSkipNames[k], g_skip[k]++)  // drawn, without something
+#else
+#define FF(...)
+#define FF_SKIP(k) (g_skip[k]++)
+#define FF_NOTE(k) (g_skip[k]++)
+#endif
+
 void draw(const uint32_t* regs, uint32_t prim, uint32_t count, uint32_t indexType, uint32_t indexAddr, uint32_t baseVertex,
           uint32_t instances) {
+    FF(ffhook::DrawRec ff(regs, prim, count, instances, indexType);)
     static bool cacheLoaded = (cache_load(), true);
     (void)cacheLoaded;
     R.drawCount++;
@@ -1580,13 +1751,13 @@ void draw(const uint32_t* regs, uint32_t prim, uint32_t count, uint32_t indexTyp
          regs[REGADDR::CB_TARGET_MASK]);
     if (!count || !instances) return;
     ((uint32_t*)regs)[REGADDR::VGT_PRIMITIVE_TYPE] = prim;
-    if (regs[REGADDR::VGT_GS_MODE] & 3) { g_skip[SK_GS]++; return; }  // geometry shaders: not supported yet
-    if (regs[REGADDR::PA_CL_CLIP_CNTL] & (1 << 22)) { g_skip[SK_RASTER_KILL]++; return; }  // rasterization disabled
+    if (regs[REGADDR::VGT_GS_MODE] & 3) { FF_SKIP(SK_GS); return; }  // geometry shaders: not supported yet
+    if (regs[REGADDR::PA_CL_CLIP_CNTL] & (1 << 22)) { FF_SKIP(SK_RASTER_KILL); return; }  // rasterization disabled
 
     uint64_t fsKey = 0;
     LatteFetchShader* fs = get_fetch_shader(regs, &fsKey);
     if (!fs) {
-        if (g_skip[SK_NO_FETCH]++ < 5) {
+        if (FF_SKIP(SK_NO_FETCH) < 5) {
             uint32_t prog = regs[mmSQ_PGM_START_FS] << 8;
             LOG("[gfx] no fetch shader: FS=%08X size=%X words %08X %08X %08X %08X", prog, regs[mmSQ_PGM_START_FS + 1] << 3,
                 prog ? ld32(prog) : 0, prog ? ld32(prog + 4) : 0, prog ? ld32(prog + 8) : 0, prog ? ld32(prog + 12) : 0);
@@ -1595,7 +1766,8 @@ void draw(const uint32_t* regs, uint32_t prim, uint32_t count, uint32_t indexTyp
     }
     Shader* vs = get_shader(regs, true, fs, fsKey);
     Shader* ps = get_shader(regs, false, fs, fsKey);
-    if (!vs || !ps || !vs->dec || !ps->dec) { g_skip[SK_NO_SHADER]++; return; }  // translation failed
+    FF(ff.vs = vs; ff.ps = ps;)
+    if (!vs || !ps || !vs->dec || !ps->dec) { FF_SKIP(SK_NO_SHADER); return; }  // translation failed
     // must this draw run even if its compile takes longer than the budget? (see wait_compiled)
     const LatteContextRegister& lcr = *(const LatteContextRegister*)regs;
     uint8_t mask = LatteMRT::GetActiveColorBufferMask(ps->dec, lcr);
@@ -1613,11 +1785,11 @@ void draw(const uint32_t* regs, uint32_t prim, uint32_t count, uint32_t indexTyp
     struct MustRunReset { ~MustRunReset() { g_draw_must_run = false; } } mustRunReset;
     retry_failed_compile(vs, g_draw_must_run);
     retry_failed_compile(ps, g_draw_must_run);
-    if (vs->state == CS_FAILED || ps->state == CS_FAILED) { g_skip[SK_NO_SHADER]++; return; }
+    if (vs->state == CS_FAILED || ps->state == CS_FAILED) { FF_SKIP(SK_NO_SHADER); return; }
     compile_deferred(vs);
     compile_deferred(ps);
     if (!wait_compiled(vs->state) || !wait_compiled(ps->state)) {
-        g_skip[SK_COMPILING]++;
+        FF_SKIP(SK_COMPILING);
         return;
     }
     rprof::mark(rprof::kShader);
@@ -1642,11 +1814,12 @@ void draw(const uint32_t* regs, uint32_t prim, uint32_t count, uint32_t indexTyp
     float kx = 1.0f, ky = 1.0f;
     for (auto* c : colors)
         if (c) { w = (uint32_t)c->tex.width; h = (uint32_t)c->tex.height; kx = c->sx; ky = c->sy; break; }
-    if (depth && w && (depth->tex.width < w || depth->tex.height < h)) { depth = nullptr; g_skip[SK_DROPPED_DEPTH]++; }
+    if (depth && w && (depth->tex.width < w || depth->tex.height < h)) { depth = nullptr; FF_NOTE(SK_DROPPED_DEPTH); }
     if (!w && depth) { w = (uint32_t)depth->tex.width; h = (uint32_t)depth->tex.height; kx = depth->sx; ky = depth->sy; }
     for (auto& c : colors)
-        if (c && (c->tex.width != w || c->tex.height != h)) { c = nullptr; g_skip[SK_DROPPED_COLOR]++; }
-    if (!w) { g_skip[SK_NO_TARGET]++; return; }
+        if (c && (c->tex.width != w || c->tex.height != h)) { c = nullptr; FF_NOTE(SK_DROPPED_COLOR); }
+    FF(std::copy(colors, colors + 8, ff.colors); ff.depth = depth;)
+    if (!w) { FF_SKIP(SK_NO_TARGET); return; }
     if (g_hires_redraw && guestW) {  // the viewport registers describe the game's smaller buffer
         kx = (float)colors[0]->tex.width / guestW;
         ky = (float)colors[0]->tex.height / guestH;  // differs from kx at other aspect ratios
@@ -1658,7 +1831,7 @@ void draw(const uint32_t* regs, uint32_t prim, uint32_t count, uint32_t indexTyp
     // textures must be uploaded before the render encoder opens
     static std::vector<uint32_t> indices;  // render thread only; keeps its capacity between draws
     MTLPrimitiveType ptype;
-    if (!build_indices(prim, count, indexType, indexAddr, indices, ptype)) { g_skip[SK_PRIM]++; return; }
+    if (!build_indices(prim, count, indexType, indexAddr, indices, ptype)) { FF_SKIP(SK_PRIM); return; }
     rprof::mark(rprof::kIndices);
     for (Shader* sh : {vs, ps}) {
         uint32_t texBase = sh == vs ? REGADDR::SQ_TEX_RESOURCE_WORD0_N_VS : REGADDR::SQ_TEX_RESOURCE_WORD0_N_PS;
@@ -1666,18 +1839,19 @@ void draw(const uint32_t* regs, uint32_t prim, uint32_t count, uint32_t indexTyp
             uint8_t unit = sh->dec->textureUnitList[u];
             Surface* s = sampled_texture(&regs[texBase + unit * 7], sh->dec->textureUsesDepthCompare[unit]);
             (void)s;
+            FF(ff.textures.push_back({sh == vs, unit, s});)
         }
     }
 
     rprof::mark(rprof::kTextures);
-    if (!ensure_pass(colors, colorSlices, depth, depthSlice)) { g_skip[SK_PASS]++; return; }
+    if (!ensure_pass(colors, colorSlices, depth, depthSlice)) { FF_SKIP(SK_PASS); return; }
     rprof::mark(rprof::kPass);
     TargetFormats tf;
     for (int i = 0; i < 8; i++)
         if (colors[i]) tf.color[i] = colors[i]->format;
     if (depth) tf.depth = depth->format;
     id<MTLRenderPipelineState> pipe = get_pipeline(regs, vs, ps, fs, fsKey, tf);
-    if (!pipe) { g_skip[SK_PIPE_COMPILING]++; return; }
+    if (!pipe) { FF_SKIP(SK_PIPE_COMPILING); return; }
     rprof::mark(rprof::kPipeline);
     id<MTLRenderCommandEncoder> enc = R.enc;
     [enc setRenderPipelineState:pipe];
@@ -1696,7 +1870,7 @@ void draw(const uint32_t* regs, uint32_t prim, uint32_t count, uint32_t indexTyp
     uint32_t pmr = regs[REGADDR::PA_SU_SC_MODE_CNTL];
     memcpy(&pm, &pmr, 4);
     bool cf = pm.get_CULL_FRONT(), cb = pm.get_CULL_BACK();
-    if (cf && cb) { g_skip[SK_CULL]++; return; }
+    if (cf && cb) { FF_SKIP(SK_CULL); return; }
     [enc setCullMode:cf ? MTLCullModeFront : cb ? MTLCullModeBack : MTLCullModeNone];
     [enc setFrontFacingWinding:pm.get_FRONT_FACE() == LATTE_PA_SU_SC_MODE_CNTL::E_FRONTFACE::CCW ? MTLWindingCounterClockwise
                                                                                                   : MTLWindingClockwise];
@@ -1731,7 +1905,7 @@ void draw(const uint32_t* regs, uint32_t prim, uint32_t count, uint32_t indexTyp
     float ax, ay;
     if (aspect::content_clip() && target_aspect_factors(regs[mmCB_COLOR0_TILE] & 0xFFFF, regs[mmCB_COLOR0_FRAG], ax, ay))
         aspect::panes::clip(w, h, ax, ay, sx, sy, ex, ey);
-    if (ex <= sx || ey <= sy) { g_skip[SK_SCISSOR]++; return; }
+    if (ex <= sx || ey <= sy) { FF_SKIP(SK_SCISSOR); return; }
     [enc setScissorRect:MTLScissorRect{sx, sy, ex - sx, ey - sy}];
     rprof::mark(rprof::kRecord);
     rprof::UploadKind vertexUploads(rprof::kUpVertex);

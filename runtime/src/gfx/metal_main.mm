@@ -12,6 +12,9 @@
 #include "metal.h"
 #include "runtime.h"
 #include "input.h"
+#if WWHD_FIXFRAME
+#include "fixframe_sdk.h"  // (namespace-level: its declarations must not land in gfx)
+#endif
 
 // gameplay mods (runtime/src/mods): HUD drawn into the TV image
 namespace mods { void draw_overlay(id<MTLCommandBuffer> cmd, id<MTLTexture> tex); }
@@ -449,12 +452,63 @@ uint64_t frames_completed() { return g_frames_completed; }
 
 void cache_warm_step();
 
+#if WWHD_FIXFRAME
+// Fixframe (FIXFRAME=1; metal_draw.mm reports the draws): the end of each frame; a finished capture gets the TV
+// image, read back at once (captures are rare, a stall is fine).
+static std::string fixframe_tv_png() {
+    id<MTLTexture> src = R.tv.tex;
+    if (!src) return {};
+    MTLPixelFormat pf = src.pixelFormat;
+    bool rgba8 = pf == MTLPixelFormatRGBA8Unorm || pf == MTLPixelFormatRGBA8Unorm_sRGB;
+    bool bgra8 = pf == MTLPixelFormatBGRA8Unorm || pf == MTLPixelFormatBGRA8Unorm_sRGB;
+    bool rgb10 = pf == MTLPixelFormatRGB10A2Unorm;
+    if (!rgba8 && !bgra8 && !rgb10) return {};
+    uint32_t w = (uint32_t)src.width, h = (uint32_t)src.height;
+    MTLTextureDescriptor* d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pf width:w height:h mipmapped:NO];
+    d.storageMode = MTLStorageModeShared;
+    id<MTLTexture> t = [R.device newTextureWithDescriptor:d];
+    end_encoder();
+    id<MTLBlitCommandEncoder> b = [command_buffer() blitCommandEncoder];
+    [b copyFromTexture:src sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(w, h, 1)
+             toTexture:t destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
+    [b endEncoding];
+    wait_idle();
+    std::vector<uint8_t> px((size_t)w * h * 4);
+    [t getBytes:px.data() bytesPerRow:w * 4 fromRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:0];
+    for (size_t i = 0; i < (size_t)w * h; i++) {
+        uint8_t* o = &px[i * 4];
+        if (bgra8) std::swap(o[0], o[2]);
+        if (rgb10) {
+            uint32_t v;
+            memcpy(&v, o, 4);
+            o[0] = (v & 0x3FF) >> 2, o[1] = ((v >> 10) & 0x3FF) >> 2, o[2] = ((v >> 20) & 0x3FF) >> 2;
+        }
+        o[3] = 255;
+    }
+    return fixframe::core::png(px.data(), w, h);
+}
+
+static void fixframe_frame_end() {
+    static const bool on = [] { const char* e = getenv("FIXFRAME"); return e && atoi(e); }();
+    if (!on) return;
+    static bool started = (fixframe::sdk::start("Wind Waker HD", R.device.name.UTF8String, "Metal, Fixframe SDK"), true);
+    (void)started;
+    static uint64_t lastDraws = 0;
+    uint32_t draws = (uint32_t)(R.drawCount - lastDraws);
+    lastDraws = R.drawCount;
+    fixframe::sdk::frame_end(R.frame, draws, fixframe_tv_png);
+}
+#endif
+
 void swap() {
     cache_warm_step();
     static bool sync_gpu = getenv("WWHD_SYNC_GPU") != nullptr;  // debug: no CPU/GPU overlap
     if (sync_gpu) wait_idle();
     end_encoder();
     if (log_this_frame()) LOG("[frame] end %llu", (unsigned long long)R.frame);
+#if WWHD_FIXFRAME
+    fixframe_frame_end();
+#endif
     R.frame++;
     latch_res_scale();
     if (g_dump_frames.count(R.frame)) dump_tv(R.frame);
