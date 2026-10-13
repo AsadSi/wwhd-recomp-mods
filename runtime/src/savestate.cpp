@@ -1272,6 +1272,19 @@ void request_load_portable_file(const std::string& path) {
     g_pload = PendingPortable{s, slot, path};
 }
 
+bool capture_portable_text(Cpu* c, std::string& out, std::string& why) {
+    pstate::State s;
+    bool retry;
+    if (!gameplay_ready(why, retry) || !player_has_control(c, why) || !capture_portable(c, s, why)) return false;
+    out = pstate::write(s, why);
+    return !out.empty();
+}
+
+void request_load_portable(std::shared_ptr<pstate::State> s) {
+    std::lock_guard<std::mutex> lk(g_mu);
+    g_pload = PendingPortable{std::move(s), 0, ""};
+}
+
 void request_load(int slot) {
     if ((slot < 1 || slot > kSlots) && !is_auto(slot)) return;
     if (!is_auto(slot) && newer_is_portable(slot)) {

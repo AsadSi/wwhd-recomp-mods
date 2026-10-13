@@ -35,6 +35,7 @@
 #include "guest_addr.h"
 #include "mods.h"
 #include "coop_pose.h"
+#include "coop_sync.h"
 #include "darknut.h"
 #include "shadow_beast.h"
 #include "../gx2/gx2.h"
@@ -675,7 +676,9 @@ const std::vector<Mod>& catalogue() {
          "Sea: in the open water, or on an island's shore.", {}, true},
         {"coop", "Online co-op", "Online",
          "Play with friends: one hosts their game, the others join it over the internet (Tailscale) or the local network "
-         "and are drawn as Link in their own tunic colour. Work in progress (docs/multiplayer.md).", {}},
+         "and play in the host's world, drawn as Link: on Tetra's ship together, the same sea events and monsters. A guest's "
+         "own Quest Logs are never saved to; when the host leaves, the guest goes back to the title screen. Both need the "
+         "same build of the game. Work in progress (docs/multiplayer.md).", {"Host", "Join"}},
         {"tp-darknuts", "Twilight Princess Darknuts", "Gameplay",
          "Every Darknut is Twilight Princess's: its armour and two swords, its moves (the cut, the overhead slam, the "
          "shield bash), a piece of armour flying off each time you hurt it, and once its armour is gone the leap back, "
@@ -1349,6 +1352,7 @@ void second_gunner(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, const Gun*
 
 // ---- the game thread, once per full logic step ----
 void step(Cpu* c) {
+    mods::coop::sync::poll(c, on<kCoop>());  // (at the title too: the session's messages)
     bool keys[256];
     input::held_keys(keys);
     static bool turbo = false;
@@ -1710,6 +1714,7 @@ void step(Cpu* c) {
     darknut::replace_all(on<kTpDarknuts>());
     darknut::step(c, link);
     coop::step(c, link, on<kCoop>());
+    coop::sync::step(c, link, hull);
     // Leviathan: one Gyorg (made as the others are, a child of the Haunted sea's GyCtrl, which is made here too if
     // needed) at 8x: setMtx (0216731C) copies the actor's scale (+0x330) into its model each execute, its spheres are
     // sized through the SetR hooks (g_big_hits) but its body collider's radius (+0x9B4) is a plain store each execute,

@@ -58,3 +58,4 @@
 023D9820  # daPy_lk_c::draw: the puppets' models Link did not draw himself, after him
 025E2E5C  # mDoExt_modelEntryDL: Link's body, entered straight (his pose)
 025E2DE0  # mDoExt_modelUpdateDL: the same
+025202F8  # dComIfG_resetToOpening (mods/coop_sync.cpp): a guest's way back to the title

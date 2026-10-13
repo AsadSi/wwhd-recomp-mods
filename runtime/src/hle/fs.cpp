@@ -5,6 +5,7 @@
 //   /vol/save/...     -> <save dir>/...
 #include "../platform/filesystem.h"
 
+#include <atomic>
 #include <cstdio>
 #ifndef _WIN32
 #include <strings.h>
@@ -18,6 +19,8 @@
 #include "../mods/content.h"
 #include "../game_languages.h"
 #include "../rtl_text.h"
+
+namespace hlefs { std::atomic<bool> g_block_saves{false}; }  // online co-op's guest: the host saves (mods/coop_sync.cpp)
 
 namespace {
 
@@ -140,6 +143,17 @@ void fill_stat(uint32_t out, const struct stat& st) {
 
 int32_t open_file(const std::string& gpath, const std::string& mode, uint32_t out_handle) {
     std::string hp = read_path(gpath,mode);
+    // a guest in someone's game writes no save: the game's writes go to a file of nobody's, as if they were made
+    if (hlefs::g_block_saves && gpath.rfind("/vol/save", 0) == 0 && mode.find_first_of("wa+") != std::string::npos) {
+        FILE* f = tmpfile();
+        if (!f) return FS_NOT_FOUND;
+        TRACE("[fs] open %s (%s): co-op guest, not saved", gpath.c_str(), mode.c_str());
+        std::lock_guard<std::mutex> lk(g_fs_mutex);
+        const uint32_t h = g_next_handle++;
+        g_files[h] = {f, gpath, mode};
+        st32(out_handle, h);
+        return FS_OK;
+    }
     if (mode.find_first_of("wa") != std::string::npos) make_parent_dirs(hp);
     std::string m = mode;
     if (m.find('b') == std::string::npos) m += "b";

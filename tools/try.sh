@@ -6,7 +6,10 @@ set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 # a game of this repo already running (by its working directory; other repos' games, e.g. tphd-recomp's, don't count)
 ours() { for p in $(pgrep -x wwhd); do [ "$(lsof -a -p "$p" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')" = "$ROOT" ] && return 0; done; return 1; }
-ours && { echo "The game is already running; close it first."; exit 1; }
+[ -n "${SECOND:-}" ] || ! ours || { echo "The game is already running; close it first."; exit 1; }
+# a second copy alongside (tools/duo.sh): TAG names its live pad, screenshots, trace and user folder; SAVE its save folder
+T="${TAG:+-$TAG}"
+[ -n "${TAG:-}" ] && export WWHD_USER_DIR="$ROOT/build/try/user$T"
 [ -f "$ROOT/save/haunted.wwstate" ] || { echo "save/haunted.wwstate is missing."; exit 1; }
 SPOOKY=(NIGHT_DEAD HAUNTED_SEA STORM FOG GIANT_SEAHATS PHANTOM_GANON HORROR_AUDIO DEEP LEVIATHAN MOLGERA PHANTOM_STALKER BIG_SHIP BEEDLE_SHIP
         DEAD_CALM PHOTO_MODE SECOND_GUNNER BLOOD_MOON CYCLONES MAELSTROM ARMADA BIG_OCTO WRONG_LION DROWNED BOARDING TIME
@@ -149,6 +152,7 @@ The tour's second half, at night: armada (with boarding) at 0:30, calm 3:00, Big
 cyclone 11:40, blood moon 14:30." ;;
   beedle-bosses) ON=(BEEDLE_SHIP MOLGERA PHANTOM_GANON); EVENT="molgera@+40;phantom@+45"; export WWHD_MOD_PHANTOM_GANON_CHOICE=1; NOTE="$BEEDLE
 Molgera and Titanic Phantom Ganon together from about 40 s: fight them from its deck or from the boat's cannon." ;;
+  coop) ON=(BIG_SHIP); export WWHD_MOD_COOP=1 WWHD_TEST_SHIP_OWNED=1 WWHD_COOP_SHOT="$ROOT/build/try/shot$T.now"; NOTE="Online co-op (tools/duo.sh starts a host and a guest): $SHIP" ;;
   coop-record|coop-ghost) export WWHD_MOD_COOP=${COOP:-1} WWHD_TEST_STAGE="${STAGE:-sea 11 0}" WWHD_COOP_SHOT="$ROOT/build/try/shot.now"
   POSE="${POSE:-$ROOT/build/try/coop.pose}"
   if [ "$1" = coop-record ]; then export WWHD_COOP_RECORD="$POSE"; NOTE="Online co-op test: set down on Windfall on foot; every step Link's pose goes to $POSE."
@@ -196,7 +200,7 @@ Everything at once. The first minute is yours: get on the deck, try the helm and
   OFTEN=2; NOTE="$SHIP
 The long soak, played: every spooky mod on, How often at Often, nothing forced. Sail out into open sea (away from
 islands) and keep going; the events come by chance, a roll a minute (none within reach of an island). Play as you like." ;;
-  *) echo "Usage: tools/try.sh <seamless|windfall|stalker|darknut|tp-darknuts|buy-ship|helm|cabin|beedle-shop|helmaroc|octo-phantom|chaos|full|raft|shop|raft-bosses|tour|tour-rest|long|beedle|beedle-guns|gunner|crew|boarding|drowned|calm|photo|blood|cyclone|maelstrom|armada|octo|lion|soak|plain|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim|cannon-boat|cannon-boat-deck|coop-record|coop-ghost>"; exit 2 ;;
+  *) echo "Usage: tools/try.sh <seamless|windfall|stalker|darknut|tp-darknuts|buy-ship|helm|cabin|beedle-shop|helmaroc|octo-phantom|chaos|full|raft|shop|raft-bosses|tour|tour-rest|long|beedle|beedle-guns|gunner|crew|boarding|drowned|calm|photo|blood|cyclone|maelstrom|armada|octo|lion|soak|plain|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim|cannon-boat|cannon-boat-deck|coop|coop-record|coop-ghost>"; exit 2 ;;
 esac
 for m in "${SPOOKY[@]}"; do export WWHD_MOD_$m=0; done
 export WWHD_MOD_TURBO=1  # hold T to fast-forward (Claude: live pad bit 28)
@@ -207,17 +211,17 @@ for m in ${ON[@]+"${ON[@]}"}; do export WWHD_MOD_$m=1; [ -n "${OFTEN:-}" ] && ex
 [ -n "$EVENT" ] && export WWHD_SPOOKY="$EVENT${EXTRA_EVENT:+;$EXTRA_EVENT}"  # (EXTRA_EVENT: more, e.g. "end-armada@+60")
 echo "$NOTE"
 echo
-TRACE="$ROOT/build/try/${1}-$(date +%H%M%S).txt"; mkdir -p "$ROOT/build/try"
+TRACE="$ROOT/build/try/${1}$T-$(date +%H%M%S).txt"; mkdir -p "$ROOT/build/try"
 echo "It goes straight to the state by itself (no need to press anything at the title). Trace: $TRACE"
-: > "$ROOT/build/try/pad.txt"  # Claude can drive the game live through it: "<buttons hex> <lx> <ly> [<rx> <ry>]"
+: > "$ROOT/build/try/pad$T.txt"  # Claude can drive the game live through it: "<buttons hex> <lx> <ly> [<rx> <ry>]"
 # straight into the state: A pressed through the title and onto Quest Log 1 (as the audit routes do; the state loads
 # once a Quest Log is played)
 SKIP="WWHD_TEST_ORIGIN=1 WWHD_TEST_PRESS=2-2.15:8000,2.5-2.65:8000,3-3.15:8000,3.5-3.65:8000,4-4.15:8000,4.5-4.65:8000,5-5.15:8000,5.5-5.65:8000,6-6.15:8000,6.5-6.65:8000,7-7.15:8000,7.5-7.65:8000,8-8.15:8000,8.5-8.65:8000,9-9.15:8000,9.5-9.65:8000,10-10.15:8000,10.5-10.65:8000,11-11.15:8000,11.5-11.65:8000,12-12.15:8000"  # (every 0.5 s: each screen moves on as soon as it takes A)
-mkdir -p "$ROOT/build/try/shots"
+mkdir -p "$ROOT/build/try/shots$T"
 # RECORD=1 (chaos, full; or set it yourself): a screenshot every 3 s, shrunk into build/try/rec-<run>/ (tools/rec.sh)
 if [ -n "${RECORD:-}" ]; then
-  export WWHD_TEST_SHOT_EVERY=3; rm -f "$ROOT"/build/try/shots/*.png
-  (sleep 5; "$ROOT/tools/rec.sh" "$ROOT/build/try/shots" "${TRACE%.txt}-rec") &
+  export WWHD_TEST_SHOT_EVERY=3; rm -f "$ROOT"/build/try/shots$T/*.png
+  (sleep 5; "$ROOT/tools/rec.sh" "$ROOT/build/try/shots$T" "${TRACE%.txt}-rec") &
   echo "Recording: ${TRACE%.txt}-rec/"
 fi
-cd "$ROOT" && env $EXTRA $SKIP WWHD_SCREENSHOT_DIR="$ROOT/build/try/shots" WWHD_LIVE_PAD="$ROOT/build/try/pad.txt" WWHD_PORTABLE_LOAD="$ROOT/save/haunted.wwstate" WWHD_MODS_TRACE="$TRACE" ./build/cmake/wwhd
+cd "$ROOT" && env $EXTRA ${MORE:-} $SKIP WWHD_SCREENSHOT_DIR="$ROOT/build/try/shots$T" WWHD_LIVE_PAD="$ROOT/build/try/pad$T.txt" WWHD_PORTABLE_LOAD="$ROOT/save/haunted.wwstate" WWHD_MODS_TRACE="$TRACE" ./build/cmake/wwhd ${SAVE:+--save "$SAVE"}

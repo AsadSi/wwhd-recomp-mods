@@ -41,6 +41,7 @@ namespace gfxvk { bool buffer_cache_enabled(); }  // gfx/vulkan/buffer_cache.h
 #include "../input.h"
 #include "../input_map.h"
 #include "../mods/climb.h"
+#include "../mods/coop_sync.h"
 #include "../mods/extras.h"
 #include "../mods/mods.h"
 #include "../mods/manager.h"
@@ -1109,6 +1110,38 @@ void tab_mods() {
                     if (i) ImGui::SameLine();
                     if (radio(x->choices[i].c_str(), mods::extras::choice(x->id) == i))
                         hostui::post([id = x->id, i] { mods::extras::set_choice(id, i); hostui::set(("mod." + id + ".choice").c_str(), std::to_string(i)); });
+                }
+                if (x->id == "coop") {  // online co-op: the host's address (joining), port, name, tunic, and how it goes
+                    namespace cs = mods::coop::sync;
+                    static cs::Settings set = cs::settings();
+                    static char addr[128], name[32];
+                    static const bool filled = (snprintf(addr, sizeof addr, "%s", set.addr.c_str()), snprintf(name, sizeof name, "%s", set.name.c_str()), true);
+                    (void)filled;
+                    auto done = [] { return ImGui::IsItemDeactivatedAfterEdit(); };
+                    bool changed = false;
+                    if (mods::extras::choice("coop") == 1) {
+                        ImGui::InputText("Host address", addr, sizeof addr);
+                        changed |= done();
+                    }
+                    ImGui::InputInt("Port", &set.port, 0);
+                    changed |= done();
+                    ImGui::InputText("Your name", name, sizeof name);
+                    changed |= done();
+                    ImGui::TextUnformatted("Tunic");
+                    for (int i = 0; i < 4; ++i) {
+                        ImGui::SameLine();
+                        if (radio(cs::kTunics[i], set.tunic == i)) set.tunic = i, changed = true;
+                    }
+                    if (changed) {
+                        set.addr = addr, set.name = name, set.port = std::clamp(set.port, 1, 65535);
+                        hostui::post([s = set] {
+                            cs::set_settings(s);
+                            hostui::set("mod.coop.addr", s.addr), hostui::set("mod.coop.port", std::to_string(s.port));
+                            hostui::set("mod.coop.name", s.name), hostui::set("mod.coop.tunic", std::to_string(s.tunic));
+                        });
+                    }
+                    note("%s", cs::status());
+                    help("Host: your friends join you on this port (UDP). Join: the host's address, e.g. its Tailscale name or IP.");
                 }
                 if (x->often) {
                     ImGui::TextUnformatted("How often");

@@ -4,11 +4,14 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <memory>
 #include <string>
 #include <type_traits>
 #include <vector>
 
 #include "ppc.h"
+
+namespace pstate { struct State; }
 
 namespace ss {
 
@@ -89,6 +92,10 @@ void request_save_full(int slot);
 bool in_gameplay();                     // a save file is being played (quit_prompt.h: gameplay_stage)
 void request_load(int slot);
 void request_load_portable_file(const std::string& path);  // a .wwstate anywhere (WWHD_PORTABLE_LOAD)
+// online co-op's join (mods/coop_sync.cpp): the game as a portable state's text (game thread; false with `why` while
+// Link is not free to have it taken), and a load of one into the Quest Log being played
+bool capture_portable_text(Cpu* c, std::string& out, std::string& why);
+void request_load_portable(std::shared_ptr<pstate::State> s);
 bool full_states();                     // save button / shortcuts make full states
 void set_full_states(bool on);          // the setting (kept in the states folder)
 bool full_states_forced();              // the environment decides (WWHD_FULL_SAVE_STATES or test variables)
