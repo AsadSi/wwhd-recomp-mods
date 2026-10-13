@@ -149,6 +149,10 @@ The tour's second half, at night: armada (with boarding) at 0:30, calm 3:00, Big
 cyclone 11:40, blood moon 14:30." ;;
   beedle-bosses) ON=(BEEDLE_SHIP MOLGERA PHANTOM_GANON); EVENT="molgera@+40;phantom@+45"; export WWHD_MOD_PHANTOM_GANON_CHOICE=1; NOTE="$BEEDLE
 Molgera and Titanic Phantom Ganon together from about 40 s: fight them from its deck or from the boat's cannon." ;;
+  coop-record|coop-ghost) export WWHD_MOD_COOP=${COOP:-1} WWHD_TEST_STAGE="${STAGE:-sea 11 0}" WWHD_COOP_SHOT="$ROOT/build/try/shot.now"
+  POSE="${POSE:-$ROOT/build/try/coop.pose}"
+  if [ "$1" = coop-record ]; then export WWHD_COOP_RECORD="$POSE"; NOTE="Online co-op test: set down on Windfall on foot; every step Link's pose goes to $POSE."
+  else export WWHD_COOP_GHOST="$POSE@${GHOST_AT:-150,0}"; NOTE="Online co-op test: set down on Windfall on foot; $POSE plays as a ghost Link ${GHOST_AT:-150,0} (x,z) from where it was recorded."; fi ;;
   deck) ON=(BIG_SHIP); NOTE="$SHIP" ;;
   cannon|sea-deck) ON=(BIG_SHIP HAUNTED_SEA); EVENT="sea@+20"; NOTE="$SHIP
 Haunted sea comes at about 20 s: get onto the deck and shoot the Seahats, Gyorgs and cannon boats." ;;
@@ -192,7 +196,7 @@ Everything at once. The first minute is yours: get on the deck, try the helm and
   OFTEN=2; NOTE="$SHIP
 The long soak, played: every spooky mod on, How often at Often, nothing forced. Sail out into open sea (away from
 islands) and keep going; the events come by chance, a roll a minute (none within reach of an island). Play as you like." ;;
-  *) echo "Usage: tools/try.sh <seamless|windfall|stalker|darknut|tp-darknuts|buy-ship|helm|cabin|beedle-shop|helmaroc|octo-phantom|chaos|full|raft|shop|raft-bosses|tour|tour-rest|long|beedle|beedle-guns|gunner|crew|boarding|drowned|calm|photo|blood|cyclone|maelstrom|armada|octo|lion|soak|plain|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim|cannon-boat|cannon-boat-deck>"; exit 2 ;;
+  *) echo "Usage: tools/try.sh <seamless|windfall|stalker|darknut|tp-darknuts|buy-ship|helm|cabin|beedle-shop|helmaroc|octo-phantom|chaos|full|raft|shop|raft-bosses|tour|tour-rest|long|beedle|beedle-guns|gunner|crew|boarding|drowned|calm|photo|blood|cyclone|maelstrom|armada|octo|lion|soak|plain|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim|cannon-boat|cannon-boat-deck|coop-record|coop-ghost>"; exit 2 ;;
 esac
 for m in "${SPOOKY[@]}"; do export WWHD_MOD_$m=0; done
 export WWHD_MOD_TURBO=1  # hold T to fast-forward (Claude: live pad bit 28)

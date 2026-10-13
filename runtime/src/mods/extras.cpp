@@ -34,6 +34,7 @@
 
 #include "guest_addr.h"
 #include "mods.h"
+#include "coop_pose.h"
 #include "darknut.h"
 #include "shadow_beast.h"
 #include "../gx2/gx2.h"
@@ -49,7 +50,7 @@
 
 namespace mods::extras {
 namespace {
-enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kAudio, kDeep, kLeviathan, kMolgera, kStalker, kBeedle, kCalm, kPhoto, kGunner, kBlood, kCyclone, kMaelstrom, kArmada, kOcto, kWrongLion, kDrowned, kBoarding, kRaft, kFairWind, kPacing, kUpgrades, kWarp, kHelmaroc, kTpDarknuts, kCount };  // the catalogue's order
+enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kAudio, kDeep, kLeviathan, kMolgera, kStalker, kBeedle, kCalm, kPhoto, kGunner, kBlood, kCyclone, kMaelstrom, kArmada, kOcto, kWrongLion, kDrowned, kBoarding, kRaft, kFairWind, kPacing, kUpgrades, kWarp, kHelmaroc, kCoop, kTpDarknuts, kCount };  // the catalogue's order
 std::atomic<bool> g_on[kCount];
 std::atomic<int> g_choice[kCount];
 std::atomic<int> g_often[kCount];
@@ -672,6 +673,9 @@ const std::vector<Mod>& catalogue() {
          "circles high and dives at Link. Bring him down with arrows, bombs, the Boomerang or a ship's guns for 300 rupees "
          "and a blue potion. Hold out too long and he snatches the boat, Link and all, and drops him somewhere on the Great "
          "Sea: in the open water, or on an island's shore.", {}, true},
+        {"coop", "Online co-op", "Online",
+         "Play with friends: one hosts their game, the others join it over the internet (Tailscale) or the local network "
+         "and are drawn as Link in their own tunic colour. Work in progress (docs/multiplayer.md).", {}},
         {"tp-darknuts", "Twilight Princess Darknuts", "Gameplay",
          "Every Darknut is Twilight Princess's: its armour and two swords, its moves (the cut, the overhead slam, the "
          "shield bash), a piece of armour flying off each time you hurt it, and once its armour is gone the leap back, "
@@ -1705,6 +1709,7 @@ void step(Cpu* c) {
     beast::step(c, link, now);
     darknut::replace_all(on<kTpDarknuts>());
     darknut::step(c, link);
+    coop::step(c, link, on<kCoop>());
     // Leviathan: one Gyorg (made as the others are, a child of the Haunted sea's GyCtrl, which is made here too if
     // needed) at 8x: setMtx (0216731C) copies the actor's scale (+0x330) into its model each execute, its spheres are
     // sized through the SetR hooks (g_big_hits) but its body collider's radius (+0x9B4) is a plain store each execute,

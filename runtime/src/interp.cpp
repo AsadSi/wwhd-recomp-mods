@@ -561,6 +561,8 @@ void blend_mtx(const float* a, const float* b, float* out, float t) {
     }
 }
 }  // namespace
+// for the co-op puppets (mods/coop_pose.cpp): a joint matrix as rotation x scale
+bool mtx_to_quat(const float* m, float* s, float* q) { return to_quat(m, s, q); }
 }  // namespace interp
 
 // J3DModel::viewCalc(J3DModel*)
