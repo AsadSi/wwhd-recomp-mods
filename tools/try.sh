@@ -4,11 +4,13 @@
 # Only that feature's mods are on; the spooky events come only when forced. Prints the controls first.
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-pgrep -x wwhd >/dev/null && { echo "The game is already running; close it first."; exit 1; }
+# a game of this repo already running (by its working directory; other repos' games, e.g. tphd-recomp's, don't count)
+ours() { for p in $(pgrep -x wwhd); do [ "$(lsof -a -p "$p" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')" = "$ROOT" ] && return 0; done; return 1; }
+ours && { echo "The game is already running; close it first."; exit 1; }
 [ -f "$ROOT/save/haunted.wwstate" ] || { echo "save/haunted.wwstate is missing."; exit 1; }
 SPOOKY=(NIGHT_DEAD HAUNTED_SEA STORM FOG GIANT_SEAHATS PHANTOM_GANON HORROR_AUDIO DEEP LEVIATHAN MOLGERA PHANTOM_STALKER BIG_SHIP BEEDLE_SHIP
         DEAD_CALM PHOTO_MODE SECOND_GUNNER BLOOD_MOON CYCLONES MAELSTROM ARMADA BIG_OCTO WRONG_LION DROWNED BOARDING TIME
-        RAFT FAIR_WIND SCARE_PACING SHIP_UPGRADES WARP HELMAROC)
+        RAFT FAIR_WIND SCARE_PACING SHIP_UPGRADES WARP HELMAROC TP_DARKNUTS)
 ON=(); EVENT=; NOTE=; EXTRA=
 SHIP="Big ship (keys: move WASD, A = K/Space, B = J, ZL = Left Shift, pause/items = Return):
   Tetra's ship is a boat of its own: once you are out at sea it waits at anchor a little way off your left.
@@ -105,6 +107,12 @@ on foot, and at about 25 s the dead rise, closing in from behind Link." ;;
   stalker) ON=(PHANTOM_STALKER HORROR_AUDIO); EVENT="stalker@+25"; AT_NIGHT=1; RECORD=1; export WWHD_TEST_STAGE="${STAGE:-sea 11 0}"; NOTE="Night on Windfall: set down at its first spawn point
 on foot, and at about 25 s fog rolls in and the Shadow Beast drops from the sky behind you (WWHD_MOD_PHANTOM_STALKER_CHOICE=1:
 Phantom Ganon). It hunts you; fight it (about a dozen sword hits) or outlast it (2 minutes)." ;;
+  darknut) ON=(PHANTOM_STALKER HORROR_AUDIO); EVENT="stalker@+25"; AT_NIGHT=1; RECORD=1; export WWHD_MOD_PHANTOM_STALKER_CHOICE=2
+  export WWHD_TEST_STAGE="${STAGE:-sea 44 0}"; NOTE="Night on Outset: at about 25 s fog rolls in and Twilight Princess's Darknut walks out
+of it behind you. Hit it from behind (or jump-attack) to knock its armour off piece by piece; when its body armour
+goes it leaps back, throws its sword at you and draws its second one." ;;
+  tp-darknuts) ON=(TP_DARKNUTS); RECORD=1; export WWHD_TEST_STAGE="${STAGE:-Siren 23 0}"; NOTE="Straight into a room of the
+Tower of the Gods with Darknuts (STAGE=\"<stage> <room> <point>\" for another): every Darknut is Twilight Princess's." ;;
   helm) ON=(BIG_SHIP); NOTE="$SHIP
 New: the wind sets her speed (before it the boat's speed, a third of it sailing into it), she gathers speed and loses it
 slowly, and the wheel turns a rudder over (turning is gentle from a standstill)." ;;
@@ -184,7 +192,7 @@ Everything at once. The first minute is yours: get on the deck, try the helm and
   OFTEN=2; NOTE="$SHIP
 The long soak, played: every spooky mod on, How often at Often, nothing forced. Sail out into open sea (away from
 islands) and keep going; the events come by chance, a roll a minute (none within reach of an island). Play as you like." ;;
-  *) echo "Usage: tools/try.sh <seamless|windfall|stalker|buy-ship|helm|cabin|beedle-shop|helmaroc|octo-phantom|chaos|full|raft|shop|raft-bosses|tour|tour-rest|long|beedle|beedle-guns|gunner|crew|boarding|drowned|calm|photo|blood|cyclone|maelstrom|armada|octo|lion|soak|plain|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim|cannon-boat|cannon-boat-deck>"; exit 2 ;;
+  *) echo "Usage: tools/try.sh <seamless|windfall|stalker|darknut|tp-darknuts|buy-ship|helm|cabin|beedle-shop|helmaroc|octo-phantom|chaos|full|raft|shop|raft-bosses|tour|tour-rest|long|beedle|beedle-guns|gunner|crew|boarding|drowned|calm|photo|blood|cyclone|maelstrom|armada|octo|lion|soak|plain|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim|cannon-boat|cannon-boat-deck>"; exit 2 ;;
 esac
 for m in "${SPOOKY[@]}"; do export WWHD_MOD_$m=0; done
 export WWHD_MOD_TURBO=1  # hold T to fast-forward (Claude: live pad bit 28)

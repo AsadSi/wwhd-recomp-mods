@@ -1,27 +1,33 @@
-"""Twilight Princess HD's Shadow Beast (res/Object/E_s2.arc + E_s2.pack.gz, the archive daE_S1 loads its model and
-animations from) -> game/shadow_beast.bin, the skinned mesh, textures and animations the Shadow stalker mod draws
-(runtime/src/gfx/beast.mm).
+"""Twilight Princess HD's monsters for Wind Waker HD: their J3D models (with their armour and weapons), HD textures and
+animations -> game/tp_<monster>.bin, which runtime/src/mods/tp_monsters.cpp poses and gfx/beast.mm draws.
 
-    tools/shadow_beast.py [<TP HD game dir>] [<out>]   (defaults ~/Documents/code/tphd-recomp/game, game/shadow_beast.bin)
+    tools/tp_monsters.py [<TP HD game dir>]   (default ~/Documents/code/tphd-recomp/game; writes game/tp_*.bin)
 
-The mesh is the J3D model's own (s2.bmd: VTX1/SHP1 skinned through DRW1/EVP1; the HD pack's .gmx has the same
-triangles), in bind pose model space; the textures are the HD pack's GX2 ones (the body 1024x1024), untiled and the
-archive unpacked with the ingame-mod tools' libgx2tex and libyaz0 (GX2TEX_DIR overrides where);
-each .bck is sampled at every frame into joint-local scale, quaternion, translation.
+  shadow_beast  daE_S1's field Shadow Beast: E_s2.arc s2.bmd and its 27 .bck (the archive d_a_e_s1.cpp loads)
+  darknut       daB_TN's Darknut, its "zako" type 1 (Hyrule Castle's): B_tnp2.arc tn2.bmd, its 17 armour and weapon
+                models on their joints (tn_part_joint), their .brk colour variants (frames 0-4), B_tn.arc's 42 .bck
 
-Output, little-endian: 'SBST' u32 version, then
+Meshes are the J3D models' own (VTX1/SHP1 skinned through DRW1/EVP1; the HD packs' .gmx have the same triangles), in
+bind pose model space; a part's mesh is put on its joint and skinned to it alone (the runtime can move it anywhere:
+a broken-off piece). Textures are the HD packs' GX2 ones, untiled and the archives unpacked with the ingame-mod tools'
+libgx2tex and libyaz0 (GX2TEX_DIR overrides where); each .bck is sampled at every frame into joint-local scale,
+quaternion, translation.
+
+Output, little-endian: 'SBST' u32 version 2, then
   joints:  u32 n, n x (i32 parent, f32 inverse bind 3x4 row-major)
   verts:   u32 n, n x (f32 pos3, nrm3, uv2, u8 joint4, f32 weight4)
   indices: u32 n, n x u16 (triangles)
-  groups:  u32 n, n x (u32 texture, first index, index count, flags)   flags: 1 = the mark (s2_mat_mark: unlit, its
-           colour TEV register C2 times the texture, cut out below alpha 128); bits 8+: GX cull mode
+  groups:  u32 n, n x (u32 texture, first index, index count, flags, part, f32 light scale, u32 c0[5], c2[5])
+           flags: bits 0-1 the TEV set-up (0 lit, 1 unlit C2 x texture, 2 C2-to-white x lit), bit 2 cut out below
+           alpha 128, bits 8+ GX cull mode; part 0 the body, k part k-1; c0/c2 RGBA8 per colour variant
+  parts:   u32 n, n x (char[32] name, i32 joint)
   textures: u32 n, n x (u32 w, h, w*h*4 RGBA8)
   anims:   u32 n, n x (char[32] name, u32 frames, u32 loop, frames x joints x f32[10] (scale3, quat xyzw, trans3))
 """
 import math, os, struct, sys, gzip
 
 TP = sys.argv[1] if len(sys.argv) > 1 else os.path.expanduser("~/Documents/code/tphd-recomp/game")
-OUT = sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.path.dirname(__file__), "..", "game", "shadow_beast.bin")
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "game")
 sys.path.insert(0, os.environ.get("GX2TEX_DIR", os.path.expanduser("~/Documents/Higgsfield export/ingame-mod/tools")))
 import arc, gx2tex  # noqa: E402
 import numpy as np  # noqa: E402
@@ -229,14 +235,29 @@ def load_bmd(d):
                 else: raise SystemExit("primitive %#x" % op)
                 tris += [tuple(verts[k] for k in t) for t in idx]
         shapes.append((shape_mat.get(si), tris))
-    # MAT3: each material's first texture and cull mode
+    # MAT3: each material's first texture, cull mode, and which of TP's TEV set-ups it is (kind): 0 lit (texture x the lit
+    # vertex colour, the stage's scale), 1 the mark (unlit: TEV colour C2 x the texture), 2 armour (stage 0: C2 to white
+    # by the texture, stage 1: that x the lit colour, its scale); bit 2: cut out below alpha 128 (alpha compare GEQUAL)
     m = sec["MAT3"]
-    init_o, mremap_o, texno_o, cull_o = m + u32(d, m + 0xC), m + u32(d, m + 0x10), m + u32(d, m + 0x48), m + u32(d, m + 0x1C)
-    mnames = names(d, m + u32(d, m + 0x14))
+    tab = [m + u32(d, m + 0xC + 4 * k) for k in range(30)]
+    init_o, mremap_o, texno_o, cull_o = tab[0], tab[1], tab[15], tab[4]
+    mnames = names(d, tab[2])
     def material(i):
         e = init_o + 0x14C * u16(d, mremap_o + 2 * i)
         t = u16(d, e + 0x84)
-        return mnames[i], (u16(d, texno_o + 2 * t) if t != 0xFFFF else None), u32(d, cull_o + 4 * u8(d, e + 1))
+        stages = u8(d, tab[19] + u8(d, e + 4))
+        st = [tab[20] + 20 * u16(d, e + 0xE4 + 2 * k) for k in range(stages)]
+        cin = lambda s: tuple(u8(d, s + 1 + k) for k in range(4))
+        scale = lambda s: {0: 1.0, 1: 2.0, 2: 4.0, 3: 0.5}[u8(d, s + 7)]
+        if cin(st[0]) == (15, 6, 8, 15): kind, mult = 1, 1.0
+        elif stages >= 2 and cin(st[0]) == (6, 14, 8, 15): kind, mult = 2, scale(st[1])
+        else: kind, mult = 0, scale(st[0])
+        ac = tab[24] + 8 * u16(d, e + 0x146)
+        if u8(d, ac) == 6 and u8(d, ac + 1) > 0: kind |= 4
+        c2i = u16(d, e + 0xDC + 4)
+        c2 = tuple(max(0, min(255, s16(d, tab[17] + 8 * c2i + 2 * k))) for k in range(3)) if c2i != 0xFFFF else (0, 0, 0)
+        return (mnames[i], (u16(d, texno_o + 2 * t) if t != 0xFFFF else None), u32(d, cull_o + 4 * u8(d, e + 1)), kind,
+                mult / 2, c2)  # (lighting is WW's, half TP's: TP's dim scene lights x its 2 came out as WW's light x 1)
     t = sec["TEX1"]
     tnames = names(d, t + u32(d, t + 0x10))
 
@@ -248,7 +269,7 @@ def load_bmd(d):
     corners = {}
     verts, indices, groups = [], [], []
     for mi, tris in shapes:
-        mname, tex, cull = material(mi)
+        mname, tex, cull, kind, mult, c2 = material(mi)
         first = len(indices)
         for tri in tris:
             for vals, slots in tri:
@@ -264,7 +285,7 @@ def load_bmd(d):
                     corners[key] = len(verts)
                     verts.append(key)
                 indices.append(corners[key])
-        groups.append((tex, first, len(indices) - first, mname, cull))
+        groups.append((tex, first, len(indices) - first, mname, cull, kind, mult, c2))
         print("shape: material %-16s texture %-16s cull %d, %d triangles" % (mname, tnames[tex] if tex is not None else "-", cull, len(tris)))
     # weld the inverse binds to the vertices: envelope vertices are in the EVP1 bind space, rigid ones were put in
     # model space with JNT1's world, so a joint without an EVP1 matrix uses JNT1's inverse
@@ -360,6 +381,15 @@ def gtx_textures(gtx):
         lin = gx2tex.untile(tx["s"], tx["img"], tx.get("mip", b""))
         if f["fmt"] == 0x31: px = bc1(lin, w, h)
         elif f["fmt"] == 0x1: px = np.repeat(np.frombuffer(lin[:w * h], np.uint8).reshape(h, w, 1), 4, 2)  # I8
+        elif f["fmt"] == 0x7:  # R8G8 as IA8: intensity, alpha
+            ia = np.frombuffer(lin[:w * h * 2], np.uint8).reshape(h, w, 2)
+            px = np.dstack([ia[..., 0], ia[..., 0], ia[..., 0], ia[..., 1]])
+        elif f["fmt"] == 0x2:  # R4G4 as IA4
+            b = np.frombuffer(lin[:w * h], np.uint8).reshape(h, w)
+            i, a = (b & 15) * 17, (b >> 4) * 17
+            px = np.dstack([i, i, i, a]).astype(np.uint8)
+        elif f["fmt"] == 0x1A:  # RGBA8
+            px = np.frombuffer(lin[:w * h * 4], np.uint8).reshape(h, w, 4)
         else: raise SystemExit("texture format %#x" % f["fmt"])
         res.append((w, h, px.tobytes()))
     return res
@@ -376,18 +406,107 @@ def pack_files(pack):
     return out
 
 
-def main():
+# ---------------------------------------------------------------- BRK (TEV register colour animations)
+def load_brk(d):
+    """{material name: {register: [(r, g, b, a) at frames 0..4]}} for the C0-C2 registers."""
+    t = sections(d)["TRK1"]
+    nreg = u16(d, t + 0xC)
+    tab, remap, nm = (t + u32(d, t + 0x20 + 4 * k) for k in (0, 2, 4))
+    data = [t + u32(d, t + 0x38 + 4 * k) for k in range(4)]  # register R, G, B, A key arrays (s16)
+    mats = names(d, nm)
+    def channel(o, arr, frame):
+        count, index, tan = u16(d, o), u16(d, o + 2), u16(d, o + 4)
+        val = lambda i: s16(d, arr + 2 * i)
+        if count == 1: return val(index)
+        step = 4 if tan == 1 else 3
+        keys = [(val(index + k * step), val(index + k * step + 1), val(index + k * step + 2),
+                 val(index + k * step + (3 if tan == 1 else 2))) for k in range(count)]
+        if frame <= keys[0][0]: return keys[0][1]
+        for k0, k1 in zip(keys, keys[1:]):
+            if frame <= k1[0]: return hermite(frame, k0, k1)
+        return keys[-1][1]
+    out = {}
+    for i in range(nreg):
+        e = tab + 0x1C * u16(d, remap + 2 * i)
+        reg = u8(d, e + 0x18)
+        out.setdefault(mats[i], {})[reg] = [tuple(max(0, min(255, int(round(channel(e + 6 * c, data[c], f))))) for c in range(4))
+                                            for f in range(5)]
+    return out
+
+
+def rgba(c): return c[0] | c[1] << 8 | c[2] << 16 | (c[3] if len(c) > 3 else 255) << 24
+
+
+SPECS = {
+    "shadow_beast": dict(arc="E_s2", body="s2", anims="E_s2", parts=[]),
+    # tn_part_model_id (type 1) and tn_part_joint; the mace's slot holds sword_a when its mType2 is 1, so both are kept
+    # (sword_a last); tn_model_brk_idx: 0 color_1, 1 color_2, 2 shield, -1 none
+    "darknut": dict(arc="B_tnp2", body="tn2", anims="B_tn", body_brk="tn2_body", parts=[
+        ("tn2_armor_arm_l", 8, 0), ("tn2_armor_arm_r", 14, 0), ("tn2_armor_chest_b", 3, 0), ("tn2_armor_chest_f", 3, 0),
+        ("tn2_armor_head_a", 5, 0), ("tn2_armor_head_b", 5, 1), ("tn2_armor_shoulder_l", 11, 1), ("tn2_armor_shoulder_r", 17, 1),
+        ("tn2_armor_waist_b", 26, 0), ("tn2_armor_waist_f", 25, 0), ("tn2_armor_waist_l", 27, 1), ("tn2_armor_waist_r", 28, 1),
+        ("tn2_shield", 9, 2), ("tn2_mace", 27, -1), ("tn2_sword_b_saya", 27, -1), ("tn2_sword_b", 27, -1), ("tn2_sword_a", 27, -1)]),
+}
+kBrk = ["tn2_color_1", "tn2_color_2", "tn2_shield"]
+
+
+def build(name, spec):
     obj = os.path.join(TP, "content/res/Object/")
-    arc_files = rarc(arc.yaz0(open(obj + "E_s2.arc", "rb").read()))
-    jnames, parent, inv_bind, verts, indices, groups, tnames, world = load_bmd(arc_files["bmdr/s2.bmd"])
-    texs = gtx_textures(pack_files(open(obj + "E_s2.pack.gz", "rb").read())["tex/Object/E_s2/archive/bmdr/s2.bmd.gtx"])
+    def archive(n):
+        d = open(obj + n + ".arc", "rb").read()
+        return rarc(arc.yaz0(d))
+    files = archive(spec["arc"])
+    pack = pack_files(open(obj + spec["arc"] + ".pack.gz", "rb").read())
+    sub = "bmdr" if any(k.startswith("bmdr/") for k in files) else "bmdp"
+    def model(n):
+        res = load_bmd(files["%s/%s.bmd" % (sub, n)])
+        return res, gtx_textures(pack["tex/Object/%s/archive/%s/%s.bmd.gtx" % (spec["arc"], sub, n)])
+    (jnames, parent, inv_bind, verts, indices, groups, tnames, world), texs = model(spec["body"])
+    brk = lambda n: load_brk(files["brk/%s.brk" % n]) if "brk/%s.brk" % n in files else {}
+    body_brk = brk(spec.get("body_brk", ""))
+    textures, by_bytes = [], {}
+    def texture(t):  # de-duplicated (the armour pieces all carry the same armour texture)
+        key = (t[0], t[1], hash(t[2]))
+        if key not in by_bytes:
+            by_bytes[key] = len(textures)
+            textures.append(t)
+        return by_bytes[key]
+    out_groups = []
+    def add_groups(gs, tex_list, part, brk_regs, first_index, first_vert):
+        for tex, first, count, mname, cull, kind, mult, c2 in gs:
+            regs = brk_regs.get(mname, {})
+            c0s = [rgba(c) for c in regs.get(0, [(0, 0, 0, 255)] * 5)]
+            c2s = [rgba(c) for c in regs.get(2, [c2 + (255,)] * 5)]
+            out_groups.append((texture(tex_list[tex]) if tex is not None else 0xFFFFFFFF, first + first_index, count,
+                               kind | (cull << 8), part, mult, c0s, c2s))
+    add_groups(groups, texs, 0, body_brk, 0, 0)
+    verts, indices = list(verts), list(indices)
+    parts = []
+    for k, (pname, joint, brk_idx) in enumerate(spec["parts"]):
+        (_, _, _, pverts, pidx, pgroups, _, _), ptexs = model(pname)
+        to_model = inv(inv_bind[joint])  # the joint's bind pose: the part's vertices, in its joint's space, into the model's
+        base = len(verts)
+        for p, n, t, sk in pverts:
+            verts.append((tuple(xf(to_model, p)), tuple(xf(to_model, n, 0)), t, ((joint, 1.0),)))
+        first = len(indices)
+        indices += [base + i for i in pidx]
+        regs = {}
+        if brk_idx >= 0:
+            b = brk(kBrk[brk_idx])
+            regs = {m: v for m, v in b.items()}
+        add_groups(pgroups, ptexs, k + 1, regs, first, base)
+        parts.append((pname, joint))
+    assert len(verts) < 65536
     anims = []
-    for path in sorted(arc_files):
+    afiles = files if spec["anims"] == spec["arc"] else archive(spec["anims"])
+    for path in sorted(afiles):
         if path.endswith(".bck"):
-            loop, frames = load_bck(arc_files[path])
-            assert len(frames[0]) == len(jnames), (path, len(frames[0]))
+            loop, frames = load_bck(afiles[path])
+            if len(frames[0]) != len(jnames):  # another model's (tnb_sword_b_pull_*: the sword's own 3 joints)
+                print("  %s: %d joints, not the body's; left out" % (path, len(frames[0])))
+                continue
             anims.append((os.path.basename(path)[:-4], loop, frames))
-    out = bytearray(b"SBST" + struct.pack("<I", 1))
+    out = bytearray(b"SBST" + struct.pack("<I", 2))
     out += struct.pack("<I", len(jnames))
     for p, m in zip(parent, inv_bind):
         out += struct.pack("<i12f", p, *[x for r in m for x in r])
@@ -399,26 +518,32 @@ def main():
         ws = [w / tot for _, w in sk] + [0] * (4 - len(sk))
         out += struct.pack("<8f4B4f", *p, *n, *t, *js, *ws)
     out += struct.pack("<I", len(indices)) + struct.pack("<%dH" % len(indices), *indices)
-    out += struct.pack("<I", len(groups))
-    for tex, first, count, mname, cull in groups:
-        flags = 1 if mname == "s2_mat_mark" else 0
-        out += struct.pack("<4I", tex if tex is not None else 0xFFFFFFFF, first, count, flags | (cull << 8))
-    out += struct.pack("<I", len(texs))
-    for w, h, px in texs: out += struct.pack("<2I", w, h) + px
+    out += struct.pack("<I", len(out_groups))
+    for tex, first, count, flags, part, mult, c0s, c2s in out_groups:
+        out += struct.pack("<5If10I", tex, first, count, flags, part, mult, *c0s, *c2s)
+    out += struct.pack("<I", len(parts))
+    for pname, joint in parts: out += struct.pack("<32si", pname.encode(), joint)
+    out += struct.pack("<I", len(textures))
+    for w, h, px in textures: out += struct.pack("<2I", w, h) + px
     out += struct.pack("<I", len(anims))
-    for name, loop, frames in anims:
-        out += struct.pack("<32s2I", name.encode(), len(frames), loop)
+    for aname, loop, frames in anims:
+        out += struct.pack("<32s2I", aname.encode(), len(frames), loop)
         for row in frames:
             for S, Q, T in row: out += struct.pack("<10f", *S, *Q, *T)
-    os.makedirs(os.path.dirname(os.path.abspath(OUT)), exist_ok=True)
-    open(OUT, "wb").write(out)
+    path = os.path.join(OUT, "tp_%s.bin" % name)
+    open(path, "wb").write(out)
     lo = [min(v[0][i] for v in verts) for i in range(3)]
     hi = [max(v[0][i] for v in verts) for i in range(3)]
-    print("%d joints, %d vertices, %d triangles, %d textures (%s), %d animations -> %s (%d bytes)" % (
-        len(jnames), len(verts), len(indices) // 3, len(texs), ", ".join(tnames), len(anims), OUT, len(out)))
-    print("bind pose bounds", [round(x) for x in lo], [round(x) for x in hi])
-    print("joints", " ".join("%d:%s<%d" % (i, n, p) for i, (n, p) in enumerate(zip(jnames, parent))))
-    print("animations", " ".join("%s:%d%s" % (n, len(f), "L" if l else "") for n, l, f in anims))
+    print("%s: %d joints, %d parts, %d vertices, %d triangles, %d textures, %d animations -> %s (%.1f MB)" % (
+        name, len(jnames), len(parts), len(verts), len(indices) // 3, len(textures), len(anims), path, len(out) / 1e6))
+    print("  bind pose bounds", [round(x) for x in lo], [round(x) for x in hi])
+    print("  joints", " ".join("%d:%s<%d" % (i, n, p) for i, (n, p) in enumerate(zip(jnames, parent))))
+    print("  animations", " ".join("%s:%d%s" % (n, len(f), "L" if l else "") for n, l, f in anims))
+
+
+def main():
+    os.makedirs(OUT, exist_ok=True)
+    for name, spec in SPECS.items(): build(name, spec)
 
 
 if __name__ == "__main__":

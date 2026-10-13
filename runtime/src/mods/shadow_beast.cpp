@@ -1,5 +1,5 @@
-// Shadow stalker (shadow_beast.h): the Shadow Beast's asset, its pose from what its Bokoblin body does, and the
-// hooks that keep the body and its weapon from being drawn.
+// Shadow stalker (shadow_beast.h): the Shadow Beast's hair, sounds and mind (daE_S1's, d_a_e_s1.cpp), and the hooks
+// that keep its Bokoblin body and weapon from being drawn.
 #include "shadow_beast.h"
 
 #include <algorithm>
@@ -9,194 +9,45 @@
 
 #include "guest_addr.h"
 #include "mods.h"
-#include "../gx2/gx2.h"
-#include "../gx2/gx2_cmd.h"
 #include "runtime.h"
+#include "tp_fx.h"
+#include "tp_monsters.h"
 
-namespace interp { float pass_t(); }
 static uint32_t u32_bits(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
 
 namespace mods::beast {
 namespace {
+using tpm::mul34;
 
 constexpr uint32_t kPos = 0x314, kAngleY = 0x32A, kHealth = 0x3A1, kMaxHealth = 0x3A0, kWeaponId = 0x1360;
-constexpr float kScale = 1.3f;      // daE_S1's base size (its HIO mBaseSize)
 constexpr int kBodyHealth = 24;     // a Bokoblin has 5: about a dozen sword hits
 constexpr float kFadeSteps = 30;    // a second to fade back into the fog
 constexpr int kHead = 4;            // the head joint (daE_S1 hangs its hair from getAnmMtx(4))
 constexpr float kDropFrom = 1500;   // it drops from the sky as TP's do from a twilight portal (e_s1_warpappear)
-
-Asset g_asset;
-bool g_loaded = false, g_ok = false;
-
-bool load() {
-    g_loaded = true;
-    const std::string path = config::game_dir + "/shadow_beast.bin";
-    FILE* f = fopen(path.c_str(), "rb");
-    if (!f) { trace("beast: %s missing (tools/shadow_beast.py makes it from the TP HD dump)", path.c_str()); return false; }
-    std::vector<uint8_t> d;
-    uint8_t buf[65536];
-    for (size_t n; (n = fread(buf, 1, sizeof buf, f)) > 0;) d.insert(d.end(), buf, buf + n);
-    fclose(f);
-    size_t o = 0;
-    bool bad = false;
-    auto take = [&](void* out, size_t n) {
-        if (o + n > d.size()) { bad = true; memset(out, 0, n); return; }
-        memcpy(out, d.data() + o, n), o += n;
-    };
-    auto u32 = [&] { uint32_t v; take(&v, 4); return v; };
-    char magic[4];
-    take(magic, 4);
-    if (memcmp(magic, "SBST", 4) != 0 || u32() != 1) { trace("beast: %s is not a shadow_beast.bin v1", path.c_str()); return false; }
-    Asset& a = g_asset;
-    const uint32_t joints = u32();
-    a.parent.resize(joints), a.inv_bind.resize(joints * 12);
-    for (uint32_t j = 0; j < joints && !bad; j++) take(&a.parent[j], 4), take(&a.inv_bind[j * 12], 48);
-    const uint32_t verts = u32();
-    a.verts.resize((size_t)verts * kVertexSize);
-    take(a.verts.data(), a.verts.size());
-    a.indices.resize(u32());
-    take(a.indices.data(), a.indices.size() * 2);
-    a.groups.resize(u32());
-    take(a.groups.data(), a.groups.size() * sizeof(Asset::Group));
-    a.textures.resize(u32());
-    for (auto& t : a.textures) t.w = u32(), t.h = u32(), t.rgba.resize((size_t)t.w * t.h * 4), take(t.rgba.data(), t.rgba.size());
-    a.anims.resize(u32());
-    for (auto& an : a.anims) {
-        char name[32];
-        take(name, 32);
-        an.name.assign(name, strnlen(name, 32));
-        an.frames = u32(), an.loop = u32();
-        an.keys.resize((size_t)an.frames * joints * 10);
-        take(an.keys.data(), an.keys.size() * 4);
-    }
-    if (bad || joints == 0 || a.anims.empty()) { trace("beast: %s is cut short", path.c_str()); return false; }
-    trace("beast: %u joints, %u vertices, %zu triangles, %zu animations", joints, verts, a.indices.size() / 3, a.anims.size());
-    return true;
-}
-
-int anim(const char* name) {
-    for (size_t i = 0; i < g_asset.anims.size(); i++)
-        if (g_asset.anims[i].name == name) return (int)i;
-    return 0;
-}
-
-// what is played: an animation at a frame (fractional), at a rate in frames per logic step; `from` blends out over
-// `morf` steps (J3D's morf, the frames daE_S1's anm_init gives each switch)
-struct Play { int anim = -1; float frame = 0, rate = 1; bool once = false; };  // once: a strike, hit or death plays through once
+constexpr int kHairStrands = 22, kHairPoints = 16;  // daE_S1's mKe: 22 strands, 16 points each
 
 // a hair strand (daE_S1's s1_ke_s): its points, their last move, and the way it grows from the head
 struct Ke { float p[kHairPoints][3], v[kHairPoints][3], dir[3], size[kHairPoints]; };
 
 struct State {
-    bool out = false;          // drawn
-    uint32_t body = 0, id = 0; // the Bokoblin (0: gone) and its process id (the hair's random seed, as TP's)
-    Play cur, from;
-    float blend = 0, morf = 1; // weight of `from`, and the steps it takes to blend out
-    bool locked = false;       // a one-shot (landing, hit, strike, death) plays to its end
-    int dying = 0;             // 1 falling dead, 2 lying (deadwait), then it fades
-    int lying = 0;
-    float fade = 1, pfade = 1, fade_to = 1;
-    float drop = 0, pdrop = 0, drop_v = 0;  // height above its body while it falls from the sky
+    tpm::Monster m;
+    uint32_t body = 0, id = 0;  // the Bokoblin (0: gone) and its process id (the hair's random seed, as TP's)
+    int dying = 0;              // 1-3: fallen dead with dead02-04, then lying (deadwait) before it dissolves
+    int lying = 0, steps = 0;
+    float drop_v = 0;
     int health = 0;
-    double x = 0, y = 0, z = 0, px = 0, py = 0, pz = 0;  // this step's place and the last's
-    float yaw = 0, pyaw = 0;
     Ke ke[kHairStrands];
-    float pke[kHairStrands][kHairPoints][3];  // the hair as the last step left it
-    float light[14] = {};      // the scene's light where it stands (kLight in shadow_beast.h)
+    uint32_t body_fx = 0;       // TP's 0x387 on it (body_eff_set: dark wisps from its middle, joint 2)
     std::vector<uint32_t> weapons;  // the Boko weapons it has held: never drawn, deleted with it
 } g;
-
-// the light the game gives an actor where it stands: its body's dKy_tevstr_c (+0x110, settingTevStruct each
-// execute; HD layout: light position in the world +0x84, ambient C0 s16 +0x90, light colour K0 +0x98, fog colour s16
-// +0xA0, fog start/end +0xA8/+0xAC), as WW's own models get it through setLightTevColorType
-void read_light(uint32_t body) {
-    const uint32_t tv = body + 0x110;
-    float* l = g.light;
-    for (int i = 0; i < 3; i++)
-        l[i] = (int16_t)ld16(tv + 0x90 + 2 * i) / 255.f, l[3 + i] = ld8(tv + 0x98 + i) / 255.f, l[6 + i] = (float)ldf32(tv + 0x84 + 4 * i),
-        l[9 + i] = (int16_t)ld16(tv + 0xA0 + 2 * i) / 255.f;
-    l[12] = (float)ldf32(tv + 0xA8), l[13] = (float)ldf32(tv + 0xAC);
-}
 
 uint32_t g_body_draw = 0;          // for the draw hooks (they must not call into the game)
 uint32_t g_link = 0;               // Link, as the last step saw him
 std::vector<uint32_t> g_hidden;    // weapon actors
 
-void play(const char* name, float rate, bool lock, float morf) {
-    const int a = anim(name);
-    if (g.cur.anim == a && !lock) { g.cur.rate = rate; return; }
-    g.from = g.cur, g.blend = g.cur.anim >= 0 ? 1.f : 0.f, g.morf = std::max(1.f, morf);
-    g.cur = {a, 0, rate, lock}, g.locked = lock;
-}
-
-void advance(Play& p) {
-    if (p.anim < 0) return;
-    const auto& an = g_asset.anims[p.anim];
-    p.frame += p.rate;
-    if (an.loop && !p.once) p.frame = std::fmod(p.frame, (float)an.frames);
-    else p.frame = std::min(p.frame, (float)(an.frames - 1));
-}
-
-bool finished(const Play& p) { return p.anim >= 0 && (p.once || !g_asset.anims[p.anim].loop) && p.frame >= g_asset.anims[p.anim].frames - 1; }
-
-// joint j of animation `p` at `frame`: scale, rotation (quaternion), translation
-void sample(const Play& p, float frame, int j, float s[3], float q[4], float t[3]) {
-    const auto& an = g_asset.anims[p.anim];
-    const int joints = (int)g_asset.parent.size();
-    const bool loop = an.loop && !p.once;
-    frame = loop ? std::fmod(frame + an.frames, (float)an.frames) : std::clamp(frame, 0.f, (float)(an.frames - 1));
-    const int f0 = (int)frame, f1 = loop ? (f0 + 1) % an.frames : std::min<int>(f0 + 1, an.frames - 1);
-    const float k = frame - f0;
-    const float* a = &an.keys[((size_t)f0 * joints + j) * 10];
-    const float* b = &an.keys[((size_t)f1 * joints + j) * 10];
-    const float sign = a[3] * b[3] + a[4] * b[4] + a[5] * b[5] + a[6] * b[6] < 0 ? -1.f : 1.f;
-    for (int i = 0; i < 3; i++) s[i] = a[i] + (b[i] - a[i]) * k, t[i] = a[7 + i] + (b[7 + i] - a[7 + i]) * k;
-    for (int i = 0; i < 4; i++) q[i] = a[3 + i] + (sign * b[3 + i] - a[3 + i]) * k;
-}
-
-// row-major 3x4: c = a * b
-void mul34(const float* a, const float* b, float* c) {
-    for (int r = 0; r < 3; r++)
-        for (int k = 0; k < 4; k++)
-            c[r * 4 + k] = a[r * 4] * b[k] + a[r * 4 + 1] * b[4 + k] + a[r * 4 + 2] * b[8 + k] + (k == 3 ? a[r * 4 + 3] : 0);
-}
-
-// the pose `back` logic steps before this one (0..1: between the last step and this one): each joint's matrix in
-// model space (`world`) and its skinning matrix (`skin`, may be null)
-void pose(float back, float* world, float* skin) {
-    const int joints = (int)g_asset.parent.size();
-    for (int j = 0; j < joints; j++) {
-        float s[3], q[4], t[3];
-        sample(g.cur, g.cur.frame - back * g.cur.rate, j, s, q, t);
-        const float w = std::clamp(g.blend + back / g.morf, 0.f, 1.f);
-        if (w > 0 && g.from.anim >= 0) {
-            float s2[3], q2[4], t2[3];
-            sample(g.from, g.from.frame - back * g.from.rate, j, s2, q2, t2);
-            const float sign = q[0] * q2[0] + q[1] * q2[1] + q[2] * q2[2] + q[3] * q2[3] < 0 ? -1.f : 1.f;
-            for (int i = 0; i < 3; i++) s[i] += (s2[i] - s[i]) * w, t[i] += (t2[i] - t[i]) * w;
-            for (int i = 0; i < 4; i++) q[i] += (sign * q2[i] - q[i]) * w;
-        }
-        const float n = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
-        const float x = q[0] / n, y = q[1] / n, z = q[2] / n, ww = q[3] / n;
-        const float local[12] = {(1 - 2 * (y * y + z * z)) * s[0], 2 * (x * y - z * ww) * s[1], 2 * (x * z + y * ww) * s[2], t[0],
-                                 2 * (x * y + z * ww) * s[0], (1 - 2 * (x * x + z * z)) * s[1], 2 * (y * z - x * ww) * s[2], t[1],
-                                 2 * (x * z - y * ww) * s[0], 2 * (y * z + x * ww) * s[1], (1 - 2 * (x * x + y * y)) * s[2], t[2]};
-        const int p = g_asset.parent[j];
-        if (p >= 0) mul34(&world[p * 12], local, &world[j * 12]);
-        else memcpy(&world[j * 12], local, sizeof local);
-        if (skin) mul34(&world[j * 12], &g_asset.inv_bind[j * 12], skin + j * 12);
-    }
-}
-
-// its model's place in the world (TP's base matrix: translation, yaw, the base size), `t` of the way from the last step
-void base(float t, float* m) {
-    const float yaw = g.pyaw + (g.yaw - g.pyaw) * t, cs = std::cos(yaw) * kScale, sn = std::sin(yaw) * kScale;
-    const float w[12] = {cs, 0, sn, (float)(g.px + (g.x - g.px) * t),
-                         0, kScale, 0, (float)(g.py + (g.y - g.py) * t + g.pdrop + (g.drop - g.pdrop) * t),
-                         -sn, 0, cs, (float)(g.pz + (g.z - g.pz) * t)};
-    memcpy(m, w, sizeof w);
-}
+void play(const char* name, float rate, bool lock, float morf) { g.m.anim.play(name, rate, lock, morf); }
+bool finished() { return g.m.anim.finished(); }
+void sound(uint32_t id, float seconds = 0) { tpm::sound(id, (float)g.m.x, (float)g.m.y + 80, (float)g.m.z, seconds); }
 
 // ---- the hair: daE_S1's ke_set / ke_move / ke_control (d_a_e_s1.cpp), with its own random numbers (cM_rnd2)
 int g_r0, g_r1, g_r2;
@@ -206,9 +57,9 @@ float rnd2(float max) {
 }
 float ssin(int16_t a) { return std::sin(a * (float)M_PI / 32768); }
 int16_t atan2s(float y, float x) { return (int16_t)(int)(std::atan2(y, x) * 32768 / (float)M_PI); }
-void rot_x(float* m, int16_t a) { const float c = ssin((int16_t)(a + 0x4000)), s = ssin(a); const float r[12] = {1, 0, 0, 0, 0, c, -s, 0, 0, s, c, 0}; float o[12]; mul34(m, r, o); memcpy(m, o, 48); }
-void rot_y(float* m, int16_t a) { const float c = ssin((int16_t)(a + 0x4000)), s = ssin(a); const float r[12] = {c, 0, s, 0, 0, 1, 0, 0, -s, 0, c, 0}; float o[12]; mul34(m, r, o); memcpy(m, o, 48); }
-void rot_z(float* m, int16_t a) { const float c = ssin((int16_t)(a + 0x4000)), s = ssin(a); const float r[12] = {c, -s, 0, 0, s, c, 0, 0, 0, 0, 1, 0}; float o[12]; mul34(m, r, o); memcpy(m, o, 48); }
+void rot_x(float* m, int16_t a) { const float c = ssin((int16_t)(a + 0x4000)), s = ssin(a); const float r[12] = {1, 0, 0, 0, 0, c, -s, 0, 0, s, c, 0}; mul34(m, r, m); }
+void rot_y(float* m, int16_t a) { const float c = ssin((int16_t)(a + 0x4000)), s = ssin(a); const float r[12] = {c, 0, s, 0, 0, 1, 0, 0, -s, 0, c, 0}; mul34(m, r, m); }
+void rot_z(float* m, int16_t a) { const float c = ssin((int16_t)(a + 0x4000)), s = ssin(a); const float r[12] = {c, -s, 0, 0, s, c, 0, 0, 0, 0, 1, 0}; mul34(m, r, m); }
 void xf(const float* m, const float* v, float* o) {
     for (int r = 0; r < 3; r++) o[r] = m[r * 4] * v[0] + m[r * 4 + 1] * v[1] + m[r * 4 + 2] * v[2] + m[r * 4 + 3];
 }
@@ -249,17 +100,39 @@ void ke_set(const float* head) {  // head: the head joint's world matrix
         xf(m, root, k.p[0]);
         xf(m, tip, r);
         for (int c = 0; c < 3; c++) k.dir[c] = r[c] - k.p[0][c];
-        ke_control(k, len, 3 + (float)g.y);
+        ke_control(k, len, 3 + (float)g.m.y);
         for (int j = 0; j < kHairPoints; j++) k.size[j] = j == 14 ? 0.6f : j < 5 ? 3.5f : rnd2(1) + 1.8f;
     }
+    // to the monster, for drawing
+    g.m.hair.resize(kHairStrands * kHairPoints * 4);
+    float* h = g.m.hair.data();
+    for (auto& k : g.ke)
+        for (int j = 0; j < kHairPoints; j++, h += 4) h[0] = k.p[j][0], h[1] = k.p[j][1], h[2] = k.p[j][2], h[3] = k.size[j];
 }
 
+// anm_se_set (d_a_e_s1.cpp): sounds on animation frames, as checkFrame sees the frame pass
+enum : uint32_t { kUdehuri = 0x7000D, kDosa = 0x7000F, kVDamage = 0x70010, kVDeath = 0x70011, kFnL = 0x700FA, kFnR = 0x700FB,
+                  kHandL = 0x700FC, kHandR = 0x700FD, kVAttack = 0x70115, kVSearch = 0x70116, kVWait = 0x70118, kVAttack2 = 0x70119 };
+void anm_se(int anim_was, float from, float to) {
+    struct Cue { const char* anim; float frame; uint32_t id; float seconds; };  // steps and hand slaps: half a second
+    static const Cue kCues[] = {
+        {"s2_walk", 27, kFnL, 0.5f}, {"s2_walk", 57, kFnR, 0.5f},
+        {"s2_dash01", 1, kHandR, 0.5f}, {"s2_dash01", 3, kFnR, 0.5f}, {"s2_dash01", 4, kHandL, 0.5f}, {"s2_dash01", 7, kFnL, 0.5f},
+        {"s2_dash02", 1, kHandR, 0.5f}, {"s2_dash02", 6, kFnR, 0.5f}, {"s2_dash02", 8, kHandL, 0.5f}, {"s2_dash02", 14, kFnL, 0.5f},
+        {"s2_wait01", 0, kVWait, 0}, {"s2_wait01", 45, kVWait, 0}, {"s2_wait02", 0, kVSearch, 0}, {"s2_wait02", 45, kVSearch, 0},
+        {"s2_attack", 21, kUdehuri, 0}, {"s2_attack", 25, kHandL, 0.5f}, {"s2_attack02", 25, kUdehuri, 0},
+    };
+    if (g.m.anim.cur.anim != anim_was) from = -1;  // a new animation: its frame 0 counts
+    for (const Cue& c : kCues)
+        if (g.m.anim.is(c.anim) && (to >= from ? c.frame > from && c.frame <= to : c.frame > from || c.frame <= to))
+            sound(c.id, c.seconds);
+}
 
 // ---- its mind: daE_S1's fight actions (d_a_e_s1.cpp: e_s1_fight_run, e_s1_fight, e_s1_damage), run in place of the
 // Bokoblin's own (Bk_move, hooked below) on the Bokoblin's body, whose execute then moves it with its ground and wall
 // checks, takes Link's hits (its health) and, once that runs out, dies as the Bokoblin does (Bk_move again, unseen)
 constexpr uint32_t kSpeedF = 0x370, kSpeed = 0x33C, kAtSph = 0x11A0;  // the body's speedF, speed, weapon AT sphere
-constexpr int kHandR = 15;                                             // its strikes hit with the right hand
+constexpr int kHandJoint = 15;  // its strikes hit with the right hand
 enum Act { kAppear, kRun, kFight, kDamage };
 struct Mind {
     Act act = kAppear;
@@ -274,14 +147,6 @@ int16_t add_angle(int16_t a, int16_t target, int scale, int max) {              
     return (int16_t)(a + std::clamp((int16_t)(target - a) / scale, -max, max));
 }
 
-// where joint `j` is in the world now
-void joint_pos(int j, float* out) {
-    std::vector<float> world(g_asset.parent.size() * 12);
-    float m[12], w[12];
-    pose(0, world.data(), nullptr), base(1, m), mul34(m, &world[j * 12], w);
-    out[0] = w[3], out[1] = w[7], out[2] = w[11];
-}
-
 void think(Cpu* c, uint32_t body) {
     Mind& m = g_mind;
     const uint32_t pl = g_link;
@@ -291,17 +156,18 @@ void think(Cpu* c, uint32_t body) {
     const int16_t to_link = atan2s(dx, dz);
     int16_t angle = (int16_t)ld16(body + kAngleY);
     const int health = (int8_t)ld8(body + kHealth);
-    if (health < m.health) m.act = kDamage, m.mode = 0, m.speed = 0, m.push = 30, m.push_angle = to_link;  // damage_check
+    if (health < m.health && health > 0) m.act = kDamage, m.mode = 0, m.speed = 0, m.push = 30, m.push_angle = to_link, sound(kVDamage);
     m.health = health;
     if (m.timer > 0) m.timer--;
     bool at = false;
-    const int frame = (int)g.cur.frame;
+    tpm::Animator& an = g.m.anim;
+    const int frame = (int)an.cur.frame;
     switch (m.act) {
     case kAppear:  // e_s1_warpappear: it lands, gets up (s2_down), then hunts
-        if (g.drop == 0 && finished(g.cur)) g.locked = false, m.act = kRun, m.mode = 0;
+        if (g.m.lift == 0 && finished()) an.locked = false, m.act = kRun, m.mode = 0;
         break;
     case kRun:  // e_s1_fight_run: dash at Link, turning hard, up to its dash speed
-        if (m.mode == 0) play("s2_dash01", 1, false, 3), g.cur.frame = rnd2(10), m.mode = 1;
+        if (m.mode == 0) play("s2_dash01", 1, false, 3), an.cur.frame = rnd2(10), m.mode = 1;
         angle = add_angle(angle, to_link, 4, 0x1000);
         m.speed = add_calc2(m.speed, 20, 20 * 0.333f);
         if (dist < 300) m.act = kFight, m.mode = 0;
@@ -310,11 +176,11 @@ void think(Cpu* c, uint32_t body) {
         if (m.mode == 0) play("s2_wait01", 1, false, 10), m.timer = 30 + (int)(rand() % 30), m.mode = 1;
         else if (m.mode == 1 && m.timer == 0) {
             m.slow = rand() % 3 != 0;
-            play(m.slow ? "s2_attack02" : "s2_attack", 1, true, 3), m.mode = 2;
+            play(m.slow ? "s2_attack02" : "s2_attack", 1, true, 3), m.mode = 2, sound(m.slow ? kVAttack2 : kVAttack);
         } else if (m.mode == 2) {
             at = m.slow ? frame >= 25 && frame <= 33 : frame >= 21 && frame <= 30;
-            if (finished(g.cur)) {
-                g.locked = false;
+            if (finished()) {
+                an.locked = false;
                 if (dist > 310) m.act = kRun;
                 m.mode = 0;
             }
@@ -324,12 +190,27 @@ void think(Cpu* c, uint32_t body) {
         break;
     case kDamage:  // e_s1_damage: reels, then runs at Link again
         if (m.mode == 0) play("s2_damaged", 1, true, 1), m.mode = 1;
-        else if (finished(g.cur)) g.locked = false, m.act = kRun, m.mode = 0;
+        else if (finished()) an.locked = false, m.act = kRun, m.mode = 0;
         m.speed = 0;
         break;
     }
-    // moved as daE_S1's action() moves it: forward at speedF x the base size; pushed back from a hit
-    const float sp = m.speed * kScale, sn = ssin(angle), cs = ssin((int16_t)(angle + 0x4000));
+    // moved as daE_S1's action() moves it: forward at speedF x the base size; pushed back from a hit. TP's stages wall its
+    // beasts in; WW's islands end in sea: it drops down any ledge after Link but stops where the ground 120 ahead is the
+    // sea or none (dGrass's checkGroundY 02549F4C, as the spawns use), and waits there
+    const float sn = ssin(angle), cs = ssin((int16_t)(angle + 0x4000));
+    if (m.speed > 0) {
+        static const uint32_t probe = mem::host_alloc(16);
+        const float y = (float)ldf32(body + kPos + 4);
+        st32(probe, u32_bits((float)ldf32(body + kPos) + sn * 120)), st32(probe + 4, u32_bits(y + 100));
+        st32(probe + 8, u32_bits((float)ldf32(body + kPos + 8) + cs * 120));
+        guest_call(c, GC(0x02549F4C), {probe});
+        const float ground = (float)c->f[1].ps0;
+        if (ground == y + 100 || ground < 5) {
+            m.speed = 0;
+            if (m.act == kRun) play("s2_wait01", 1, false, 10), m.mode = 0;
+        }
+    }
+    const float sp = m.speed * g.m.scale;
     st16(body + kAngleY, (uint16_t)angle);
     st32(body + kSpeedF, u32_bits(sp));
     st32(body + kSpeed, u32_bits(sn * sp)), st32(body + kSpeed + 8, u32_bits(cs * sp));
@@ -342,11 +223,11 @@ void think(Cpu* c, uint32_t body) {
     const uint32_t sph = body + kAtSph;
     if (at) {
         static const uint32_t pos = mem::host_alloc(16);
-        float h[3];
-        joint_pos(kHandR, h);
-        for (int i = 0; i < 3; i++) st32(pos + 4 * i, u32_bits(h[i]));
+        float h[12];
+        g.m.joint(kHandJoint, h);
+        for (int i = 0; i < 3; i++) st32(pos + 4 * i, u32_bits(h[i * 4 + 3]));
         guest_call(c, GC(m.at_was ? 0x025167E4 : 0x025167C0), {sph, pos});  // dCcD_Sph::MoveCAt / StartCAt
-        c->f[1].ps0 = 40 * kScale;
+        c->f[1].ps0 = 40 * g.m.scale;
         guest_call(c, GC(0x02018C8C), {sph});                                 // SetR
         guest_call(c, GC(0x0200E240), {guest_call(c, GC(0x025200D4)) + 0x26A4, sph});  // dComIfG_Ccsp()->Set
     }
@@ -355,69 +236,73 @@ void think(Cpu* c, uint32_t body) {
 
 }  // namespace
 
-const Asset* asset() {
-    if (!g_loaded) g_ok = load();
-    return g_ok ? &g_asset : nullptr;
-}
+bool available() { return tpm::asset(tpm::kShadowBeast) != nullptr; }
 
 void set_body(uint32_t body) {
     if (body && body != g.body) {  // a new one drops from the sky behind Link
         g = State{};
-        g.out = true, g.body = body, g.id = ld32(body + 0x4);  // base_process_class::mBsPcId
+        g.m.begin(tpm::kShadowBeast);
+        g.body = body, g.id = ld32(body + 0x4);  // base_process_class::mBsPcId
         g_mind = Mind{};
-        g.x = g.px = ldf32(body + kPos), g.y = g.py = ldf32(body + kPos + 4), g.z = g.pz = ldf32(body + kPos + 8);
-        g.yaw = g.pyaw = (int16_t)ld16(body + kAngleY) * (float)M_PI / 32768;
-        g.drop = g.pdrop = kDropFrom;
-        st8(body + kMaxHealth, kBodyHealth), st8(body + kHealth, kBodyHealth);
-        g.health = kBodyHealth;
-        read_light(body);
+        tpm::Monster& m = g.m;
+        m.x = m.px = ldf32(body + kPos), m.y = m.py = ldf32(body + kPos + 4), m.z = m.pz = ldf32(body + kPos + 8);
+        m.yaw = m.pyaw = (int16_t)ld16(body + kAngleY) * (float)M_PI / 32768;
+        m.lift = m.plift = kDropFrom;
+        static const int health = getenv("WWHD_TEST_BEAST_HEALTH") ? atoi(getenv("WWHD_TEST_BEAST_HEALTH")) : kBodyHealth;  // test aid
+        st8(body + kMaxHealth, health), st8(body + kHealth, health);
+        g.health = g_mind.health = health;
+        tpm::read_light(body, m.light);
         play("s2_down", 0, true, 1);  // held at its first frame as it falls; played on landing (e_s1_warpappear)
-        std::vector<float> world(g_asset.parent.size() * 12);
-        float m[12], head[12];
-        pose(0, world.data(), nullptr), base(1, m), mul34(m, &world[kHead * 12], head);
+        float head[12];
+        m.joint(kHead, head);
         for (auto& k : g.ke)  // the hair starts hanging straight down from the head
             for (int j = 0; j < kHairPoints; j++)
                 k.p[j][0] = head[3], k.p[j][1] = head[7] - j * 8, k.p[j][2] = head[11], k.v[j][0] = k.v[j][1] = k.v[j][2] = 0;
+        ke_set(head);
+        m.phair = m.hair;
+        tpm::add(&g.m);
         trace("beast: out, its body the Bokoblin at %08X", body);
     } else if (!body && g.body) {
         g.body = 0;  // gone: slain (it fell when its health ran out, below), or the event's end fades it out where it is
-        if (!g.dying) g.fade_to = 0, trace("beast: fades back into the fog");
+        if (!g.dying) g.m.fade_to = 0, trace("beast: fades back into the fog");
     }
     g_body_draw = g.body;
 }
 
 void step(Cpu* c, uint32_t link, double) {
     g_link = link;
-    if (!g.out) return;
-    g.pfade = g.fade, g.pdrop = g.drop;
-    g.px = g.x, g.py = g.y, g.pz = g.z, g.pyaw = g.yaw;
-    for (int i = 0; i < kHairStrands; i++) memcpy(g.pke[i], g.ke[i].p, sizeof g.pke[i]);
-    if (g.drop > 0) {  // falling from the sky
-        g.drop_v -= 6, g.drop = std::max(0.f, g.drop + g.drop_v);
-        if (g.drop == 0) play("s2_down", 1, true, 1);  // lands
+    tpfx::step();
+    tpm::Monster& m = g.m;
+    if (!m.out) return;
+    m.step_start();
+    if (m.lift > 0) {  // falling from the sky
+        g.drop_v -= 6, m.lift = std::max(0.f, m.lift + g.drop_v);
+        if (m.lift == 0) play("s2_down", 1, true, 1), sound(kDosa);  // lands (DOSA)
     }
     if (const uint32_t body = g.body) {
-        g.x = ldf32(body + kPos), g.y = ldf32(body + kPos + 4), g.z = ldf32(body + kPos + 8);
+        m.x = ldf32(body + kPos), m.y = ldf32(body + kPos + 4), m.z = ldf32(body + kPos + 8);
         float yaw = (int16_t)ld16(body + kAngleY) * (float)M_PI / 32768;
-        while (yaw - g.pyaw > M_PI) yaw -= 2 * M_PI;
-        while (yaw - g.pyaw < -M_PI) yaw += 2 * M_PI;
-        g.yaw = yaw;
-        read_light(body);
+        while (yaw - m.pyaw > M_PI) yaw -= 2 * M_PI;
+        while (yaw - m.pyaw < -M_PI) yaw += 2 * M_PI;
+        m.yaw = yaw;
+        tpm::read_light(body, m.light);
         // its weapons: one in its hands now, and any it held before (dropped when hit, or picked up)
         const uint32_t wid = ld32(body + kWeaponId);
         if (wid != 0xFFFFFFFF && std::find(g.weapons.begin(), g.weapons.end(), wid) == g.weapons.end()) g.weapons.push_back(wid);
-        const int health = (int8_t)ld8(body + kHealth);
-        const double to_link = std::hypot(ldf32(link + kPos) - g.x, ldf32(link + kPos + 8) - g.z);
-        if (health <= 0 && !g.dying) {  // slain: falls dead as TP's do (one of dead02-04), lies there, fades
+        int health = (int8_t)ld8(body + kHealth);
+        static const double die_at = getenv("WWHD_TEST_BEAST_DIE") ? atof(getenv("WWHD_TEST_BEAST_DIE")) : -1;  // test aid
+        if (die_at >= 0 && ++g.steps > die_at * 30 && !g.dying)  // (the body taken away, as its own death would)
+            guest_call(c, GC(0x025D57E0), {body}), g.body = g_body_draw = 0, health = 0;
+        if (health <= 0 && !g.dying) {  // slain: falls dead as TP's do (one of dead02-04), lies there, dissolves
             static const char* kDead[] = {"s2_dead02", "s2_dead03", "s2_dead04"};
             const int k = rand() % 3;
-            g.dying = 1 + k, play(kDead[k], 1, true, 2);
+            g.dying = 1 + k, play(kDead[k], 1, true, 2), sound(kVDeath);
             trace("beast: slain");
         }
         static int n = 0;
         if (++n % 60 == 0)
-            trace("beast: at %.0f %.0f %.0f, %s frame %.0f, health %d, %.0f from Link", g.x, g.y, g.z,
-                  g_asset.anims[g.cur.anim].name.c_str(), g.cur.frame, health, to_link);
+            trace("beast: at %.0f %.0f %.0f, %s frame %.0f, health %d", m.x, m.y, m.z,
+                  m.anim.a->anims[m.anim.cur.anim].name.c_str(), m.anim.cur.frame, health);
     }
     g_hidden.clear();
     for (uint32_t id : g.weapons)
@@ -426,45 +311,41 @@ void step(Cpu* c, uint32_t link, double) {
         for (uint32_t id : g.weapons) guest_call(c, GC(0x025D57E4), {id});  // fopAcM_delete_id
         g.weapons.clear(), g_hidden.clear();
     }
-    advance(g.cur), advance(g.from);
-    g.blend = std::max(0.f, g.blend - 1 / g.morf);
-    if (g.dying && g.locked && finished(g.cur)) {  // fallen: it lies there (deadwait) a moment, then fades
+    const int anim_was = m.anim.cur.anim;
+    const float frame_was = m.anim.cur.frame;
+    m.anim.advance();
+    if (!g.dying) anm_se(anim_was, frame_was, m.anim.cur.frame);
+    if (g.dying && m.anim.locked && finished()) {  // fallen: it lies there (deadwait) a moment, then dissolves
         static const char* kWait[] = {"s2_deadwait02", "s2_deadwait03", "s2_deadwait04"};
-        play(kWait[g.dying - 1], 1, false, 2), g.locked = false, g.lying = 0;
+        play(kWait[g.dying - 1], 1, false, 2), m.anim.locked = false, g.lying = 0;
     }
-    if (g.dying && !g.locked && ++g.lying > 45) g.fade_to = 0;
-    g.fade = g.fade_to > g.fade ? std::min(g.fade_to, g.fade + 1 / kFadeSteps) : std::max(g.fade_to, g.fade - 1 / kFadeSteps);
-    if (g.fade <= 0 && g.fade_to <= 0) { g.out = false, trace("beast: gone"); return; }
+    if (g.dying && !m.anim.locked && ++g.lying > 45 && m.fade_to > 0) {
+        // it dissolves into twilight: fopAcM_createDisappear type 1 (d_a_disappear.cpp: 0x826C teal shards, 0x826D/E
+        // the twilight's ribbons, at 1.2 x 1.666 its size), and is gone at once
+        const float at[3] = {(float)m.x, (float)m.y, (float)m.z};
+        for (uint32_t id : {0x826Cu, 0x826Du, 0x826Eu}) tpfx::spawn(id, at, 1.2f * 1.666f);
+        tpm::sound(0x60028, at[0], at[1] + 80, at[2]);  // Z2SE_DARK_VANISH
+        if (g.body) guest_call(c, GC(0x025D57E0), {g.body}), g.body = g_body_draw = 0;  // its body goes with it (fopAcM_delete)
+        m.fade = m.pfade = m.fade_to = 0;
+        trace("beast: dissolves");
+    }
+    m.fade = m.fade_to > m.fade ? std::min(m.fade_to, m.fade + 1 / kFadeSteps) : std::max(m.fade_to, m.fade - 1 / kFadeSteps);
+    if (m.fade <= 0 && m.fade_to <= 0) {
+        tpfx::stop(g.body_fx), g.body_fx = 0;
+        m.out = false, tpm::remove(&g.m), trace("beast: gone");
+        return;
+    }
     // the hair follows the head as it now is
-    std::vector<float> world(g_asset.parent.size() * 12);
-    float m[12], head[12];
-    pose(0, world.data(), nullptr), base(1, m), mul34(m, &world[kHead * 12], head);
+    float head[12], mid[12];
+    m.joint(kHead, head);
     ke_set(head);
-}
-
-void camera_drawn(uint32_t cam) {
-    if (!g.out || !g_ok) return;
-    const int joints = (int)g_asset.parent.size();
-    static std::vector<uint32_t> words;
-    words.assign(kPoseHeader + joints * 12 + kHairStrands * kHairPoints * 4, 0);
-    float* f = reinterpret_cast<float*>(words.data());
-    const float t = interp::pass_t(), back = 1 - t;
-    f[0] = g.pfade + (g.fade - g.pfade) * t;
-    base(t, f + 1);
-    // camera_draw's matrices (HD view_class): the projection (GL style, 4x4) at +0x104, the view (3x4) at +0x144
-    for (int i = 0; i < 12; i++) f[13 + i] = (float)ldf32(cam + 0x144 + 4 * i);
-    for (int i = 0; i < 16; i++) f[25 + i] = (float)ldf32(cam + 0x104 + 4 * i);
-    f[41] = (float)(g.py + (g.y - g.py) * t);
-    memcpy(f + kLight, g.light, sizeof g.light);
-    std::vector<float> world(joints * 12);
-    pose(back, world.data(), f + kPoseHeader);
-    float* h = f + kPoseHeader + joints * 12;
-    for (int i = 0; i < kHairStrands; i++)
-        for (int j = 0; j < kHairPoints; j++, h += 4) {
-            for (int c = 0; c < 3; c++) h[c] = g.pke[i][j][c] + (g.ke[i].p[j][c] - g.pke[i][j][c]) * t;
-            h[3] = g.ke[i].size[j];
-        }
-    gx2::emit_host(gx2::OP_BEAST, words.data(), (uint32_t)words.size());
+    // its wisps, from its middle as it moves (TP's setGlobalRTMatrix with joint 2's matrix); they stop as it dies
+    if (!g.body_fx && !g.dying) {
+        const float at[3] = {(float)m.x, (float)m.y, (float)m.z};
+        g.body_fx = tpfx::spawn(0x387, at);
+    }
+    if (g.body_fx && g.dying) tpfx::stop(g.body_fx), g.body_fx = 0;
+    if (g.body_fx) m.joint(2, mid), tpfx::follow(g.body_fx, mid);
 }
 
 }  // namespace mods::beast
@@ -476,18 +357,22 @@ extern "C" void hook_0209971C(Cpu* c) {
     f_0209971C_orig(c);
 }
 // Bk_move (020A5EF4): the Bokoblin's own mind, replaced on the Shadow stalker's body by daE_S1's until its health runs out
+// or it falls in the sea (where it drowns as the Bokoblin does: Bk_move's water_fail)
 extern "C" void f_020A5EF4_orig(Cpu* c);
 extern "C" void hook_020A5EF4(Cpu* c) {
-    if (mods::beast::g_body_draw && c->r[3] == mods::beast::g_body_draw && (int8_t)ld8(c->r[3] + 0x3A1) > 0) {
+    if (mods::beast::g_body_draw && c->r[3] == mods::beast::g_body_draw && (int8_t)ld8(c->r[3] + 0x3A1) > 0 &&
+        ldf32(c->r[3] + 0x318) > -30) {
         mods::beast::think(c, c->r[3]);
         return;
     }
     f_020A5EF4_orig(c);
 }
-// daBoko draw (020C0CE0): nor its weapon
+// daBoko draw (020C0CE0): nor its weapon (nor the Darknuts' swords: darknut.cpp)
+namespace mods::darknut { bool hides_weapon(uint32_t actor); }
 extern "C" void f_020C0CE0_orig(Cpu* c);
 extern "C" void hook_020C0CE0(Cpu* c) {
     for (uint32_t w : mods::beast::g_hidden)
         if (c->r[3] == w) { c->r[3] = 1; return; }
+    if (mods::darknut::hides_weapon(c->r[3])) { c->r[3] = 1; return; }
     f_020C0CE0_orig(c);
 }

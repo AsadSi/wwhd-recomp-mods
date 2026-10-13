@@ -22,6 +22,7 @@
 #include "guest_addr.h"
 #include "../audio_out.h"
 #include "../runtime.h"
+#include "../sfx.h"
 
 namespace interp { const char* phase_name(); }
 
@@ -517,6 +518,7 @@ void output_frame(Cpu* c) {
     final_mix_lr(G.tv48, n_tv, g_post_hist[0], tv_lr);
     final_mix_lr(G.drc48, n_drc, g_post_hist[1], drc_lr);
     g_output.mix(tv_lr[0], tv_lr[1], drc_lr[0], drc_lr[1], kSamples48, lr[0], lr[1]);
+    sfx::mix(lr[0], lr[1], kSamples48);  // host-side sounds (sfx.h: the mods' own)
     int16_t pcm[kSamples48 * 2];
     for (int i = 0; i < kSamples48; i++) {
         pcm[i * 2] = (int16_t)std::clamp(lr[0][i], -32768, 32767);

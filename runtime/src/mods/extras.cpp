@@ -34,6 +34,7 @@
 
 #include "guest_addr.h"
 #include "mods.h"
+#include "darknut.h"
 #include "shadow_beast.h"
 #include "../gx2/gx2.h"
 #include "../input.h"
@@ -48,7 +49,7 @@
 
 namespace mods::extras {
 namespace {
-enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kAudio, kDeep, kLeviathan, kMolgera, kStalker, kBeedle, kCalm, kPhoto, kGunner, kBlood, kCyclone, kMaelstrom, kArmada, kOcto, kWrongLion, kDrowned, kBoarding, kRaft, kFairWind, kPacing, kUpgrades, kWarp, kHelmaroc, kCount };  // the catalogue's order
+enum Id { kDamage, kRupees, kTime, kTurbo, kNight, kSea, kStorm, kFog, kSwim, kGiants, kPhantom, kBigShip, kAudio, kDeep, kLeviathan, kMolgera, kStalker, kBeedle, kCalm, kPhoto, kGunner, kBlood, kCyclone, kMaelstrom, kArmada, kOcto, kWrongLion, kDrowned, kBoarding, kRaft, kFairWind, kPacing, kUpgrades, kWarp, kHelmaroc, kTpDarknuts, kCount };  // the catalogue's order
 std::atomic<bool> g_on[kCount];
 std::atomic<int> g_choice[kCount];
 std::atomic<int> g_often[kCount];
@@ -83,6 +84,9 @@ constexpr Monster kRedead{0xE0, 0, 0xFFFFFFFF}, kStalfos{0xBE, -1, 0xFFFFFFFF}, 
                   // a Bokoblin (daBk), the Shadow stalker's body (mods/shadow_beast.cpp): type 0, no lantern, the default
                   // weapon, sight 0xFA x 10, no path, no switch
                   kBokoblin{0xBD, -1, 0xFFFFFA00},
+                  // a Darknut (daTn), the Darknut stalker's body (mods/darknut.cpp): roams (behaviour 0), colour 0, its
+                  // default range, no path, no switch
+                  kDarknutTn{0xBF, -1, 0xFFFFFF00},
                   // Beedle's Shop Ship (daObj_Ikada type 1, IkadaH vtsp): no path (angle.x bits 8..15 0xFF); a moving BG
                   kBeedleShip{0x44, -1, 0x00000001, (int16_t)0xFF00},
                   // the flagged raft (daObj_Ikada type 0, IkadaH vikae): the same actor, flat, with a mast and a flag
@@ -597,9 +601,10 @@ const std::vector<Mod>& catalogue() {
         {"phantom-stalker", "Phantom stalker", "Spooky",
          "Rarely, on an island at night, fog rolls in and something hunts Link across the island, until he takes to the "
          "sea, beats it, or it fades back into the fog: a Shadow Beast from Twilight Princess, which drops from the sky "
-         "and fights as it does there (it needs game/shadow_beast.bin, made from the Twilight Princess HD dump by "
-         "tools/shadow_beast.py; Phantom Ganon comes without it), or Phantom Ganon, who comes down behind him.",
-         {"Shadow Beast", "Phantom Ganon"}, true},
+         "and fights as it does there, Phantom Ganon, who comes down behind him, or Twilight Princess's Darknut, who "
+         "walks out of the fog after him (the Twilight Princess ones need game/tp_*.bin, made from the Twilight Princess "
+         "HD dump by tools/tp_monsters.py; Phantom Ganon comes without them).",
+         {"Shadow Beast", "Phantom Ganon", "Darknut"}, true},
         {"beedle-ship", "Beedle's ship", "Experimental",
          "Out at sea the King of Red Lions tows Beedle's shop ship, a size bigger, behind him on a tow-shaft. Stop and get "
          "out to leap back onto its deck, walk it and fight from it with its two cannons (one at the bow, one up on the "
@@ -667,6 +672,11 @@ const std::vector<Mod>& catalogue() {
          "circles high and dives at Link. Bring him down with arrows, bombs, the Boomerang or a ship's guns for 300 rupees "
          "and a blue potion. Hold out too long and he snatches the boat, Link and all, and drops him somewhere on the Great "
          "Sea: in the open water, or on an island's shore.", {}, true},
+        {"tp-darknuts", "Twilight Princess Darknuts", "Gameplay",
+         "Every Darknut is Twilight Princess's: its armour and two swords, its moves (the cut, the overhead slam, the "
+         "shield bash), a piece of armour flying off each time you hurt it, and once its armour is gone the leap back, "
+         "its sword thrown at you and the second one drawn; its sounds and sparks too. Needs game/tp_darknut.bin, made "
+         "from the Twilight Princess HD dump by tools/tp_monsters.py.", {}},
     };
     return mods;
 }
@@ -1631,9 +1641,18 @@ void step(Cpu* c) {
     // set after it every step; his colliders' centres follow the model and their sizes are scaled by the hooks below
     const bool stalked = live(kStalker, now) && stage == "sea" && !boat && (night || !always(kStalker));
     // the Shadow Beast: a Bokoblin on the ground behind Link, drawn as the beast (mods/shadow_beast.cpp)
-    const bool shadow = stalked && g_choice[kStalker].load() == 0 && beast::asset();
+    const bool shadow = stalked && g_choice[kStalker].load() == 0 && beast::available();
+    const bool darknut = stalked && g_choice[kStalker].load() == 2 && darknut::available();
     if (!shadow) beast::set_body(0);
-    if (shadow && settled) {
+    if (!darknut) darknut::set_stalker(0);
+    if (darknut && settled) {  // TP's Darknut: a WW Darknut on the ground behind Link, drawn and fought as TP's
+        if (g_phantom.wanted(c, now)) {
+            Spawner none;
+            g_phantom.id = spawn(c, none, kDarknutTn, link, 900 + rand() % 400, 1, 0, true);
+            g_phantom.next = now + 20;
+        }
+        darknut::set_stalker(g_phantom.actor(c));
+    } else if (shadow && settled) {
         if (g_phantom.wanted(c, now)) {
             Spawner none;
             static const bool ahead = getenv("WWHD_TEST_BEAST_AHEAD") != nullptr;  // test aid: in front of Link, in view
@@ -1684,6 +1703,8 @@ void step(Cpu* c) {
         }
     }
     beast::step(c, link, now);
+    darknut::replace_all(on<kTpDarknuts>());
+    darknut::step(c, link);
     // Leviathan: one Gyorg (made as the others are, a child of the Haunted sea's GyCtrl, which is made here too if
     // needed) at 8x: setMtx (0216731C) copies the actor's scale (+0x330) into its model each execute, its spheres are
     // sized through the SetR hooks (g_big_hits) but its body collider's radius (+0x9B4) is a plain store each execute,

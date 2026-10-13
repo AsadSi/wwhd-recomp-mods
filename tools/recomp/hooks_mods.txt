@@ -26,6 +26,9 @@
 0209971C  # daBk_Draw: the Shadow stalker's Bokoblin body is not drawn (mods/shadow_beast.cpp)
 020C0CE0  # daBoko draw: nor its weapon
 020A5EF4  # Bk_move: the Bokoblin's mind, replaced on the Shadow stalker's body by daE_S1's (mods/shadow_beast.cpp)
+024BA238  # daTn_Draw: a Darknut drawn as Twilight Princess's is not drawn as WW's (mods/darknut.cpp)
+024C3E64  # Tn_move: its mind, replaced by daB_TN's
+021BC2C8  # daMant draw: nor its cape
 02134B28  # daFganon_Execute: Phantom Ganon's effects as big as he is (extras.cpp)
 025A847C  # dPa_control_c::set: the same, while his execute runs
 @023CC7F0 # ph_class Execute: the Haunted sea's Seahats attack a Link who does not ride the boat too (extras.cpp)
@@ -47,3 +50,6 @@
 @02215474 # Bs1 buy: checkItemGet's answer, ours down the execItemGet path
 @02215484 # Bs1 buy: execItemGet, ours fitted instead
 @025D4ABC # fopAc_Execute position check: the actor about to halt the game, traced (extras.cpp)
+# Online co-op (mods/coop_pose.cpp): Link's pose, and puppets drawn from it
+025E2E5C  # mDoExt_modelEntryDL: Link's body, entered straight (his pose)
+025E2DE0  # mDoExt_modelUpdateDL: the same
