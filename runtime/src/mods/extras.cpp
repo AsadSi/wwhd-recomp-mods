@@ -348,11 +348,35 @@ constexpr float kHitScale = 2.0f;
 // `side`: 0 anywhere around him, 1 behind him as the camera looks (out of its view), -1 ahead; `sea`: `dy` from the sea (y 0), not
 // from Link, who may be on the Big ship's deck or up its mast; `deck`: on the deck he stands on, within 60 of his
 // height (a low deck, the raft's or the giant Lion's back, is less than 250 above the sea, which would pass as ground)
+// `m` made at a place, facing `yaw`, in Link's room: created in Link's process layer (base_process_class::mLyTg.mpLayer,
+// +0x2C), as an actor's own spawns are: here, after the executor, the current layer is the root one, and an actor made
+// there was drawn outside the play scene's draw buffers (a J3D draw list looped through the grass packet the first time
+// it came into view); `parent`: a child of that process (fopAcM_createChild)
+uint32_t create_at(Cpu* c, Monster m, uint32_t link, float x, float y, float z, int16_t yaw, uint32_t parent) {
+    static const uint32_t buf = mem::host_alloc(0x20);  // pos (cXyz) at +0, angle (csXyz) at +0x10
+    st32(buf, u32_bits(x)), st32(buf + 4, u32_bits(y)), st32(buf + 8, u32_bits(z));
+    st16(buf + 0x10, (uint16_t)m.angle_x), st16(buf + 0x12, (uint16_t)yaw), st16(buf + 0x14, 0);
+    const uint32_t layer = guest_call(c, GC(0x025DED64));  // fpcLy_CurrentLayer
+    guest_call(c, GC(0x025DEAB4), {ld32(link + 0x2C)});    // fpcLy_SetCurrentLayer
+    const uint32_t room = (uint32_t)(int8_t)ld8(link + kRoom), subtype = (uint32_t)(int32_t)m.subtype;
+    // fopAcM_createChild's 9th argument, createFunc, is on the stack (caller's sp + 8; guest_call's frame is 0x40)
+    if (parent) st32(c->r[1] - 0x40 + 8, 0);
+    const uint32_t id = parent ? guest_call(c, GC(0x025D5A20), {(uint32_t)m.proc, parent, m.param, buf, room, buf + 0x10, 0, subtype})
+                               : guest_call(c, GC(0x025D5834), {(uint32_t)m.proc, m.param, buf, room, buf + 0x10, 0, subtype, 0});
+    guest_call(c, GC(0x025DEAB4), {layer});
+    return id;
+}
+// online co-op (below): the host's monsters made or taken for a guest's
+bool coop_shared(const Monster& m);
+uint32_t coop_spawned(Cpu* c, Monster m, uint32_t id, uint32_t parent, float x, float y, float z, int16_t yaw);
+uint32_t coop_adopt(Monster m, Spawner& s);
+
 uint32_t spawn(Cpu* c, Spawner& s, Monster m, uint32_t link, float dist, int side, float dy, bool on_ground, uint32_t parent = 0, bool sea = false,
                bool deck = false) {
     static const bool seeded = (srand((unsigned)time(nullptr)), true);
     (void)seeded;
-    static const uint32_t buf = mem::host_alloc(0x20);  // pos (cXyz) at +0, angle (csXyz) at +0x10
+    if (mods::coop::sync::guest() && coop_shared(m)) return coop_adopt(m, s);  // a guest's monsters are the host's
+    static const uint32_t buf = mem::host_alloc(0x10);  // the ground check's place
     const float ly = sea ? 0.f : (float)ldf32(link + kPos + 4);
     for (int attempt = 0; attempt < 6; attempt++) {
         const double yaw = (side ? (int16_t)g_cam_yaw.load() : (int16_t)ld16(link + kAngleY)) * M_PI / 32768;  // (the camera's way)
@@ -368,23 +392,12 @@ uint32_t spawn(Cpu* c, Spawner& s, Monster m, uint32_t link, float dist, int sid
             if (ground == ly + 250 || ground < 5 || std::fabs(ground - ly) > (deck ? 60 : 250)) continue;  // nothing, water or a drop
             st32(buf + 4, u32_bits(ground + 5));
         }
-        st16(buf + 0x10, (uint16_t)m.angle_x);
-        st16(buf + 0x12, (uint16_t)(int16_t)(atan2(-sin(a), -cos(a)) * 32768 / M_PI));  // facing Link
-        st16(buf + 0x14, 0);
-        // created in Link's process layer (base_process_class::mLyTg.mpLayer, +0x2C), as an actor's own spawns are: here,
-        // after the executor, the current layer is the root one, and an actor made there was drawn outside the play
-        // scene's draw buffers (a J3D draw list looped through the grass packet the first time it came into view)
-        const uint32_t layer = guest_call(c, GC(0x025DED64));  // fpcLy_CurrentLayer
-        guest_call(c, GC(0x025DEAB4), {ld32(link + 0x2C)});    // fpcLy_SetCurrentLayer
-        const uint32_t room = (uint32_t)(int8_t)ld8(link + kRoom), subtype = (uint32_t)(int32_t)m.subtype;
-        // fopAcM_createChild's 9th argument, createFunc, is on the stack (caller's sp + 8; guest_call's frame is 0x40)
-        if (parent) st32(c->r[1] - 0x40 + 8, 0);
-        const uint32_t id = parent ? guest_call(c, GC(0x025D5A20), {(uint32_t)m.proc, parent, m.param, buf, room, buf + 0x10, 0, subtype})
-                                   : guest_call(c, GC(0x025D5834), {(uint32_t)m.proc, m.param, buf, room, buf + 0x10, 0, subtype, 0});
-        guest_call(c, GC(0x025DEAB4), {layer});
-        trace("extras: spawned proc %#x id %#x at %.0f %.0f %.0f (%zu out)", m.proc, id, x, ldf32(buf + 4), z, s.ids.size());
+        const float y = (float)ldf32(buf + 4);
+        const int16_t face = (int16_t)(atan2(-sin(a), -cos(a)) * 32768 / M_PI);  // facing Link
+        const uint32_t id = create_at(c, m, link, x, y, z, face, parent);
+        trace("extras: spawned proc %#x id %#x at %.0f %.0f %.0f (%zu out)", m.proc, id, x, y, z, s.ids.size());
         if (id != 0xFFFFFFFF) s.ids.push_back(id);
-        return id;
+        return coop_spawned(c, m, id, parent, x, y, z, face);
     }
     trace("extras: no ground for proc %#x near Link", m.proc);
     return 0xFFFFFFFF;
@@ -406,6 +419,10 @@ V3 to_world(V3 o, int16_t yaw, V3 l) {
     return {o.x + l.x * cos(t) + l.z * sin(t), o.y + l.y, o.z - l.x * sin(t) + l.z * cos(t)};
 }
 V3 pos_of(uint32_t a) { return {ldf32(a + kPos), ldf32(a + kPos + 4), ldf32(a + kPos + 8)}; }
+// online co-op (below): a shot fired here, an event's sign, start or end on the host, the host's ship on a guest
+void coop_fired(Cpu* c, V3 from, int16_t yaw, int16_t up);
+void coop_event(int op, int k, double now);
+bool coop_host_ship(V3& pos, int16_t& yaw, bool& sail);
 // back up from Tetra's cabin: where she lay, for the Big ship to be made there again
 struct CabinReturn { V3 ship; int16_t yaw; bool pending; } g_cabin_return{};
 // Link put somewhere by a mod: every copy of his position (current +0x314, old +0x300, his collision's +0x84C, +0x68B0,
@@ -809,6 +826,7 @@ void begin(int k, double now) {
     // a boss at sea: the Bomb Bag filled up (its count +0x6A to what it holds +0x70), for the deck cannons
     if (const uint32_t sv = save(); k == kPhantom || k == kLeviathan || k == kMolgera) st8(sv + 0x6A, ld8(sv + 0x70));
     trace("extras: event %s begins (%.0f s)%s", event_name(k), g_until[k] - now, k == kSea && g_giant_spell ? ", giants" : "");
+    coop_event(1, k, now);
 }
 // one of ours deleted; a cannon boat with its flag (daMajuu_Flag, proc 0xAE, which its create makes; the decomp's
 // mFlagPcId +0xD50, found here by its id, as HD moved it): the flag takes its matrix from inside the boat every step,
@@ -825,6 +843,7 @@ void delete_actor(Cpu* c, uint32_t id) {
 }
 void finish(Cpu* c, int k, double now, const char* why) {
     trace("extras: event %s ends (%s)", event_name(k), why);
+    coop_event(2, k, now);
     g_until[k] = 0;
     if (scare(k) && !always(k)) g_cool = now + quiet();
     if ((k == kPhantom || k == kStalker) && g_phantom.actor(c)) guest_call(c, GC(0x025D57E4), {g_phantom.id});  // fopAcM_delete_id
@@ -900,6 +919,7 @@ void warn(int k, uint32_t link, double now) {
     g_warn = k, g_warn_end = now + kWarning, g_warn_far = ahead;
     g_warn_x = ldf32(link + kPos) + sin(yaw) * ahead, g_warn_z = ldf32(link + kPos + 8) + cos(yaw) * ahead;
     trace("extras: signs of %s", event_name(k));
+    coop_event(0, k, now);
 }
 
 // once a step, before the mods below read live()
@@ -916,6 +936,10 @@ void direct(Cpu* c, uint32_t sv, uint32_t link, double now, bool night, bool wat
     const bool ashore = stage != "sea" || now - wet > 3, cutscene = ld8(kPlay + 0x5292) != 0;
     if (ashore) g_out_since = now;
 
+    if (mods::coop::sync::guest()) {  // a guest's events are the host's (coop_world): none rolled or ended here
+        if (g_warn >= 0) omens(c, g_warn, now, std::clamp((now - (g_warn_end - kWarning)) / kWarning, 0.0, 1.0));
+        return;
+    }
     static auto forced = forced_events();
     static const double in_play = now;  // the first step Link is in play (for the test aid's times)
     if (g_file_at < 0) g_file_at = now, g_cool = std::max(g_cool, now + 240);  // a file loaded: no scare in its first 4 minutes
@@ -1195,6 +1219,7 @@ void fire(Cpu* c, uint32_t sv, uint32_t link, V3 from, int16_t yaw, int16_t up, 
     st32(ball + 0x370, u32_bits((float)(kShotSpeed * cos(e)))), st32(ball + 0x340, u32_bits((float)(kShotSpeed * sin(e)))), st32(ball + 0x374, u32_bits(-2.5f));
     guest_call(c, GC(0x025E1988), {0x2852});
     g_deck_shots++;
+    coop_fired(c, from, yaw, up);
     trace("extras: deck cannon fires (yaw %d, up %d, %u bombs left)%s", yaw, up, sv ? ld8(sv + 0x6A) : 0, locked == 0xFFFFFFFF ? ", aimed by hand" : ", locked on");
 }
 // the gun Link stands by on `ship` (by the deck spot it is manned from, for one up on a roof), or -1
@@ -1348,9 +1373,188 @@ void second_gunner(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, const Gun*
     fire(c, sv, link, from, yaw, up, locked);
     trace("extras: the second gunner fires the %s gun", gun == 0 ? "bow" : "other");
 }
+
+// Online co-op: the world the players share (docs/multiplayer.md; the session, the players and the join are coop_sync.cpp).
+// Tetra's ship: the host's place, heading and sail go out every step and a guest's ship is put there (the Big ship
+// block). Cannon shots: a shot fired on one game (its pivot and aim, in the ship's frame on board) is fired on the others
+// from the crew's powder. Sea events: only the host rolls; each sign, start and end goes to the guests, whose events run
+// from those alone (direct). Monsters: each one the host's mods make goes out with a number (and its parent's) and is made
+// on the guests, where their own mods' spawns take it (coop_adopt); every step the host's place and heading of each go
+// out and a guest's copies are put there, 100 ms behind; one gone on the host goes on the guests; one killed on a guest
+// (gone there first) goes on the host too: the shooter is favoured.
+struct Shared { uint16_t n; uint32_t id; int16_t proc; bool adopted; };
+std::vector<Shared> g_coop;  // the host's monsters out, or a guest's copies of them
+bool g_coop_remote_shot = false;
+struct Bytes {  // a message's fields, in order
+    std::string b;
+    template <class T> Bytes& put(T v) { b.append((const char*)&v, sizeof v); return *this; }
+};
+struct Reader {
+    const std::string& b;
+    size_t o = 0;
+    template <class T> T get() { T v{}; if (o + sizeof v <= b.size()) memcpy(&v, b.data() + o, sizeof v); o += sizeof v; return v; }
+};
+bool coop_shared(const Monster& m) {  // not the ships and their parts, which each game makes for itself
+    return m.proc != 0x3D && m.proc != kPirates.proc && m.proc != 0x1BF && m.proc != kRaftCraft.m.proc && m.proc != kBeedleCraft.m.proc;
+}
+uint32_t coop_spawned(Cpu* c, Monster m, uint32_t id, uint32_t parent, float x, float y, float z, int16_t yaw) {
+    if (id == 0xFFFFFFFF || !mods::coop::sync::host() || !coop_shared(m)) return id;
+    static uint16_t next = 0;
+    uint16_t up = 0;
+    for (const Shared& s : g_coop) if (parent && s.id == parent) up = s.n;
+    g_coop.push_back({++next, id, m.proc, false});
+    mods::coop::net::send(-1, mods::coop::net::kSpawn,
+                          Bytes{}.put(next).put(up).put(m.proc).put(m.subtype).put(m.param).put(m.angle_x).put(x).put(y).put(z).put(yaw).b);
+    (void)c;
+    return id;
+}
+uint32_t coop_adopt(Monster m, Spawner& s) {
+    for (Shared& x : g_coop)
+        if (!x.adopted && x.proc == m.proc) {
+            x.adopted = true, s.ids.push_back(x.id);
+            return x.id;
+        }
+    return 0xFFFFFFFF;  // (not made on the host yet: asked again later, as when there is no ground)
+}
+void coop_fired(Cpu* c, V3 from, int16_t yaw, int16_t up) {
+    if (g_coop_remote_shot || mods::coop::net::role() == mods::coop::net::Role::kOff) return;
+    const uint32_t hull = g_bigship.actor(c);
+    const bool aboard = hull && std::hypot(from.x - ldf32(hull + kPos), from.z - ldf32(hull + kPos + 8)) < 3000;
+    const V3 at = aboard ? to_local(hull, from) : from;
+    const int16_t a = aboard ? (int16_t)(yaw - (int16_t)ld16(hull + kAngleY)) : yaw;
+    mods::coop::net::send(-1, mods::coop::net::kFired, Bytes{}.put<uint8_t>(aboard).put((float)at.x).put((float)at.y).put((float)at.z).put(a).put(up).b);
+}
+void coop_event(int op, int k, double now) {
+    if (!mods::coop::sync::host()) return;
+    const double left = op == 0 ? g_warn_end - now : k == kNight || k == kBlood ? 1e9 : g_until[k] - now;
+    mods::coop::net::send(-1, mods::coop::net::kSeaEvent,
+                          Bytes{}.put<uint8_t>(op).put<uint8_t>(k).put(left).put(g_warn_x).put(g_warn_z).put(g_warn_far).put<uint8_t>(g_giant_spell).b);
+}
+// the host's snapshots: a then b, t of the way (over 1: on past b)
+template <class T> T mix(T a, T b, float t) { return (T)(a + (b - a) * t); }
+bool coop_host_ship(V3& pos, int16_t& yaw, bool& sail) {
+    std::string a, b;
+    float t;
+    if (!mods::coop::sync::host_state(mods::coop::sync::kShip, a, b, t) || a.size() < 15 || b.size() < 15) return false;
+    Reader ra{a}, rb{b};
+    float pa[3], pb[3];
+    for (int i = 0; i < 3; i++) pa[i] = ra.get<float>(), pb[i] = rb.get<float>();
+    const int16_t ya = ra.get<int16_t>(), yb = rb.get<int16_t>();
+    pos = {mix(pa[0], pb[0], t), mix(pa[1], pb[1], t), mix(pa[2], pb[2], t)};
+    yaw = (int16_t)(ya + (int16_t)(yb - ya) * t), sail = rb.get<uint8_t>();
+    return true;
+}
+// each step in play, after the mods
+void coop_world(Cpu* c, uint32_t link, bool settled, bool riding, double now) {
+    namespace net = mods::coop::net;
+    namespace sync = mods::coop::sync;
+    if (net::role() == net::Role::kOff) { g_coop.clear(); return; }
+    static std::vector<sync::WorldMsg> held;  // (until this game is settled in its stage)
+    for (auto& m : sync::take_world()) held.push_back(std::move(m));
+    for (size_t i = 0; settled && i < held.size(); i++) {
+        const sync::WorldMsg& m = held[i];
+        Reader r{m.body};
+        if (m.type == net::kFired) {
+            const bool aboard = r.get<uint8_t>();
+            const V3 at{r.get<float>(), r.get<float>(), r.get<float>()};
+            int16_t yaw = r.get<int16_t>();
+            const int16_t up = r.get<int16_t>();
+            const uint32_t hull = g_bigship.actor(c);
+            if (aboard && !hull) continue;
+            if (aboard) yaw = (int16_t)(yaw + (int16_t)ld16(hull + kAngleY));
+            g_coop_remote_shot = true;
+            fire(c, 0, link, aboard ? to_world(pos_of(hull), (int16_t)ld16(hull + kAngleY), at) : at, yaw, up, 0xFFFFFFFF);
+            g_coop_remote_shot = false;
+        } else if (m.type == net::kSeaEvent) {
+            const int op = r.get<uint8_t>(), k = r.get<uint8_t>();
+            const double left = r.get<double>(), wx = r.get<double>(), wz = r.get<double>(), far = r.get<double>();
+            const bool giants = r.get<uint8_t>();
+            if (k >= kCount) continue;
+            if (op == 0) g_warn = k, g_warn_end = now + left, g_warn_x = wx, g_warn_z = wz, g_warn_far = far;
+            else if (op == 1) {
+                if (g_warn == k) g_warn = -1, wind(c, 0);
+                begin(k, now);
+                g_until[k] = now + left, g_giant_spell = giants;
+            } else if (g_until[k] > 0) finish(c, k, now, "the host's ended");
+        } else if (m.type == net::kSpawn) {
+            const uint16_t n = r.get<uint16_t>(), up = r.get<uint16_t>();
+            Monster mo{r.get<int16_t>(), r.get<int8_t>(), r.get<uint32_t>(), r.get<int16_t>()};
+            const float x = r.get<float>(), y = r.get<float>(), z = r.get<float>();
+            const int16_t yaw = r.get<int16_t>();
+            uint32_t parent = 0;
+            for (const Shared& s : g_coop) if (up && s.n == up) parent = s.id;
+            if (up && !parent) continue;  // (its parent is gone here)
+            const uint32_t id = create_at(c, mo, link, x, y, z, yaw, parent);
+            if (id != 0xFFFFFFFF) g_coop.push_back({n, id, mo.proc, false});
+            trace("extras: co-op: the host's monster %u (proc %#x) made here, id %#x", n, mo.proc, id);
+        } else if (m.type == net::kKill || m.type == net::kHit) {  // gone on the host; or (the host) killed on a guest
+            const uint16_t n = r.get<uint16_t>();
+            for (size_t j = 0; j < g_coop.size(); j++)
+                if (g_coop[j].n == n) {
+                    if (guest_call(c, GC(0x025DE50C), {g_coop[j].id})) delete_actor(c, g_coop[j].id);
+                    if (m.type == net::kKill) g_coop.erase(g_coop.begin() + j);
+                    break;
+                }
+        }
+    }
+    if (settled) held.clear();
+    // the monsters: the host's out; a guest's put where the host's are (a guest's copies all go with its stage)
+    static uint32_t last_link = 0;
+    if (link != last_link && sync::guest()) g_coop.clear();
+    last_link = link;
+    std::string a, b;
+    float t = 0;
+    const bool have = sync::guest() && sync::host_state(sync::kMonsters, a, b, t);
+    Bytes out;
+    for (size_t j = 0; j < g_coop.size();) {
+        const Shared& s = g_coop[j];
+        const uint32_t m = guest_call(c, GC(0x025DE50C), {s.id});
+        if (!m) {  // gone: on the host, from the guests too; on a guest, killed here, from the host too
+            if (sync::host() || settled) net::send(-1, sync::host() ? net::kKill : net::kHit, Bytes{}.put(s.n).b);
+            g_coop.erase(g_coop.begin() + j);
+            continue;
+        }
+        j++;
+        if (sync::host()) {
+            if (out.b.size() < 1100)
+                out.put(s.n).put((float)ldf32(m + kPos)).put((float)ldf32(m + kPos + 4)).put((float)ldf32(m + kPos + 8))
+                    .put((int16_t)ld16(m + 0x322)).put((int16_t)ld16(m + kAngleY));
+            continue;
+        }
+        if (!have) continue;
+        auto find = [n = s.n](const std::string& snap, float p[3], int16_t& yaw, int16_t& shape) {
+            for (Reader r{snap}; r.o + 18 <= snap.size();) {
+                const uint16_t k = r.get<uint16_t>();
+                for (int i = 0; i < 3; i++) p[i] = r.get<float>();
+                yaw = r.get<int16_t>(), shape = r.get<int16_t>();
+                if (k == n) return true;
+            }
+            return false;
+        };
+        float pa[3], pb[3];
+        int16_t ya, yb, sa, sb;
+        if (!find(b, pb, yb, sb)) continue;
+        if (!find(a, pa, ya, sa)) memcpy(pa, pb, 12), ya = yb, sa = sb;
+        for (int i = 0; i < 3; i++) {
+            const float v = mix(pa[i], pb[i], t);
+            st32(m + kPos + 4 * i, u32_bits(v)), st32(m + 0x300 + 4 * i, u32_bits(v));
+        }
+        st16(m + 0x322, (uint16_t)(int16_t)(ya + (int16_t)(yb - ya) * t)), st16(m + kAngleY, (uint16_t)(int16_t)(sa + (int16_t)(sb - sa) * t));
+    }
+    if (sync::host()) net::put_state(sync::kMonsters, out.b);
+    // the players push each other: this game moves only its own Link out of the others' room (radius 35 each)
+    if (riding) return;
+    const V3 me = pos_of(link);
+    for (int id = 0; id < net::kMaxPlayers; id++)
+        if (float p[3]; sync::place(id, p)) {
+            const double dx = me.x - p[0], dz = me.z - p[2], d = std::hypot(dx, dz);
+            if (d > 0.01 && d < 70 && std::fabs(me.y - p[1]) < 80) put_link(link, {p[0] + dx / d * 70, me.y, p[2] + dz / d * 70});
+        }
+}
 }  // namespace
 
 // ---- the game thread, once per full logic step ----
+
 void step(Cpu* c) {
     mods::coop::sync::poll(c, on<kCoop>());  // (at the title too: the session's messages)
     bool keys[256];
@@ -2294,6 +2498,12 @@ void step(Cpu* c) {
             return false;
         };
         auto isle = [](V3 p) { return std::hypot(p.x - std::round(p.x / 1e5) * 1e5, p.z - std::round(p.z / 1e5) * 1e5); };
+        // online co-op: a guest's ship is the host's, made where it is and put there every step (100 ms behind) in place
+        // of the helm, its sail as the host's; never left behind
+        V3 hp{};
+        int16_t hy = 0;
+        bool hsail = false;
+        const bool follow = mods::coop::sync::guest() && coop_host_ship(hp, hy, hsail);
         static V3 home;       // where it is made at anchor, and its heading
         static int16_t home_yaw = 0;
         static V3 left_at;    // where it was last seen, and its heading: remade there when its room's unloading took it
@@ -2307,7 +2517,7 @@ void step(Cpu* c) {
         const double away = hull ? std::hypot(ldf32(hull + kPos) - ldf32(link + kPos), ldf32(hull + kPos + 8) - ldf32(link + kPos + 8)) : 0;
         if (hull && away < 15000)  // kept in Link's room while he is near, so the room it was made in can unload
             st8(hull + kRoom, ld8(link + kRoom)), left_at = pos_of(hull), left_yaw = (int16_t)ld16(hull + kAngleY), left_one = true;
-        if (hull && riding && away > 20000) {
+        if (hull && riding && away > 20000 && !follow) {
             // with its children, which its delete leaves (Psail, its flag, the catapult Touseki, the wheel Kaji, the
             // door: their ids at +0x478..+0x498, decomp +0x2E8..+0x308): the sail and the catapult read the ship
             // through a static pointer every step and crashed with it gone; and our deck cannons
@@ -2322,12 +2532,12 @@ void step(Cpu* c) {
             static const double off = getenv("WWHD_BIGSHIP_OFF") ? atof(getenv("WWHD_BIGSHIP_OFF")) : 3500;  // (test aid)
             V3 to = back ? left_at : to_world(pos_of(korl), yaw, {-off, 0, 0});
             to.y = ldf32(korl + kPos + 4);
-            if ((riding || back) && (back || (made_at < g_out_since && isle(to) >= 6000 && !land(to, yaw))) && g_bigship.wanted(c, now)) {
+            if ((follow || ((riding || back) && (back || (made_at < g_out_since && isle(to) >= 6000 && !land(to, yaw))))) && g_bigship.wanted(c, now)) {
                 made_at = now;
                 Spawner none;
                 g_bigship.id = spawn(c, none, kPirates, korl, 0, false, 0, false);
                 g_bigship.next = now + 5;
-                home = to, home_yaw = back ? left_yaw : yaw;
+                home = follow ? hp : to, home_yaw = follow ? hy : back ? left_yaw : yaw;
             }
         } else {
             static uint32_t placed = 0;
@@ -2372,11 +2582,11 @@ void step(Cpu* c) {
                     trace("extras: Link climbs out of the water onto the deck");
                 }
             }
-            // (test aid: live pad bit 27 drops Link onto her deck at WWHD_TEST_DECK="x z", her frame, default the wheel)
+            // (test aid: live pad bit 27 drops Link onto her deck at WWHD_TEST_DECK="x z" (or x,z), her frame, default the wheel)
             static bool drop_was = false;
             if (const bool drop = input::live_buttons() & 0x08000000u; drop && !drop_was && leap.step < 0) {
                 double x = 0, z = -780;
-                if (const char* e = getenv("WWHD_TEST_DECK")) sscanf(e, "%lf %lf", &x, &z);
+                if (const char* e = getenv("WWHD_TEST_DECK")) sscanf(e, "%lf%*[ ,]%lf", &x, &z);
                 const V3 w = to_world(pos_of(hull), (int16_t)ld16(hull + kAngleY), {x, kDeckY + 400, z}  /* from above whichever deck is there */);
                 put_link(link, w);
                 st32(link + 0x340, 0), st32(link + 0x6A48, u32_bits((float)w.y)), st32(link + 0x6A4C, u32_bits((float)w.y));
@@ -2385,6 +2595,15 @@ void step(Cpu* c) {
                 trace("extras: (test) Link dropped onto the Big ship's deck at %.0f %.0f", x, z);
             }
             drop_was = input::live_buttons() & 0x08000000u;
+            // a guest joining the host on her deck: set down beside where the host stands, in her frame
+            if (float l[3]; mods::coop::sync::take_deck_drop(l)) {
+                const V3 w = to_world(pos_of(hull), (int16_t)ld16(hull + kAngleY), {l[0], l[1] + 60, l[2]});
+                put_link(link, w);
+                st32(link + 0x340, 0), st32(link + 0x6A48, u32_bits((float)w.y)), st32(link + 0x6A4C, u32_bits((float)w.y));
+                c->f[1].ps0 = 0;
+                guest_call(c, GC(0x023F6564), {link, 1});
+                trace("extras: co-op: Link set down on the host's deck at %.0f %.0f", l[0], l[2]);
+            }
             // The helm, the ship's wheel (Kaji, at z -858) on the stern castle: A by it takes it (the stick, A and B are
             // then the helm's, filter_pad). The stick up raises the sail, down lowers it (0.7 s from furled to full);
             // the wind sets how fast she sails (below), and she turns quicker the faster she goes. The hull is
@@ -2400,14 +2619,16 @@ void step(Cpu* c) {
             if (sailed != g_bigship.id) sailed = g_bigship.id, helm = false, g_at_helm = false, speed = sail = 0;
             constexpr V3 kHelm{0, 0, -880};  // the wheel, from either side of it
             const V3 me = to_local(hull, link);
-            if (!helm && deck && g_manned < 0 && (proc == 0x4 || proc == 0x6) && (pressed & input::kA) && std::hypot(me.x - kHelm.x, me.z - kHelm.z) < 200) {
+            if (!follow && !helm && deck && g_manned < 0 && (proc == 0x4 || proc == 0x6) && (pressed & input::kA) && std::hypot(me.x - kHelm.x, me.z - kHelm.z) < 200) {
                 helm = true, g_take_pad = true, g_at_helm = true;
                 trace("extras: Link takes the Big ship's helm");
             } else if (helm && (!deck || !g_take_pad || (pressed & input::kB) || ld8(kPlay + 0x5292))) {
                 helm = false, g_take_pad = false, g_at_helm = false, sail = 0;
                 trace("extras: Link lets go of the helm");
             }
-            if (helm || speed > 0.2) {
+            if (follow) {
+                put(hull, hp, hy);
+            } else if (helm || speed > 0.2) {
                 if (helm) sail = std::clamp(sail + g_pad_ly.load() / 20.0, 0.0, 1.0);
                 if (static double t = 0; now - t >= 1) t = now, trace("extras: Big ship sails: helm %d, sail %.2f, speed %.1f, heading %d", helm, sail, speed, (int16_t)ld16(hull + kAngleY));
                 // a heavy ship: it gathers way slowly and carries it, its top speed the boat's 40 (with the sailing
@@ -2456,6 +2677,14 @@ void step(Cpu* c) {
             const double going = helm || speed > 0.2 ? speed : 0;
             if (going > 12) sail_set = true;
             else if (going < 6) sail_set = false;
+            if (follow) sail_set = hsail;
+            if (mods::coop::sync::host()) {  // out to the guests: her place, heading and sail
+                std::string b(15, '\0');
+                const float f[3] = {(float)ldf32(hull + kPos), (float)ldf32(hull + kPos + 4), (float)ldf32(hull + kPos + 8)};
+                const int16_t a = (int16_t)ld16(hull + kAngleY);
+                memcpy(&b[0], f, 12), memcpy(&b[12], &a, 2), b[14] = sail_set;
+                mods::coop::net::put_state(mods::coop::sync::kShip, b);
+            }
             st8(GD(0x1046D78E), sail_set), st8(hull + 0x3E6, sail_set);
         }
     }
@@ -2561,7 +2790,7 @@ void step(Cpu* c) {
         // the ship's crew: a test aid now (WWHD_TEST_CREW=1), so a test clears the sea quickly; in play a second player
         // mans the other gun (Second gunner)
         static const bool crewed = getenv("WWHD_TEST_CREW") != nullptr;
-        if (ship && crewed && settled) crew(c, link, ship, guns, now);
+        if (ship && crewed && settled && !mods::coop::sync::guest()) crew(c, link, ship, guns, now);  // (a guest sees the host's crew fire)
         else g_crew_aims[0] = g_crew_aims[1] = false;
     }
     if (static double t = 0; hull && now - t >= 1) {  // where Link is about the Big ship, once a second (the trace)
@@ -2796,6 +3025,7 @@ void step(Cpu* c) {
             }
         }
     }
+    coop_world(c, link, settled, riding, now);
 }
 
 // camera_draw (024FFC40; the camera process: eye +0xDC, center +0xE8): at a manned deck cannon the camera looks out over
