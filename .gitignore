@@ -41,3 +41,8 @@ headstart.bin
 /wwhd_src/
 # local coordination board
 /task.md
+
+# private working notes and scratch
+docs/next-session-prompt.md
+docs/mods-next.md
+trace.txt

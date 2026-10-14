@@ -8,6 +8,14 @@ platforms), with no Cemu runtime and no GPU command emulation.
 
 How it works and how it differs from running the game in Cemu: [docs/how-it-works.md](docs/how-it-works.md).
 
+## Mods added on this branch
+
+This branch adds a set of optional mods (Mods menu, all off by default) on top of the original project:
+spooky sea events (Maelstrom, Leviathan, Haunted sea, Dead calm), Tetra's ship you can buy and sail, the
+Shadow Beast, extra monsters, and an experimental online co-op. Each one is its own toggle, so you can
+play without them. Third-party credits are in [NOTICE](NOTICE). You need your own copy of the game;
+nothing from it is included here.
+
 ## What's new in this update
 
 ### Next update
