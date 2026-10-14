@@ -8,6 +8,9 @@ platforms), with no Cemu runtime and no GPU command emulation.
 
 How it works and how it differs from running the game in Cemu: [docs/how-it-works.md](docs/how-it-works.md).
 
+
+Credits for the original project and everything this builds on: [CREDITS.md](CREDITS.md).
+
 ## Mods added on this branch
 
 This branch adds a set of optional mods (Mods menu, all off by default) on top of the original project:
