@@ -16,6 +16,13 @@ Shadow Beast, extra monsters, and an experimental online co-op ([how to play](do
 play without them. Third-party credits are in [NOTICE](NOTICE). You need your own copy of the game;
 nothing from it is included here.
 
+| | | |
+|---|---|---|
+| ![Sailing at night with a huge shadow passing under the boat](docs/images/night-sea.png) | ![Tetra's pirate ship at sea](docs/images/tetras-ship.png) | ![Inside the ship's cabin](docs/images/ship-cabin.png) |
+| Spooky sea events at night | Tetra's ship | Her cabin |
+
+*Screenshots are from the game running in this port; the game and its artwork belong to Nintendo.*
+
 ## What's new in this update
 
 ### Next update
