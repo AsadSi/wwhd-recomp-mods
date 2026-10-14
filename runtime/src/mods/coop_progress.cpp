@@ -6,10 +6,12 @@
 // change goes as {u16 offset, u8 size, the field's new value, and for bit fields the bits that changed}; bit fields go
 // byte by byte, so two players' changes to different bits of one byte both hold.
 //
-// The rooms being played see the others' chests at once (Anchor's "a flag set while the actor is loaded"): a chest whose
-// bit came in is made again where it stands (fopAcM_delete, fopAcM_create with its own parameters), and daTbox_c's
-// CreateInit, finding its bit set, makes it an opened one. The chest's process name is the game's own (its object
-// name table: "takara"), as the HD game numbers processes its own way.
+// The rooms being played see the others' doing at once (Anchor's "a flag set while the actor is loaded"), kind by kind:
+// - a chest whose bit came in is made again where it stands (fopAcM_delete, fopAcM_create with its own parameters), and
+//   daTbox_c's CreateInit, finding its bit set, makes it an opened one;
+// - a boulder that bombs break (daStone2, "Ebrock") whose switch came in is taken away: made with its switch set, it
+//   would not be made at all (Mthd_Create, chk_appear).
+// The process names are the game's own (its object name table), as the HD game numbers processes its own way.
 #include "coop_progress.h"
 
 #include <cstdio>
@@ -125,41 +127,51 @@ std::string put_in(uint32_t info, const std::string& m) {
     return done;
 }
 
+// a process name from the object name table (-1: none)
+int16_t proc_of(const char* name) {
+    for (uint32_t e = kObjNames; e < kObjNames + 12 * 2000 && ld8(e); e += 12)
+        if (!strncmp((const char*)mem::ptr(e), name, 8)) return (int16_t)ld16(e + 8);
+    return -1;
+}
 int16_t tbox_proc() {
-    static int16_t proc = -2;  // -2: not looked up yet; -1: not found
-    if (proc == -2) {
-        proc = -1;
-        for (uint32_t e = kObjNames; e < kObjNames + 12 * 2000 && ld8(e); e += 12)
-            if (!memcmp(mem::ptr(e), "takara\0", 7)) { proc = (int16_t)ld16(e + 8); break; }
-        mods::trace("coop: progress: chests are process %#x", proc);
-    }
+    static const int16_t proc = proc_of("takara");
     return proc;
 }
 
-// the chests of the rooms loaded here whose bit `opened` has newly (per stage table index; the played stage `cur`) made
-// again, opened
-void reopen_chests(Cpu* c, const uint32_t opened[], int cur) {
-    const int16_t proc = tbox_proc();
+// the loaded actors the others' new bits change: chests whose bit is newly in `opened` (per stage table index), made
+// again opened; boulders whose switch is newly in `switched` (the played stage `cur`'s 128 switches), taken away
+void catch_up(Cpu* c, const uint32_t opened[], const uint32_t switched[4], int cur) {
+    static const int16_t stone = proc_of("Ebrock");  // daStone2: switch (PRM_SWSAVE) bits 8-15, 0xFF none
     const uint32_t link = ld32(kLinkPtr);
-    if (proc < 0 || !link) return;
-    std::vector<uint32_t> found;
+    if (!link) return;
+    std::vector<uint32_t> chests, gone;
     uint32_t n = ld32(kActorQueue);
     for (int k = 0; n >= 0x10000000 && n < 0x50000000 && k < 4096; k++, n = ld32(n + 8)) {
         const uint32_t a = ld32(n + 0xC);
-        if (!a || (int16_t)ld16(a + kProcName) != proc) continue;
-        const uint32_t prm = ld32(a + kParams), type = prm & 0x7F, no = prm >> 7 & 0x1F;
-        const int stage = type == 7 || type == 8 ? 1 : cur;  // FUNC_TYPE_EXTRA_SAVE_INFO(_SPAWN): STAGE_SEA2's bits
-        if (stage >= 0 && opened[stage] >> no & 1) found.push_back(a);
+        if (!a) continue;
+        const int16_t proc = (int16_t)ld16(a + kProcName);
+        const uint32_t prm = ld32(a + kParams);
+        if (proc == tbox_proc() && proc >= 0) {
+            const uint32_t type = prm & 0x7F, no = prm >> 7 & 0x1F;
+            const int stage = type == 7 || type == 8 ? 1 : cur;  // FUNC_TYPE_EXTRA_SAVE_INFO(_SPAWN): STAGE_SEA2's bits
+            if (stage >= 0 && opened[stage] >> no & 1) chests.push_back(a);
+        } else if (proc == stone && proc >= 0) {
+            if (const uint32_t sw = prm >> 8 & 0xFF; sw < 128 && switched[sw / 32] >> (sw % 32) & 1) gone.push_back(a);
+        }
+    }
+    for (const uint32_t a : gone) {
+        mods::trace("coop: progress: boulder (switch %u) broken by another player: taken away", ld32(a + kParams) >> 8 & 0xFF);
+        guest_call(c, GC(0x025D57E0), {a});  // fopAcM_delete
     }
     static const uint32_t buf = mem::host_alloc(0x30);  // pos +0, angle +0x10, scale +0x20
-    for (const uint32_t a : found) {
+    for (const uint32_t a : chests) {
         const uint32_t prm = ld32(a + kParams), arg = ld32(a + kArgument), room = (uint32_t)(int8_t)ld8(a + kHome + 0x12);
         for (int i = 0; i < 12; i += 4) st32(buf + i, ld32(a + kHome + i)), st32(buf + 0x20 + i, ld32(a + kScale + i));
         for (int i = 0; i < 6; i += 2) st16(buf + 0x10 + i, ld16(a + kHome + 0xC + i));
         guest_call(c, GC(0x025D57E0), {a});  // fopAcM_delete
         const uint32_t layer = guest_call(c, GC(0x025DED64));  // fpcLy_CurrentLayer: made in Link's, as create_at does
         guest_call(c, GC(0x025DEAB4), {ld32(link + kLayer)});
-        const uint32_t id = guest_call(c, GC(0x025D5834), {(uint32_t)proc, prm, buf, room, buf + 0x10, buf + 0x20, arg, 0});
+        const uint32_t id = guest_call(c, GC(0x025D5834), {(uint32_t)tbox_proc(), prm, buf, room, buf + 0x10, buf + 0x20, arg, 0});
         guest_call(c, GC(0x025DEAB4), {layer});
         mods::trace("coop: progress: chest %u (room %d) opened by another player: made again as %#x", prm >> 7 & 0x1F, (int)(int32_t)room, id);
     }
@@ -234,13 +246,20 @@ void step(Cpu* c, bool live) {
     for (const std::string& m : g_in) mods::trace("coop: progress in:%s", put_in(info, m).c_str());
     g_in.clear();
     read(info, g_was);
-    uint32_t opened[kStages];
+    // what came in newly: each stage's chest bits; the played stage's switches (dSv_memBit_c::mSwitch[4], bit i of word i/32)
+    uint32_t opened[kStages], switched[4] = {};
     bool any = false;
     for (int s = 0; s < kStages; s++) {
         const uint16_t t = kTable + s * kMemSize;
         opened[s] = value(&g_was[t], 4) & ~value(&now[t], 4), any |= opened[s] != 0;
     }
-    if (any) reopen_chests(c, opened, (int8_t)ld8(info + kStageNo));
+    const int cur = (int8_t)ld8(info + kStageNo);
+    if (cur >= 0 && cur < kStages)
+        for (int w = 0; w < 4; w++) {
+            const uint16_t t = kTable + cur * kMemSize + 4 + w * 4;
+            switched[w] = value(&g_was[t], 4) & ~value(&now[t], 4), any |= switched[w] != 0;
+        }
+    if (any) catch_up(c, opened, switched, cur);
 }
 
 }  // namespace mods::coop::progress
