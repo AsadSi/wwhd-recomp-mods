@@ -19,6 +19,7 @@
 #include <mutex>
 
 #include "coop_pose.h"
+#include "coop_progress.h"
 #include "extras.h"
 #include "guest_addr.h"
 #include "mods.h"
@@ -133,6 +134,7 @@ void back_to_title(const std::string& why) {
 struct Handler : net::Handler {
     void message(int from, net::Msg type, const uint8_t* d, size_t n) override {
         if (type == net::kEffect) return g_effects_in.push_back({from, net::now_ms(), std::string((const char*)d, n)});
+        if (type == net::kProgress) return progress::received(d, n);
         if (type != net::kJoinState) {
             g_world.push_back({from, type, std::string((const char*)d, n)});
             return;
@@ -331,6 +333,7 @@ void poll(Cpu* c, bool on) {
         }
     }
     if (!on && net::role() == net::Role::kOff && g_status.rfind("Not started", 0) != 0) g_status = "Off";
+    if (net::role() == net::Role::kOff) progress::stop();
     net::poll(g_handler);
     if (static bool told = false; !arrived()) told = false;
     else if (guest() && !told) told = true, net::send(0, net::kArrived, std::string());
@@ -365,6 +368,7 @@ void step(Cpu* c, uint32_t link, uint32_t hull) {
     }
     if (const std::vector<Effect> fx = take_effects(); !fx.empty())
         net::send(-1, net::kEffect, std::string((const char*)fx.data(), fx.size() * sizeof(Effect)));
+    progress::step(arrived());
     // the host: its world to each guest that has just joined (once Link is free to have it taken)
     for (size_t i = 0; i < g_send_join.size();) {
         std::string text, why;

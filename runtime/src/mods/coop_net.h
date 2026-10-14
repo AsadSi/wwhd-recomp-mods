@@ -29,6 +29,7 @@ enum Msg : uint8_t {
     kArrived,     // guest -> host: its Link is in the host's world (the join): the running event and monsters to it
     kBoatShot,    // any -> host -> others: the boat's own cannon fired {f32 pos[3], s16 angle[3], f32 speedF, speed y, gravity}
     kDamage,      // guest -> host: {u16 n, u8 health}: its hit on the host's monster n (the host's health counts)
+    kProgress,    // any -> host -> others: save data fields a player changed (coop_progress.h)
 };
 
 enum class Role { kOff, kHost, kGuest };

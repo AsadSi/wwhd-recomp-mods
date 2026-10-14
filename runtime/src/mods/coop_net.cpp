@@ -173,7 +173,7 @@ void take(int li, const uint8_t* d, size_t n, Handler& h) {
         } else if (type == kLeft && len >= 1) {
             drop(b[0] % kMaxPlayers, "left", h);
         } else {
-            if (g_role == Role::kHost && (type == kFired || type == kEffect || type == kBoatShot))  // passed on to the other guests
+            if (g_role == Role::kHost && (type == kFired || type == kEffect || type == kBoatShot || type == kProgress))  // passed on to the other guests
                 for (int i = 1; i < kMaxPlayers; i++) if (i != li && g_link[i].on) queue(g_link[i], type, origin, std::string((const char*)b, len));
             h.message(origin, type, b, len);
         }
