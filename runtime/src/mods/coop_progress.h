@@ -8,13 +8,16 @@
 #include <cstddef>
 #include <cstdint>
 
+struct Cpu;
+
 namespace mods::coop::progress {
 
 // another game's changes (net::kProgress), put in at the next step
 void received(const uint8_t* d, size_t n);
 // every step in play: `live` once this game plays in the host's world (sync::arrived()); its own changes out, the
-// others' in. Not live: nothing compared, the others' changes kept for the arrival
-void step(bool live);
+// others' in (a chest another player opened, in a room loaded here, is opened here too). Not live: nothing compared, the
+// others' changes kept for the arrival
+void step(Cpu* c, bool live);
 // the session ended: the others' changes still kept are dropped
 void stop();
 

@@ -368,7 +368,7 @@ void step(Cpu* c, uint32_t link, uint32_t hull) {
     }
     if (const std::vector<Effect> fx = take_effects(); !fx.empty())
         net::send(-1, net::kEffect, std::string((const char*)fx.data(), fx.size() * sizeof(Effect)));
-    progress::step(arrived());
+    progress::step(c, arrived());
     // the host: its world to each guest that has just joined (once Link is free to have it taken)
     for (size_t i = 0; i < g_send_join.size();) {
         std::string text, why;

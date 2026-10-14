@@ -23,7 +23,7 @@ the game. It is work in progress: expect rough edges.
 ## Limits
 - A guest's saves are off while joined (the host saves). When the host leaves or the link drops, a guest goes
   back to the title screen.
-- A room you are both in does not change for you until you enter it again: a chest the other player opened
-  still looks shut.
+- A chest the other player opens opens for you too, even in the room you are in. Other things (a door they
+  unlocked, a wall they bombed) change for you only once you enter that room again.
 - Not yet: cutscenes shared, doors that need the host's say, voice, characters other than Link, hits on
   players, monsters outside sea events (each player has their own).
