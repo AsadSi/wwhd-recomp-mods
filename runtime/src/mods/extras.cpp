@@ -695,7 +695,7 @@ const std::vector<Mod>& catalogue() {
          "Play with friends: one hosts their game, the others join it over the internet (Tailscale) or the local network "
          "and play in the host's world, drawn as Link: on Tetra's ship together, the same sea events and monsters. A guest's "
          "own Quest Logs are never saved to; when the host leaves, the guest goes back to the title screen. Both need the "
-         "same build of the game. Work in progress (docs/multiplayer.md).", {"Host", "Join"}},
+         "same build of the game. Work in progress (docs/online-coop.md).", {"Host", "Join"}},
         {"tp-darknuts", "Twilight Princess Darknuts", "Gameplay",
          "Every Darknut is Twilight Princess's: its armour and two swords, its moves (the cut, the overhead slam, the "
          "shield bash), a piece of armour flying off each time you hurt it, and once its armour is gone the leap back, "
@@ -1374,7 +1374,7 @@ void second_gunner(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, const Gun*
     trace("extras: the second gunner fires the %s gun", gun == 0 ? "bow" : "other");
 }
 
-// Online co-op: the world the players share (docs/multiplayer.md; the session, the players and the join are coop_sync.cpp).
+// Online co-op: the world the players share (docs/online-coop.md; the session, the players and the join are coop_sync.cpp).
 // Tetra's ship: the host's place, heading and sail go out every step and a guest's ship is put there (the Big ship
 // block). Cannon shots: a shot fired on one game (its pivot and aim, in the ship's frame on board) is fired on the others
 // from the crew's powder. Sea events: only the host rolls; each sign, start and end goes to the guests, whose events run
@@ -1428,7 +1428,7 @@ void coop_fired(Cpu* c, V3 from, int16_t yaw, int16_t up) {
     const int16_t a = aboard ? (int16_t)(yaw - (int16_t)ld16(hull + kAngleY)) : yaw;
     mods::coop::net::send(-1, mods::coop::net::kFired, Bytes{}.put<uint8_t>(aboard).put((float)at.x).put((float)at.y).put((float)at.z).put(a).put(up).b);
 }
-// The host's monsters, type by type (docs/multiplayer.md): each step, with its place, its health (+0x3A1), its mode
+// The host's monsters, type by type (docs/online-coop.md): each step, with its place, its health (+0x3A1), its mode
 // fields, its animation's frame and rate (mDoExt_McaMorf: +0x98 rate, +0x9C frame) and the last animation its anm_init
 // set; a guest's copy is put in that state and makes no choices of its own (its mode procedure is not run, or its
 // fields are overwritten each step); a hit on it there is sent to the host, whose health counts. On the host each

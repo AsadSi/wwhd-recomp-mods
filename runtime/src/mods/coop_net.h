@@ -1,4 +1,4 @@
-// Online co-op over UDP (docs/multiplayer.md): one socket a game, the host's world, guests as thin copies.
+// Online co-op over UDP (docs/online-coop.md): one socket a game, the host's world, guests as thin copies.
 // Each packet carries the sender's reliable messages until they are acked (Quake 3's way) and its newest acks; poses
 // and the host's ship go unreliably at ~20 Hz and are shown 100 ms behind, between the two snapshots around that time.
 #pragma once

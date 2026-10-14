@@ -1,4 +1,4 @@
-// Online co-op, the session (docs/multiplayer.md): the menu's settings, hosting and joining, the other players as
+// Online co-op, the session (docs/online-coop.md): the menu's settings, hosting and joining, the other players as
 // puppets, the join (the host's portable state loaded on the guest, saving off there) and back to the title when the
 // host is gone. The world the players share (Tetra's ship, cannon shots, sea events, the host's monsters) is
 // extras.cpp's, through world_messages() / host_state().

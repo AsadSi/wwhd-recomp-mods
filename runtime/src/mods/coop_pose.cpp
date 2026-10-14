@@ -185,7 +185,7 @@ void make_held(Cpu* c, int i, const Model& m) {
     trace("coop: puppet %d holds file %u: %s", i, m.file, model ? "its copy made" : "no copy");
 }
 
-// The tunics (docs/multiplayer.md): Link's body texture (hero's clothes, linktexS3TC) recoloured where the TWWHD
+// The tunics (docs/online-coop.md): Link's body texture (hero's clothes, linktexS3TC) recoloured where the TWWHD
 // Randomizer's mask marks the tunic and hat (they share that part of it), one copy a colour, made the first time
 // it is worn; a model's texture list (written by viewCalc, 027F50F8) then points at its wearer's. The recolouring is
 // the randomizer's (customizer/model.cpp, utility/color.cpp; MIT licence, Copyright (c) SuperDude88 and

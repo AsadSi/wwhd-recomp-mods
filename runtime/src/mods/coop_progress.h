@@ -1,4 +1,4 @@
-// Online co-op, the shared progress (docs/multiplayer.md): what one player gets or does in the story is the others'
+// Online co-op, the shared progress (docs/online-coop.md): what one player gets or does in the story is the others'
 // too. Each step every game compares its save data (dSv_save_c, zeldaret/tww's layout, which the HD game keeps) with
 // the step before and sends what it changed, field by field; the others put it in theirs. Anchor's way (Ship of
 // Harkinian), by comparison instead of hooks: the story's event bits, each stage's chests, switches, pickups, visited

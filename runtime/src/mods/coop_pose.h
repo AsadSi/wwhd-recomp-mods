@@ -1,4 +1,4 @@
-// Online co-op (docs/multiplayer.md): Link's pose as he is drawn, and puppets that show another player's pose.
+// Online co-op (docs/online-coop.md): Link's pose as he is drawn, and puppets that show another player's pose.
 // A pose is every joint matrix of every model Link drew in one logic step, relative to his place and heading.
 // A puppet is our own copy of each of Link's models (made beside his, on his heap, as he is created), its joint
 // matrices written from a pose and entered for drawing after him: no player logic, no process of its own.
