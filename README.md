@@ -1100,3 +1100,9 @@ vendored); [zstd](https://github.com/facebook/zstd) by Meta Platforms (BSD-3-Cla
 it: release builds compile its pinned 1.5.7 release (URL + SHA-256 in `cmake/Zstd.cmake`) statically
 into `wwhd-extract` and include its license in `third-party-licenses/`; source builds use a system
 zstd when there is one.
+
+## More projects
+
+- [Twilight Princess HD: Recompiled](https://github.com/AsadSi/twilight-princess-hd-recomp): native macOS port of the Wii U version
+- [Ocarina of Time: Recompiled](https://github.com/AsadSi/ocarina-of-time-recomp): native port with mods (unofficial fork)
+- [Fixframe](https://github.com/AsadSi/fixframe-debugger): live render debugger for emulators and ports
