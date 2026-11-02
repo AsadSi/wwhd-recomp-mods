@@ -697,6 +697,9 @@ static void apply_scenario(PadState& s) {
         if (t >= p.from && t < p.to) { s.rx = p.x; s.ry = p.y; }
     for (auto& p : sc.presses)
         if (t >= p.from && t < p.to) s.buttons |= p.bits;
+    // WWHD_TEST_A_UNTIL_ARRIVED=1: A through the title until the test's portable state has arrived (gfx/input.mm)
+    if (static const bool until = getenv("WWHD_TEST_A_UNTIL_ARRIVED"); until && !ss::portable_arrivals() && std::fmod(t, 0.5) < 0.15)
+        s.buttons |= kA;
 }
 
 static std::atomic<bool> g_pro{getenv("WWHD_PRO_CONTROLLER") != nullptr};

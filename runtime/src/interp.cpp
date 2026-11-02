@@ -1,4 +1,6 @@
 #include "interp.h"
+#include "mods/coop_pose.h"
+#include "mods/coop_sync.h"
 #include "mods/guest_mods.h"
 #include "mods/packages.h"
 #include "mods/tp_monsters.h"
@@ -561,13 +563,15 @@ void blend_mtx(const float* a, const float* b, float* out, float t) {
     }
 }
 }  // namespace
-// for the co-op puppets (mods/coop_pose.cpp): a joint matrix as rotation x scale
+// for the co-op puppets (mods/coop_pose.cpp): a joint matrix as rotation x scale; two joints blended
 bool mtx_to_quat(const float* m, float* s, float* q) { return to_quat(m, s, q); }
+void blend_joint(const float* a, const float* b, float* out, float t) { blend_mtx(a, b, out, t); }
 }  // namespace interp
 
 // J3DModel::viewCalc(J3DModel*)
 extern "C" void hook_027F55FC(Cpu* c) {
     using namespace interp;
+    if (mods::coop::view_done(c->r[3])) return;
     static const bool off = getenv("WWHD_INTERP_MODELS") && !atoi(getenv("WWHD_INTERP_MODELS"));  // debug
     if (!enabled() || off || (!g_hold && (true60::drawing_60() || g_exact_step))) {
         static const bool trace = getenv("WWHD_INTERP_MODEL_TRACE");  // also the 60 Hz draws (Link in true 60)
@@ -712,7 +716,8 @@ static std::atomic<bool> g_paced{[] {
 }()};
 static std::atomic<bool> g_paced_hi{!g_env_paced || atoi(g_env_paced) != 0};  // 120/240 fps
 static std::atomic<bool>& paced_flag(int f) { return f > 60 ? g_paced_hi : g_paced; }
-static bool paced() { return paced_flag(fps()).load(std::memory_order_relaxed); }
+// (always paced in an online co-op session: a game slower than real time played in slow motion, behind the others)
+static bool paced() { return paced_flag(fps()).load(std::memory_order_relaxed) || mods::coop::net::role() != mods::coop::net::Role::kOff; }
 bool paced_interpolation() { return paced(); }  // at the current frame rate
 bool paced_interpolation_at(int f) { return paced_flag(f).load(std::memory_order_relaxed); }
 void set_paced_interpolation_at(int f, bool on) {
@@ -1100,10 +1105,11 @@ static bool skip(int bit) {
 }
 static bool g_in_execute = false;  // inside fpcEx_Handler (actor Execute): logic, not drawing
 namespace mods { void after_execute(Cpu* c, uint32_t execute_fn); }  // mods/turbo.cpp
-namespace mods::extras { void step(Cpu* c); }  // mods/extras.cpp
+namespace mods::extras { void step(Cpu* c); void before_execute(); }  // mods/extras.cpp
 extern "C" void hook_025DE788(Cpu* c) {
     if (skip(1) && !true60::enabled()) return;  // true 60: the per-process gate decides (true60.cpp)
     interp::record_executed_step();
+    if (!interp::g_hold_frame) mods::extras::before_execute();
     g_in_execute = true;
     uint32_t execute_fn = c->r[3];
     f_025DE788_orig(c);
@@ -1207,7 +1213,12 @@ static void se_stat(int fn) {
         t0 = t;
     }
 }
-extern "C" void hook_0201EBA0(Cpu* c) { se_stat(0); se_trace(0, c); if (interp::g_hold) { c->r[3] = 0; return; } f_0201EBA0_orig(c); }
+extern "C" void hook_0201EBA0(Cpu* c) {  // (traced as it plays: a character's voice in Link's place)
+    se_stat(0);
+    if (interp::g_hold || !mods::coop::sync::sound_started(c)) { c->r[3] = 0; return; }
+    se_trace(0, c);
+    f_0201EBA0_orig(c);
+}
 extern "C" void hook_025E1988(Cpu* c) { se_stat(1); se_trace(1, c); if (interp::g_hold) { c->r[3] = 0; return; } f_025E1988_orig(c); }
 extern "C" void hook_025E19CC(Cpu* c) { se_stat(2); se_trace(2, c); if (interp::g_hold) { c->r[3] = 0; return; } f_025E19CC_orig(c); }
 extern "C" void hook_025E1A04(Cpu* c) { se_stat(3); se_trace(3, c); if (interp::g_hold) { c->r[3] = 0; return; } f_025E1A04_orig(c); }

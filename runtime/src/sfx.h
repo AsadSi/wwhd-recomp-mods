@@ -14,6 +14,9 @@ uint32_t play(int id, float x, float y, float z, float volume = 1, bool loop = f
 void move(uint32_t voice, float x, float y, float z);
 void stop(uint32_t voice);
 bool playing(uint32_t voice);
+// a live stream (online co-op: another player's voice) under `key`: mono PCM16 at `rate` added to its queue, played at
+// world (x, y, z) once 60 ms are queued (a gap plays as silence and queues again); over 400 ms behind is dropped
+void stream(int key, const int16_t* pcm, int n, int rate, float x, float y, float z);
 void listener(const float eye[3], const float right[3]);  // the camera: where it is and its right-hand axis
 void mix(int32_t* left, int32_t* right, int frames);      // AX frame thread: adds the voices at 48 kHz
 

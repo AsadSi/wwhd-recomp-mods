@@ -13,12 +13,15 @@ struct Cpu;
 
 namespace mods::coop::sync {
 
-enum Kind : uint8_t { kPose = 1, kShip, kMonsters };  // the unreliable states
+enum Kind : uint8_t { kPose = 1, kShip, kMonsters, kVoice, kArea, kKinds };  // the unreliable states (kVoice: coop_voice.h's
+// frames; kArea: the monsters of the place a player runs, coop_monsters.h)
 
 struct Settings {
     int role = 0;  // 0 host, 1 join (the catalogue's choice)
     std::string addr = "127.0.0.1", name = "Link";
     int port = net::kPort, tunic = 0;  // tunic: 0 green, 1 red, 2 blue, 3 purple (the Four Swords set)
+    int character = 0;                 // who this game plays as (coop_pose.h's own_character)
+    bool voice = false;                // proximity voice chat (coop_voice.h); off until chosen, as it asks for the microphone
 };
 Settings settings();
 void set_settings(const Settings& s);  // the menu (any thread); a running session restarts with them
@@ -27,9 +30,9 @@ constexpr const char* kTunics[] = {"Green", "Red", "Blue", "Purple"};
 
 // every step, also at the title: the session started or stopped as the toggle says, the socket read and written
 void poll(Cpu* c, bool on);
-// every step in play, after the mods' monsters: this game's pose out, the other players drawn (Tetra's ship `hull`, 0
-// none: whose deck carries poses in its frame)
-void step(Cpu* c, uint32_t link, uint32_t hull);
+// every step in play, after the mods' monsters: this game's pose out, the other players drawn (`hull` Tetra's ship or
+// the craft in tow, 0 none: whose deck carries poses in its frame; `aboard` this game's Link on it, extras' own check)
+void step(Cpu* c, uint32_t link, uint32_t hull, bool aboard);
 
 bool host();   // hosting
 bool guest();  // joined someone's game (welcomed)
@@ -45,6 +48,11 @@ bool take_deck_drop(float local[3]);
 // the world's messages apply here: the host; a guest once its Link has arrived in the host's world (until then they
 // would land in its own stage, wiped by the load)
 bool arrived();
+// every sound effect start the game makes (JAIZelBasic::seStart, interp.cpp's hook): one of Link's (its place inside his
+// actor) goes to the other players, who play it at his puppet
+// and false when this game's own Link's voice is not to sound (playing a character who has nothing for it; one she has
+// is put in its place)
+bool sound_started(Cpu* c);
 // the game's HUD left over the title screen after a guest went back to it: hidden until it plays again (any thread)
 bool hud_hidden();
 
@@ -53,5 +61,15 @@ struct WorldMsg { int from; net::Msg type; std::string body; };
 std::vector<WorldMsg> take_world();
 // the host's newest state of a kind, shown 100 ms behind: two snapshots around then and how far between (t 0..1)
 bool host_state(Kind k, std::string& a, std::string& b, float& t);
+// the same for any player's states
+bool state_of(int from, Kind k, std::string& a, std::string& b, float& t);
+// who runs the monsters of a place (stage, room): the host where the host is; elsewhere the player who came first,
+// while they stay (Asad's hybrid; the host decides and tells the guests). -1: nobody is there
+int owner(const char stage[8], int room);
+// a player is in that stage (the owners' table)
+bool anyone_in(const char stage[8]);
+// (the menu, any thread) this game's Link taken beside player id, where their newest pose is (a warp, as the mods'
+// warps go: their stage, room and place)
+void go_to(int id);
 
 }  // namespace mods::coop::sync

@@ -42,6 +42,8 @@ namespace gfxvk { bool buffer_cache_enabled(); }  // gfx/vulkan/buffer_cache.h
 #include "../input_map.h"
 #include "../mods/climb.h"
 #include "../mods/coop_sync.h"
+#include "../mods/coop_pose.h"
+#include "../mods/coop_voice.h"
 #include "../mods/extras.h"
 #include "../mods/mods.h"
 #include "../mods/manager.h"
@@ -1132,15 +1134,33 @@ void tab_mods() {
                         ImGui::SameLine();
                         if (radio(cs::kTunics[i], set.tunic == i)) set.tunic = i, changed = true;
                     }
+                    ImGui::TextUnformatted("Play as");
+                    for (int i = 0; i < mods::coop::kCharacters; ++i) {
+                        ImGui::SameLine();
+                        if (radio(mods::coop::kCharacterNames[i], set.character == i)) set.character = i, changed = true;
+                    }
+                    if (bool on = set.voice; check("Voice chat (the others hear you near them)", set.voice, &on)) set.voice = on, changed = true;
                     if (changed) {
                         set.addr = addr, set.name = name, set.port = std::clamp(set.port, 1, 65535);
                         hostui::post([s = set] {
                             cs::set_settings(s);
                             hostui::set("mod.coop.addr", s.addr), hostui::set("mod.coop.port", std::to_string(s.port));
                             hostui::set("mod.coop.name", s.name), hostui::set("mod.coop.tunic", std::to_string(s.tunic));
+                            hostui::set("mod.coop.voice", s.voice ? "1" : "0");
+                            hostui::set("mod.coop.character", std::to_string(s.character));
                         });
                     }
                     note("%s", cs::status());
+                    if (set.voice) note("%s", mods::coop::voice::status());
+                    if (mods::coop::net::role() != mods::coop::net::Role::kOff) {  // a warp beside another player
+                        bool first = true;
+                        for (int id = 0; id < mods::coop::net::kMaxPlayers; ++id)
+                            if (id != mods::coop::net::my_id() && mods::coop::net::connected(id)) {
+                                if (!first) ImGui::SameLine();
+                                first = false;
+                                if (ImGui::Button(("Go to " + mods::coop::net::name(id)).c_str())) hostui::post([id] { cs::go_to(id); });
+                            }
+                    }
                     help("Host: your friends join you on this port (UDP). Join: the host's address, e.g. its Tailscale name or IP.");
                 }
                 if (x->often) {

@@ -21,6 +21,7 @@ bool mouse_camera();
 void set_mouse_camera(bool on);
 float mouse_sensitivity();  // degrees per mouse point
 void set_mouse_sensitivity(float s);
+bool first_person();  // the subject camera (first person, aiming an item) runs
 bool first_person_wheel();
 void set_first_person_wheel(bool on);
 bool quick_doors();

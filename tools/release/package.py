@@ -84,6 +84,7 @@ MAC_SETUP_PLIST = """<?xml version="1.0" encoding="UTF-8"?>
   <key>CFBundleVersion</key><string>%s</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSMicrophoneUsageDescription</key><string>Online co-op's voice chat sends your voice to the players near you.</string>
 </dict></plist>
 """
 LINUX_SETUP_DESKTOP = """[Desktop Entry]

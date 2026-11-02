@@ -1,6 +1,6 @@
 // Online co-op, the session (coop_sync.h).
 //
-// Each other player's poses are kept by the time they were taken on their game (its clock), and shown 100 ms behind
+// Each other player's poses are kept by the time they were taken on their game (its clock), and shown 60 ms behind
 // the newest: between the two around that time, carried on along the last move for at most 250 ms when the next is
 // late, then held. That player's clock against ours is the smallest gap seen, creeping up a little with each pose
 // (so a slower link is followed, a faster one at once). The host's ship and monsters are shown the same way
@@ -10,6 +10,7 @@
 #include "coop_sync.h"
 
 #include <algorithm>
+#include <bit>
 #include <atomic>
 #include <cmath>
 #include <cstdlib>
@@ -18,13 +19,21 @@
 #include <memory>
 #include <mutex>
 
+#include "coop_monsters.h"
 #include "coop_pose.h"
 #include "coop_progress.h"
+#include "coop_voice.h"
 #include "extras.h"
 #include "guest_addr.h"
 #include "mods.h"
+#include "probe.h"
 #include "runtime.h"
+#include "../input.h"
+#include "../input_map.h"
 #include "../overlay/hostui.h"
+#include "../overlay/overlay.h"
+#include "../platform/keycodes.h"
+#include "imgui.h"
 #include "../portable_state.h"
 #include "../savestate.h"
 #include "../screenshot.h"
@@ -36,7 +45,7 @@ namespace {
 
 const uint32_t kPlay = GD(0x1046F0B0), kStage = kPlay + 0x5134;
 constexpr uint32_t kPos = 0x314, kRoom = 0x326, kAngleY = 0x32A;
-constexpr int32_t kBehind = 100, kReach = 250, kStale = 500;  // a player with no pose for kStale is loading or away
+constexpr int32_t kBehind = 60, kReach = 250, kStale = 500;  // (kBehind: a pose every 33 ms, and some to spare for a late one)  // a player with no pose for kStale is loading or away
 constexpr size_t kChunk = 1000;
 
 std::mutex g_mu;  // the settings (the menu writes them on the main thread)
@@ -62,17 +71,26 @@ struct Remote {
     bool shown = false;
     float at[3] = {};
     int16_t yaw = 0;
+    uint32_t sounds = 0;  // its sounds played here since the last trace
+    uint32_t voice = 0;   // its voice frames played here since the last trace
 };
 Remote g_remote[net::kMaxPlayers];
-std::deque<std::pair<uint32_t, std::string>> g_host[4];  // the host's states by kind, by its time
+std::deque<std::pair<uint32_t, std::string>> g_state[net::kMaxPlayers][kKinds];  // each player's states by kind, by its time
+struct Area { char stage[8]; int8_t room; uint8_t owner; };
+std::vector<Area> g_owners;  // who runs each place's monsters (owner())
 std::vector<WorldMsg> g_world;
 struct Effects { int from; uint32_t at; std::string body; };
 std::vector<Effects> g_effects_in;  // the others' particles, started at their puppets as those are shown (kBehind)
+// Link's sound effects (Anchor's PlayerSfx): JAIZelBasic::seStart(this, id, Vec* pos, u32, s8 reverb, u8, f32 x4), the
+// place as an offset from Link's; played on the others at his puppet, 60 ms behind as it is shown
+struct Sound { uint32_t id, r6, r7, r8; float f[4], off[3]; };
+std::vector<Sound> g_sounds_out;
+std::vector<Effects> g_sounds_in;
 
 std::vector<int> g_send_join;    // host: guests the world is still to go to
 std::string g_join;              // guest: the host's portable state as it comes
 uint32_t g_join_total = 0;
-uint32_t g_join_link = 0;        // guest: Link as the load was asked for (a new one: arrived)
+uint32_t g_join_arrivals = ~0u;  // guest: ss::portable_arrivals() as the load was asked for (more: arrived; ~0 none asked)
 bool g_deck_drop = false;
 float g_deck[3];
 bool g_was_guest = false;
@@ -131,10 +149,170 @@ void back_to_title(const std::string& why) {
     g_to_title = true, g_hud_hidden = true, g_hud_link = ld32(kPlay + 0x5B34);
 }
 
+// doors (Asad's rule: a guest going into a house, cave or dungeon the host isn't in needs the host's permission): the
+// guest's dComIfGp_setNextStage (0252012C: r3 stage, r4 point, r5 room, r6 layer, f1 speed, r7 mode, r8 set point, r9
+// wipe) into a stage other than the sea, its own or the host's is held there (its door or exit waits as the scene
+// change does) and the host asked; let in, it is made as it was asked; refused, or no answer in 30 s, the guest is
+// brought back beside the host as one who fell. The host answers on a panel, A or B
+struct Door { bool held = false, go = false; char stage[8]; uint32_t r[7]; double f1; uint32_t since; };
+Door g_door;                                // guest
+uint32_t g_door_refused = 0;                // guest: when it was last refused (its exit asks again until it is moved)
+char g_door_refused_stage[8];               //   and where to
+struct Ask { int from; std::string stage; uint32_t at, no; };
+std::deque<Ask> g_asks;                     // host: who asks to go where, oldest first
+uint32_t g_asks_made = 0;
+std::string g_ask_text;                     // host: the panel's question (g_mu)
+uint32_t g_ask_no = 0;                      // host: the question on the panel (g_mu, with its text)
+int g_ask_said = -1;                        // host: the panel's answer (1 let in, 0 not) to question g_ask_said_no (g_mu)
+uint32_t g_ask_said_no = 0;
+constexpr uint32_t kDoorWait = 30000;
+
+// cutscenes (Asad's rule: everyone watches): a cutscene the host's game starts (an event of the stage's list: the story's,
+// `MEET_TETORA`, `master_sword`, and the places' own camera ones, `MagmaDemo`, `Bridge00`; not the everyday ones each
+// player has for themselves, talking, chests, doors, item gets, warps, falls: generic(), by their names) is
+// started on each guest in the same stage and room, or within 3000 of the host with the host's room loaded (one a room
+// plays as the host walks in starts before a guest following is through the door; a room not loaded here would be
+// a black void), by its name (fopAcM_orderOtherEvent2 025D77DC: r3 actor, r4 name,
+// r5 flag, r6 hind), so its own Link and people play it. dEvt_control_c is at play +0x51D0 (its mode +0xC2, the event
+// +0xD8), dEvent_manager_c at +0x52C4 (getEventData 02544044: r3 it, r4 the event; a 0xB0 entry, its name at +0).
+// One a guest's game cannot finish (a person it lacks) would hold it there: still playing 10 s after the host's is
+// over, the guest is brought back beside the host, which ends it (not counting while a text box is open here: each
+// player reads at their own pace)
+constexpr uint32_t kEvMode = 0x5292, kEvId = 0x52A8, kEvManager = 0x52C4;
+struct Cut { std::string name; char stage[8]; int8_t room; uint32_t since = 0; bool asked = false; };
+Cut g_cut;            // guest: the host's, to start here
+std::string g_cut_on;  // guest: the host's playing here
+std::atomic<int> g_go_to{-1};  // the menu's "Go to": the player to be taken beside
+uint32_t g_cut_over = 0;  // guest: when the host's was over (0: not yet)
+// a room of the stage is loaded here (its status, 0x1047E8E8 + 0x22C a room, bit 0: as door10's openProc waits for)
+bool room_loaded(int room) { return room >= 0 && room < 64 && (ld8(GD(0x1047E8E8) + 0x22C * (uint32_t)room) & 1); }
+// (a guest) the host stands within 3000 of this game's Link, in its stage (not on a ship's deck: another frame)
+bool host_near(uint32_t link) {
+    const Remote& h = g_remote[0];
+    if (h.poses.empty()) return false;
+    const Pose& p = h.poses.back().second;
+    return !(p.flags & 1) && !strncmp(p.stage, (const char*)mem::ptr(kStage), 8) &&
+           std::hypot(p.pos[0] - f32(link + kPos), p.pos[2] - f32(link + kPos + 8)) < 3000;
+}
+// an everyday event: its own player's alone (Dragon Roost Cavern's list: DEFAULT_TALK, KNOB_START, SHUTTER_START,
+// MAGMA_COMEBACK, TACT_WINDOW...)
+bool generic(const std::string& n) {
+    for (const char* p : {"DEFAULT_", "KNOB", "SHUTTER", "BS_SHUTTER", "TACT_WINDOW", "OPTION_CHAR", "TIMEWARP", "RiddleSound",
+                          "MapToolCamera", "FALL_START", "DUNGEON_WARP", "WARPT_OPEN", "fire_", "zenfire_", "magma_cam"})
+        if (!n.compare(0, strlen(p), p)) return true;
+    return n.size() > 9 && !n.compare(n.size() - 9, 9, "_COMEBACK");
+}
+// the event running here: its name and kind ("" none)
+std::string event_now(Cpu* c, uint32_t* kind = nullptr) {
+    const int16_t id = (int16_t)ld16(kPlay + kEvId);
+    if (!ld8(kPlay + kEvMode) || id < 0) return "";
+    const uint32_t ev = guest_call(c, GC(0x02544044), {kPlay + kEvManager, (uint32_t)(int32_t)id});
+    if (!ev) return "";
+    if (kind) *kind = ld32(ev + 0x24);
+    return std::string((const char*)mem::ptr(ev), strnlen((const char*)mem::ptr(ev), 32));
+}
+
+bool door_draw(const float* pad) {
+    const input::PadState st = input_map::controller_state(input_map::current(), pad);
+    const uint32_t now = st.buttons | input::live_buttons();
+    static uint32_t prev = ~0u;
+    static bool keys_prev[256];
+    bool keys[256];
+    input::held_keys(keys);
+    if (prev == ~0u) prev = now, std::copy(keys, keys + 256, keys_prev);
+    auto hit = [&](uint32_t b, std::initializer_list<int> ks) {
+        bool k = false;
+        for (int c : ks) k |= keys[c] && !keys_prev[c];
+        return (now & b && !(prev & b)) || k;
+    };
+    const bool yes = hit(input::kA, {kVK_ANSI_K, kVK_Space, kVK_Return}), no = !yes && hit(input::kB, {kVK_ANSI_J, kVK_Escape});
+    prev = now, std::copy(keys, keys + 256, keys_prev);
+    std::string text;
+    {
+        std::lock_guard<std::mutex> l(g_mu);
+        text = g_ask_text;
+        if (!text.empty() && (yes || no)) g_ask_said = yes, g_ask_said_no = g_ask_no;  // (to the question shown)
+    }
+    if (text.empty() || yes || no) return prev = ~0u, true;  // (or no longer asked: the host went there, the guest left)
+    const ImGuiIO& io = ImGui::GetIO();
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowBgAlpha(0.85f);
+    if (ImGui::Begin("##coop_door", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav)) {
+        ImGui::TextUnformatted(text.c_str());
+        ImGui::Separator();
+        ImGui::TextDisabled("A let them in    B no");
+    }
+    ImGui::End();
+    return yes || no;
+}
+
+// (the hook) this stage change is held for the host's answer
+bool door_held(Cpu* c) {
+    if (g_door.go || !guest() || !arrived() || !c->r[3]) return false;
+    char st[8] = {};
+    strncpy(st, (const char*)mem::ptr(c->r[3]), 8);
+    const Remote& h = g_remote[0];
+    if (!strncmp(st, "sea", 8) || !strncmp(st, (const char*)mem::ptr(kStage), 8) || h.poses.empty() ||
+        !strncmp(st, h.poses.back().second.stage, 8)) {
+        if (g_door.held && !memcmp(st, g_door.stage, 8)) g_door = Door{};  // (the host went in meanwhile: as let in)
+        return false;
+    }
+    if (g_door.held && !memcmp(st, g_door.stage, 8)) return true;  // (asked already)
+    if (g_door_refused && now_ms_since(g_door_refused) < 5000 && !memcmp(st, g_door_refused_stage, 8)) return true;  // (refused: on its way back)
+    static const uint32_t name = mem::host_alloc(16);
+    for (int i = 0; i < 8; i++) st8(name + i, (uint8_t)st[i]);
+    st8(name + 8, 0);
+    g_door = Door{true, false, {}, {name, c->r[4], c->r[5], c->r[6], c->r[7], c->r[8], c->r[9]}, c->f[1].ps0, net::now_ms()};
+    memcpy(g_door.stage, st, 8);
+    net::send(0, net::kDoorAsk, std::string(st, 8));
+    ss::notice("Waiting for " + net::name(0) + " to let you into " + ss::area_label((const char*)mem::ptr(name)));
+    mods::trace("coop: going into %.8s: the host asked", st);
+    return true;
+}
+
 struct Handler : net::Handler {
     void message(int from, net::Msg type, const uint8_t* d, size_t n) override {
         if (type == net::kEffect) return g_effects_in.push_back({from, net::now_ms(), std::string((const char*)d, n)});
         if (type == net::kProgress) return progress::received(d, n);
+        if (type == net::kDoorMove) return progress::door_moved(d, n);
+        if (type == net::kRupees) return progress::rupees_received(d, n);
+        if (type == net::kSound) return g_sounds_in.push_back({from, net::now_ms(), std::string((const char*)d, n)});
+        if (type == net::kOwner) {  // (a guest) the host's table of who runs each place
+            g_owners.clear();
+            for (size_t o = 0; o + 10 <= n; o += 10) {
+                Area a;
+                memcpy(a.stage, d + o, 8), a.room = (int8_t)d[o + 8], a.owner = d[o + 9];
+                g_owners.push_back(a);
+            }
+            return;
+        }
+        if (type == net::kDead) return monsters::dead_from(d, n);  // (a guest) the host's killed monsters
+        if (type == net::kCutscene && n == 9 && guest()) {  // (over: not started here yet, not started; started, its 10 s from now)
+            if (g_cut.since && !g_cut.asked) g_cut = Cut{};
+            return void(g_cut_over = net::now_ms());
+        }
+        if (type == net::kCutscene && n >= 9 + 1 && guest()) {
+            g_cut = Cut{std::string((const char*)d + 9, strnlen((const char*)d + 9, std::min<size_t>(n - 9, 32))), {}, (int8_t)d[8], net::now_ms()};
+            g_cut_over = 0;
+            memcpy(g_cut.stage, d, 8);
+            return;
+        }
+        if (type == net::kDoorAsk && n >= 8 && host()) {  // (once each, a few at most)
+            const std::string st((const char*)d, 8);
+            if (g_asks.size() < 8 && std::none_of(g_asks.begin(), g_asks.end(), [&](const Ask& a) { return a.from == from && a.stage == st; }))
+                g_asks.push_back({from, st, net::now_ms(), ++g_asks_made});
+            return;
+        }
+        if (type == net::kDoorAnswer && n >= 9 && g_door.held && !memcmp(d, g_door.stage, 8)) {
+            if (d[8]) g_door.go = true;
+            else g_door.since = net::now_ms() - kDoorWait;  // (refused: back beside the host at the next step)
+            return;
+        }
+        if (type == net::kDown) {  // (host) a guest fell: its world again, beside the host
+            if (net::role() == net::Role::kHost && std::find(g_send_join.begin(), g_send_join.end(), from) == g_send_join.end())
+                g_send_join.push_back(from), mods::trace("coop: player %d fell: brought back here", from);
+            return;
+        }
         if (type != net::kJoinState) {
             g_world.push_back({from, type, std::string((const char*)d, n)});
             return;
@@ -159,14 +337,18 @@ struct Handler : net::Handler {
         g_deck_drop = pose_at(h, h.clock.shown(net::now_ms()), hp) && (hp.flags & 1);
         if (g_deck_drop) g_deck[0] = hp.pos[0] + 120, g_deck[1] = hp.pos[1], g_deck[2] = hp.pos[2];
         s->pos[0] += 120;
-        g_join_link = ld32(GD(0x1046F0B0) + 0x5B34);
+        g_door = Door{};  // (a door it waited at is behind it)
+        g_join_arrivals = ss::portable_arrivals();
         hlefs::g_block_saves = true;
+        if (static bool once = false; once) ss::notice("Beside " + net::name(0) + " again");  // (after a story moment, a fall or a door refused)
+        else once = true;
         ss::request_load_portable(s);
         mods::trace("coop: the host's world (%zu bytes): %s room %d at %.0f %.0f %.0f%s", g_join.size(), s->stage.c_str(), s->room,
                     s->pos[0], s->pos[1], s->pos[2], g_deck_drop ? ", the host on the ship's deck" : "");
     }
     void state(int from, uint8_t kind, uint32_t ms, const uint8_t* d, size_t n) override {
         Remote& r = g_remote[from];
+        if (kind == kVoice) return void(r.voice += voice::received(from, d, n, r.shown ? r.at : nullptr));
         r.clock.seen(ms, net::now_ms());
         if (kind == kPose) {
             Pose p;
@@ -185,8 +367,8 @@ struct Handler : net::Handler {
             }
             r.poses.emplace_back(ms, std::move(p));
             while (r.poses.size() > 2 && (int32_t)(ms - r.poses.front().first) > 1000) r.poses.pop_front();
-        } else if (from == 0 && kind < 4) {
-            auto& q = g_host[kind];
+        } else if (kind < kKinds) {
+            auto& q = g_state[from][kind];
             if (!q.empty() && (int32_t)(ms - q.back().first) <= 0) return;
             q.emplace_back(ms, std::string((const char*)d, n));
             while (q.size() > 2 && (int32_t)(ms - q.front().first) > 1000) q.pop_front();
@@ -218,6 +400,8 @@ Settings settings() {
         if (hostui::get("mod.coop.port", v) && atoi(v.c_str()) > 0) g_set.port = atoi(v.c_str());
         if (hostui::get("mod.coop.name", v) && !v.empty()) g_set.name = v;
         if (hostui::get("mod.coop.tunic", v)) g_set.tunic = atoi(v.c_str()) & 3;
+        if (hostui::get("mod.coop.voice", v)) g_set.voice = atoi(v.c_str()) != 0;
+        if (hostui::get("mod.coop.character", v)) g_set.character = atoi(v.c_str()) & 3;
         // (tests: WWHD_COOP=host[:port] or join:<address>[:port], WWHD_COOP_NAME, WWHD_COOP_TUNIC 0-3)
         if (const char* e = getenv("WWHD_COOP")) {
             std::string s = e;
@@ -228,6 +412,8 @@ Settings settings() {
         }
         if (const char* e = getenv("WWHD_COOP_NAME")) g_set.name = e;
         if (const char* e = getenv("WWHD_COOP_TUNIC")) g_set.tunic = atoi(e) & 3;
+        if (const char* e = getenv("WWHD_COOP_VOICE")) g_set.voice = atoi(e) != 0;
+        if (const char* e = getenv("WWHD_CHARACTER")) g_set.character = atoi(e) & 3;
         if (!getenv("WWHD_COOP_TUNIC") && !hostui::get("mod.coop.tunic", v)) g_set.tunic = g_set.role;  // host green, a guest red
     }
     return g_set;
@@ -236,7 +422,10 @@ Settings settings() {
 void set_settings(const Settings& s) {
     settings();
     std::lock_guard<std::mutex> lk(g_mu);
-    g_set = s, g_set_gen++;
+    // (a session restarts only for what it was started with: not the character or voice chat)
+    if (s.role != g_set.role || s.addr != g_set.addr || s.port != g_set.port || s.name != g_set.name || s.tunic != g_set.tunic)
+        g_set_gen++;
+    g_set = s;
 }
 
 const char* status() { return g_status.c_str(); }
@@ -266,10 +455,35 @@ void nearest(const float at[3], uint32_t link, int& target, float out[3]) {
     memcpy(out, best, 12);
 }
 
-bool arrived() { return host() || (guest() && g_join_link && ld32(kPlay + 0x5B34) != g_join_link); }
+// the Wind Waker's sounds as a player conducts (JAIZelInst, d_a_player_tact.inc: judge's beat pulses and metronome,
+// metronomePlay's drone and upbeat, melodyPlay's song once it is matched); started with no place, so they go to the
+// others as if at his head (the conductor's own menu sounds, seStartSystem's, stay his)
+bool tact_sound(uint32_t id) {
+    return (id >= 0x887 && id <= 0x895) || id == 0x8ED || id == 0x8EE || id == 0x2868 || id == 0x2880 || id == 0x2881;
+}
+bool sound_started(Cpu* c) {
+    const uint32_t link = ld32(kPlay + 0x5B34), pos = c->r[5];
+    if (link && !pos && tact_sound(c->r[4]) && net::role() != net::Role::kOff && g_sounds_out.size() < 32) {
+        Sound sd{c->r[4], c->r[6], c->r[7], c->r[8], {}, {0, 100, 0}};
+        for (int k = 0; k < 4; k++) sd.f[k] = (float)c->f[k + 1].ps0;
+        g_sounds_out.push_back(sd);
+        return true;
+    }
+    if (!link || pos < link || pos >= link + 0x7000) return true;  // (daPy_lk_c is about 0x6A80 bytes in WWHD)
+    if (net::role() != net::Role::kOff && g_sounds_out.size() < 32) {  // (as Link's: each game says it as that player's character)
+        Sound sd{c->r[4], c->r[6], c->r[7], c->r[8], {}, {}};
+        for (int k = 0; k < 4; k++) sd.f[k] = (float)c->f[k + 1].ps0;
+        for (int k = 0; k < 3; k++) sd.off[k] = f32(pos + 4 * k) - f32(link + kPos + 4 * k);
+        g_sounds_out.push_back(sd);
+    }
+    return (c->r[4] = char_voice(c->r[4], own_char())) != 0;
+}
+
+// (the host's world arrived: not the Quest Log the guest picked to have it loaded into, whose Link comes first)
+bool arrived() { return host() || (guest() && g_join_arrivals != ~0u && ss::portable_arrivals() != g_join_arrivals); }
 
 bool take_deck_drop(float local[3]) {
-    if (!g_deck_drop || ld32(kPlay + 0x5B34) == g_join_link) return false;
+    if (!g_deck_drop || !arrived()) return false;
     g_deck_drop = false;
     memcpy(local, g_deck, 12);
     return true;
@@ -277,10 +491,22 @@ bool take_deck_drop(float local[3]) {
 
 std::vector<WorldMsg> take_world() { return std::move(g_world); }
 
-bool host_state(Kind k, std::string& a, std::string& b, float& t) {
-    const auto& q = g_host[k];
+bool host_state(Kind k, std::string& a, std::string& b, float& t) { return state_of(0, k, a, b, t); }
+
+int owner(const char stage[8], int room) {
+    for (const Area& a : g_owners) if (!memcmp(a.stage, stage, 8) && a.room == room) return a.owner;
+    return -1;
+}
+
+bool anyone_in(const char stage[8]) {
+    return std::any_of(g_owners.begin(), g_owners.end(), [&](const Area& a) { return !memcmp(a.stage, stage, 8); });
+}
+
+bool state_of(int from, Kind k, std::string& a, std::string& b, float& t) {
+    if (from < 0 || from >= net::kMaxPlayers || k >= kKinds) return false;
+    const auto& q = g_state[from][k];
     if (q.empty()) return false;
-    const uint32_t rt = g_remote[0].clock.shown(net::now_ms());
+    const uint32_t rt = g_remote[from].clock.shown(net::now_ms());
     a = b = q.back().second, t = 0;
     for (size_t i = 1; i < q.size(); i++)
         if ((int32_t)(rt - q[i].first) <= 0) {
@@ -321,7 +547,7 @@ void poll(Cpu* c, bool on) {
     }
     if (!g_back.empty()) {
         back_to_title(g_back);
-        g_back.clear(), g_was_guest = false, g_deck_drop = false;
+        g_back.clear(), g_was_guest = false, g_deck_drop = false, g_door = Door{}, g_join_arrivals = ~0u;
     }
     if (on && net::role() == net::Role::kOff && failed != want_gen) {
         gen = want_gen;
@@ -333,8 +559,14 @@ void poll(Cpu* c, bool on) {
         }
     }
     if (!on && net::role() == net::Role::kOff && g_status.rfind("Not started", 0) != 0) g_status = "Off";
-    if (net::role() == net::Role::kOff) progress::stop();
+    if (net::role() == net::Role::kOff) {
+        progress::stop();
+        g_asks.clear(), g_cut = Cut{}, g_cut_on.clear();
+        std::lock_guard<std::mutex> l(g_mu);
+        g_ask_text.clear(), g_ask_said = -1;  // (a question still up closes)
+    }
     net::poll(g_handler);
+    voice::step(s.voice, arrived());
     if (static bool told = false; !arrived()) told = false;
     else if (guest() && !told) told = true, net::send(0, net::kArrived, std::string());
     own_tunic(host() ? net::tunic(0) : guest() ? net::tunic(net::my_id()) : -1);
@@ -348,15 +580,15 @@ void poll(Cpu* c, bool on) {
 
 bool hud_hidden() { return g_hud_hidden.load(std::memory_order_relaxed); }
 
-void step(Cpu* c, uint32_t link, uint32_t hull) {
+void go_to(int id) { g_go_to = id; }
+
+void step(Cpu* c, uint32_t link, uint32_t hull, bool aboard) {
     if (link != g_hud_link) g_hud_hidden = false;  // (playing again)
     if (net::role() == net::Role::kOff) return;
-    // this game's pose out (on Tetra's ship's deck: in her frame)
+    // this game's pose out (on Tetra's ship's deck, or the craft's: in its frame)
     Pose me;
     const float at[3] = {f32(link + kPos), f32(link + kPos + 4), f32(link + kPos + 8)};
-    float l[3] = {};
-    if (hull) to_local(hull, at, l);
-    const bool on_deck = hull && std::fabs(l[0]) < 720 && l[2] > -1800 && l[2] < 2250 && l[1] > 370 && l[1] < 2500;  // (extras' on_deck)
+    const bool on_deck = hull && aboard;
     if (own_pose(me)) {
         if (on_deck) {
             to_local(hull, me.pos, me.pos);
@@ -368,7 +600,207 @@ void step(Cpu* c, uint32_t link, uint32_t hull) {
     }
     if (const std::vector<Effect> fx = take_effects(); !fx.empty())
         net::send(-1, net::kEffect, std::string((const char*)fx.data(), fx.size() * sizeof(Effect)));
+    if (!g_sounds_out.empty())
+        net::send(-1, net::kSound, std::string((const char*)g_sounds_out.data(), g_sounds_out.size() * sizeof(Sound))), g_sounds_out.clear();
     progress::step(c, arrived());
+    // who runs each place's monsters (owner()): the host where it is; elsewhere the player there longest, kept while they
+    // stay (Valheim's way: no handing over mid-fight to whoever comes nearer). Sent to the guests as it changes, and every
+    // 3 s for those who joined since
+    if (host()) {
+        struct Here { char stage[8]; int8_t room; uint32_t since; bool in; };
+        static Here here[net::kMaxPlayers];
+        const uint32_t now = net::now_ms();
+        for (int id = 0; id < net::kMaxPlayers; id++) {
+            const Remote& r = g_remote[id];
+            const Pose* p = id && net::connected(id) && !r.poses.empty() && now - r.heard < (uint32_t)kStale ? &r.poses.back().second : nullptr;
+            Here& h = here[id];
+            if (id && !p) { h.in = false; continue; }
+            char st[8];
+            memcpy(st, p ? p->stage : (const char*)mem::ptr(kStage), 8);
+            const int8_t rm = p ? p->room : (int8_t)ld8(link + kRoom);
+            if (!h.in || memcmp(h.stage, st, 8) || h.room != rm) memcpy(h.stage, st, 8), h.room = rm, h.since = now;
+            h.in = true;
+        }
+        std::vector<Area> next;
+        for (int id = 0; id < net::kMaxPlayers; id++) {
+            auto same = [&](const Area& a, int p) { return here[p].in && !memcmp(here[p].stage, a.stage, 8) && here[p].room == a.room; };
+            if (!here[id].in || std::any_of(next.begin(), next.end(), [&](const Area& a) { return same(a, id); })) continue;
+            Area a{};
+            memcpy(a.stage, here[id].stage, 8), a.room = here[id].room;
+            const int was = owner(a.stage, a.room);
+            int first = id;
+            for (int p = id; p < net::kMaxPlayers; p++) if (same(a, p) && here[p].since < here[first].since) first = p;
+            a.owner = (uint8_t)(same(a, 0) ? 0 : was >= 0 && same(a, was) ? was : first);
+            next.push_back(a);
+        }
+        static uint32_t sent = 0;
+        const bool changed = next.size() != g_owners.size() ||
+                             !std::equal(next.begin(), next.end(), g_owners.begin(), [](const Area& x, const Area& y) {
+                                 return !memcmp(x.stage, y.stage, 8) && x.room == y.room && x.owner == y.owner;
+                             });
+        g_owners = std::move(next);
+        if (changed || now - sent > 3000) {
+            std::string b;
+            for (const Area& a : g_owners) b.append(a.stage, 8), b += (char)a.room, b += (char)a.owner;
+            net::send(-1, net::kOwner, b), sent = now;
+        }
+    }
+    // the host's story moments: an event (dComIfGp_event_runCheck) of 3 s or more that set story bits (dSv_event_c) or
+    // changed the stage: each guest elsewhere (another stage or room, or over 1500 away) is brought beside the host
+    // afterwards, by the host's world sent again as at the join (Asad's rule: guests are pulled to the host; a shared
+    // cutscene itself is not played on the guests). Talking, chests and doors are shorter or set no story bits
+    if (host()) {
+        static bool ev_was = false;
+        static uint32_t ev_steps = 0;
+        static std::string ev_bits, ev_stage;
+        const uint32_t sv = ld32(GD(0x101F84DC)) + 0x20;  // dSv_info_c (savestate.cpp); dSv_event_c at +0x624
+        const auto bits = [&] { return std::string((const char*)mem::ptr(sv + 0x624), 0x100); };
+        const bool ev = ld8(kPlay + 0x5292) != 0;          // dEvt_control_c mode (savestate.cpp kEventRun)
+        static int16_t ev_seen = -1;  // (the event last looked at: one leads into another without the mode dropping)
+        static bool ev_cut = false;
+        if (ev && !ev_was) ev_steps = 0, ev_bits = bits(), ev_stage = stage_now(), ev_seen = -1, ev_cut = false;
+        if (!ev && ev_was && ev_cut) net::send(-1, net::kCutscene, std::string(9, '\0'));  // (over)
+        if (ev) ev_steps++;
+        // a cutscene: to the guests, who play it where they are in the same stage and room
+        if (uint32_t kind = 0; ev && (int16_t)ld16(kPlay + kEvId) != ev_seen) {
+            const std::string name = event_now(c, &kind);
+            if (!name.empty()) {
+                ev_seen = (int16_t)ld16(kPlay + kEvId);
+                mods::trace("coop: the host plays event %s (kind %u)", name.c_str(), kind);
+                if (kind == 3 || !generic(name)) {
+                    ev_cut = true;
+                    std::string b(8, '\0');
+                    memcpy(&b[0], mem::ptr(kStage), 8);
+                    b += (char)ld8(link + kRoom), b += name;
+                    net::send(-1, net::kCutscene, b);
+                    mods::trace("coop: the host's cutscene %s: to the guests", name.c_str());
+                }
+            }
+        }
+        if (!ev && ev_was && ev_steps >= 90 && (bits() != ev_bits || stage_now() != ev_stage)) {
+            const std::string here = stage_now();
+            const int8_t my_room = (int8_t)ld8(link + kRoom);
+            for (int id = 1; id < net::kMaxPlayers; id++) {
+                if (!net::connected(id) || std::find(g_send_join.begin(), g_send_join.end(), id) != g_send_join.end()) continue;
+                const Remote& r = g_remote[id];
+                const Pose* p = r.poses.empty() ? nullptr : &r.poses.back().second;
+                const bool near = p && !strncmp(p->stage, here.c_str(), 8) && p->room == my_room && !(p->flags & 1) &&
+                                  std::hypot(p->pos[0] - at[0], p->pos[2] - at[2]) < 1500;
+                if (near) continue;
+                g_send_join.push_back(id);
+                mods::trace("coop: a story moment (%u steps) over: player %d brought here", ev_steps, id);
+            }
+        }
+        ev_was = ev;
+    }
+    // "Go to" a player: beside them (100 to their left), facing as they do, by a warp; one on a ship's deck is in her
+    // frame, not taken to
+    // (test aid: the probe's knob "goto", a player's number + 1, as the menu's button)
+    if (static const uint32_t knob = probe::knob("goto"); ld32(knob)) g_go_to = (int)ld32(knob) - 1, st32(knob, 0);
+    if (const int id = g_go_to.exchange(-1); id >= 0 && id < net::kMaxPlayers && id != net::my_id()) {
+        const Remote& r = g_remote[id];
+        std::string why;
+        if (!net::connected(id) || r.poses.empty()) why = "not playing yet";
+        else if (r.poses.back().second.flags & 1) why = "on a ship's deck";
+        else {
+            const Pose& p = r.poses.back().second;
+            const double t = p.yaw * M_PI / 32768;
+            const float at[3] = {p.pos[0] + 100 * (float)cos(t), p.pos[1], p.pos[2] - 100 * (float)sin(t)};
+            if (ss::warp(c, std::string(p.stage, strnlen(p.stage, 8)), p.room, at, p.yaw, nullptr, false, why)) why.clear();
+        }
+        ss::notice(why.empty() ? "Going to " + net::name(id) : "Can't go to " + net::name(id) + ": " + why);
+        mods::trace("coop: go to player %d: %s", id, why.empty() ? "warped" : why.c_str());
+    }
+    // the host's cutscene, started here where this game is in its stage and room (for 3 s, until it plays)
+    if (g_cut.since && guest() && arrived()) {
+        const std::string here = event_now(c);
+        if (here == g_cut.name) {
+            mods::trace("coop: the host's cutscene %s plays here", here.c_str());
+            g_cut_on = here, g_cut = Cut{};
+        } else if (now_ms_since(g_cut.since) > 3000) {
+            mods::trace("coop: the host's cutscene %s: not here (%s)", g_cut.name.c_str(), g_cut.asked ? "it did not start" : "elsewhere or busy");
+            g_cut = Cut{};
+        } else if (here.empty() && !ld8(kPlay + kEvMode) && !strncmp(g_cut.stage, (const char*)mem::ptr(kStage), 8) &&
+                   (g_cut.room == (int8_t)ld8(link + kRoom) || (host_near(link) && room_loaded(g_cut.room)))) {
+            static const uint32_t name = mem::host_alloc(40);
+            for (size_t i = 0; i <= g_cut.name.size(); i++) st8(name + i, i < g_cut.name.size() ? (uint8_t)g_cut.name[i] : 0);
+            guest_call(c, GC(0x025D77DC), {link, name, 1, 0xFFFF});
+            g_cut.asked = true;
+        }
+    }
+    if (!g_cut_on.empty() && event_now(c) != g_cut_on) g_cut_on.clear();  // (over here too)
+    if (!g_cut_on.empty() && g_cut_over && ld8(kPlay + 0x5BB2)) g_cut_over = net::now_ms();  // (dComIfGp_getMesgStatus)
+    if (!g_cut_on.empty() && g_cut_over && now_ms_since(g_cut_over) > 10000) {
+        mods::trace("coop: the host's cutscene %s is over there, not here: back beside the host", g_cut_on.c_str());
+        net::send(0, net::kDown, std::string());
+        g_cut_on.clear(), g_cut_over = 0;
+    }
+    // doors: the guest's held stage change, made once let in (or the host has gone in); refused or unanswered, back
+    // beside the host
+    if (const Remote& h = g_remote[0]; g_door.held && !h.poses.empty() && !memcmp(h.poses.back().second.stage, g_door.stage, 8))
+        g_door.go = true;
+    if (g_door.held && !g_door.go && now_ms_since(g_door.since) >= kDoorWait) {
+        g_door.held = false, g_door_refused = net::now_ms();
+        memcpy(g_door_refused_stage, g_door.stage, 8);
+        net::send(0, net::kDown, std::string());
+        ss::notice("Not let in: back beside " + net::name(0));
+        mods::trace("coop: not let into %.8s: back beside the host", g_door.stage);
+    }
+    if (g_door.held && g_door.go) {
+        const Door d = g_door;
+        g_door = Door{};
+        double keep = c->f[1].ps0;
+        c->f[1].ps0 = d.f1;
+        g_door.go = true;  // (the hook lets it through)
+        guest_call(c, GC(0x0252012C), {d.r[0], d.r[1], d.r[2], d.r[3], d.r[4], d.r[5], d.r[6]});
+        g_door.go = false, c->f[1].ps0 = keep;
+        mods::trace("coop: let into %.8s", d.stage);
+    }
+    // the host: the first question on its panel while none is open, the answer sent
+    if (host()) {
+        int said;
+        uint32_t said_no;
+        { std::lock_guard<std::mutex> l(g_mu); said = g_ask_said, said_no = g_ask_said_no, g_ask_said = -1; }
+        if (said >= 0 && !g_asks.empty() && g_asks.front().no == said_no) {
+            const Ask& a = g_asks.front();
+            net::send(a.from, net::kDoorAnswer, a.stage + (char)said);
+            mods::trace("coop: player %d %s into %.8s", a.from, said ? "let" : "not let", a.stage.c_str());
+            g_asks.pop_front();
+        }
+        // no longer asked: the guest gone, the host there itself, or the guest's 30 s over (it is on its way back)
+        while (!g_asks.empty() && (!net::connected(g_asks.front().from) || !strncmp(g_asks.front().stage.c_str(), stage_now().c_str(), 8) ||
+                                   now_ms_since(g_asks.front().at) > kDoorWait)) {
+            g_asks.pop_front();
+            std::lock_guard<std::mutex> l(g_mu);
+            g_ask_text.clear();
+        }
+        if (!g_asks.empty() && !overlay::captures()) {
+            const Ask& a = g_asks.front();
+            std::lock_guard<std::mutex> l(g_mu);
+            g_ask_text = net::name(a.from) + " wants to go into " + ss::area_label(a.stage.c_str()), g_ask_no = a.no;
+            overlay::show_panel(door_draw);
+        }
+    }
+    // falling (Asad's rule: a guest comes back beside the host; the host falling is a Game Over for everyone): a guest's
+    // Link with no health for 45 steps (a fairy in a bottle revives sooner) tells the host, which sends its world again;
+    // the host's own fall: once it plays again (a new Link after the Game Over), every guest is brought to it
+    {
+        const uint16_t life = ld16(ld32(GD(0x101F84DC)) + 0x20 + 2);  // dSv_player_status_a_c::mLife (quarter hearts)
+        static uint32_t down_steps = 0, down_link = 0;
+        down_steps = life ? 0 : down_steps + 1;
+        if (guest() && arrived() && down_steps == 45) {
+            net::send(0, net::kDown, std::string());
+            ss::notice("You fell: back beside " + net::name(0));
+        }
+        if (host() && down_steps == 45) down_link = link;
+        if (host() && down_link && link != down_link && life) {
+            down_link = 0;
+            for (int id = 1; id < net::kMaxPlayers; id++)
+                if (net::connected(id) && std::find(g_send_join.begin(), g_send_join.end(), id) == g_send_join.end())
+                    g_send_join.push_back(id);
+            mods::trace("coop: the host plays again after falling: every guest brought here");
+        }
+    }
     // the host: its world to each guest that has just joined (once Link is free to have it taken)
     for (size_t i = 0; i < g_send_join.size();) {
         std::string text, why;
@@ -390,9 +822,9 @@ void step(Cpu* c, uint32_t link, uint32_t hull) {
         traced = net::now_ms();
         for (int id = 0; id < net::kMaxPlayers; id++)
             if (Remote& r = g_remote[id]; id != net::my_id() && r.gaps) {
-                mods::trace("coop: player %d: ping %d ms, a pose every %u ms (longest gap %u), %zu bytes, shown %d ms behind", id,
-                            net::ping_ms(id), r.gap_sum / r.gaps, r.gap_max, r.size, kBehind);
-                r.gaps = r.gap_sum = r.gap_max = 0;
+                mods::trace("coop: player %d: ping %d ms, a pose every %u ms (longest gap %u), %zu bytes, shown %d ms behind, %u sounds, %u voice frames", id,
+                            net::ping_ms(id), r.gap_sum / r.gaps, r.gap_max, r.size, kBehind, r.sounds, r.voice);
+                r.gaps = r.gap_sum = r.gap_max = r.sounds = r.voice = 0;
             }
     }
     // the others, each where its pose was taken (in the same stage and room; on the ship's deck, wherever she is here)
@@ -416,6 +848,27 @@ void step(Cpu* c, uint32_t link, uint32_t hull) {
         else memcpy(r.at, p.pos, 12);
         r.yaw = yaw;
         show(slot, &p, r.at, yaw, net::tunic(id));
+    }
+    // their sounds, at their puppets as those are shown (each player's place kept for the sound engine, which keeps reading
+    // it while the sound plays)
+    static const uint32_t sound_at = mem::host_alloc(16 * net::kMaxPlayers);
+    for (size_t i = 0; i < g_sounds_in.size();) {
+        const Effects& e = g_sounds_in[i];
+        if (now - e.at < (uint32_t)kBehind) { i++; continue; }
+        if (e.from >= 0 && e.from < net::kMaxPlayers && g_remote[e.from].shown)
+            for (size_t o = 0; o + sizeof(Sound) <= e.body.size(); o += sizeof(Sound)) {
+                Sound sd;
+                memcpy(&sd, e.body.data() + o, sizeof sd);
+                const uint32_t pos = sound_at + 16 * e.from;
+                for (int k = 0; k < 3; k++) st32(pos + 4 * k, std::bit_cast<uint32_t>(g_remote[e.from].at[k] + sd.off[k]));
+                double keep[4];
+                for (int k = 0; k < 4; k++) keep[k] = c->f[k + 1].ps0, c->f[k + 1].ps0 = sd.f[k];
+                const uint32_t id = char_voice(sd.id, g_remote[e.from].poses.empty() ? 0 : g_remote[e.from].poses.back().second.flags >> 4 & 3);
+                if (id) guest_call(c, GC(0x0201EBA0), {ld32(GD(0x101FFC78)), id, pos, sd.r6, sd.r7, sd.r8});  // (JAIZelBasic)
+                g_remote[e.from].sounds++;
+                for (int k = 0; k < 4; k++) c->f[k + 1].ps0 = keep[k];
+            }
+        g_sounds_in.erase(g_sounds_in.begin() + i);
     }
     // their particles, as their puppets are where they were made (dropped for a player not shown here)
     for (size_t i = 0; i < g_effects_in.size();) {
@@ -447,4 +900,10 @@ extern "C" void hook_025202F8(Cpu* c) {
     guest_call(c, GC(0x025E1D40));
     mods::trace("coop: the opening asked for (scene proc name %d)", (int16_t)ld16(scene + 8));
     c->r[3] = 1;
+}
+
+// dComIfGp_setNextStage (0252012C): a guest's door into a stage the host isn't in waits for the host's answer (doors)
+extern "C" void f_0252012C_orig(Cpu* c);
+extern "C" void hook_0252012C(Cpu* c) {
+    if (!mods::coop::sync::door_held(c)) f_0252012C_orig(c);
 }

@@ -96,6 +96,8 @@ void request_load_portable_file(const std::string& path);  // a .wwstate anywher
 // Link is not free to have it taken), and a load of one into the Quest Log being played
 bool capture_portable_text(Cpu* c, std::string& out, std::string& why);
 void request_load_portable(std::shared_ptr<pstate::State> s);
+// the portable loads that have arrived so far (Link in its stage, settled): online co-op's join is done when it grows
+uint32_t portable_arrivals();
 bool full_states();                     // save button / shortcuts make full states
 void set_full_states(bool on);          // the setting (kept in the states folder)
 bool full_states_forced();              // the environment decides (WWHD_FULL_SAVE_STATES or test variables)
@@ -104,6 +106,8 @@ std::string states_dir();               // where slots live (created on first us
 std::string last_message();             // short status for the title bar ("" when stale)
 // a short notice shown the same way (overlay toast, title bar) for a few seconds: screenshots
 void notice(const std::string& text);
+// a stage's name for people ("Dragon Roost Cavern"; else the stage's own)
+std::string area_label(const char* stage);
 // a mod's warp: Link to `pos` in `stage`/`room` by a stage change (the portable state's), with the boat at `ship_pos`
 // (he on it, or standing beside it) or without; false with `why` when he is not free to go (an event, a menu...)
 bool warp(Cpu* c, const std::string& stage, int room, const float pos[3], int16_t angle, const float* ship_pos, bool on_ship,

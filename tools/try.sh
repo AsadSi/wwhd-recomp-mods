@@ -152,6 +152,7 @@ The tour's second half, at night: armada (with boarding) at 0:30, calm 3:00, Big
 cyclone 11:40, blood moon 14:30." ;;
   beedle-bosses) ON=(BEEDLE_SHIP MOLGERA PHANTOM_GANON); EVENT="molgera@+40;phantom@+45"; export WWHD_MOD_PHANTOM_GANON_CHOICE=1; NOTE="$BEEDLE
 Molgera and Titanic Phantom Ganon together from about 40 s: fight them from its deck or from the boat's cannon." ;;
+  coop-raft) ON=(RAFT); export WWHD_MOD_COOP=1 WWHD_COOP_SHOT="$ROOT/build/try/shot$T.now"; NOTE="Online co-op with the raft in tow (tools/duo.sh coop-raft): the host's boat tows it, guests stand on it." ;;
   coop) ON=(BIG_SHIP); export WWHD_MOD_COOP=1 WWHD_TEST_SHIP_OWNED=1 WWHD_COOP_SHOT="$ROOT/build/try/shot$T.now"; NOTE="Online co-op (tools/duo.sh starts a host and a guest): $SHIP" ;;
   coop-record|coop-ghost) export WWHD_MOD_COOP=${COOP:-1} WWHD_TEST_STAGE="${STAGE:-sea 11 0}" WWHD_COOP_SHOT="$ROOT/build/try/shot.now"
   POSE="${POSE:-$ROOT/build/try/coop.pose}"
@@ -200,7 +201,7 @@ Everything at once. The first minute is yours: get on the deck, try the helm and
   OFTEN=2; NOTE="$SHIP
 The long soak, played: every spooky mod on, How often at Often, nothing forced. Sail out into open sea (away from
 islands) and keep going; the events come by chance, a roll a minute (none within reach of an island). Play as you like." ;;
-  *) echo "Usage: tools/try.sh <seamless|windfall|stalker|darknut|tp-darknuts|buy-ship|helm|cabin|beedle-shop|helmaroc|octo-phantom|chaos|full|raft|shop|raft-bosses|tour|tour-rest|long|beedle|beedle-guns|gunner|crew|boarding|drowned|calm|photo|blood|cyclone|maelstrom|armada|octo|lion|soak|plain|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim|cannon-boat|cannon-boat-deck|coop|coop-record|coop-ghost>"; exit 2 ;;
+  *) echo "Usage: tools/try.sh <seamless|windfall|stalker|darknut|tp-darknuts|buy-ship|helm|cabin|beedle-shop|helmaroc|octo-phantom|chaos|full|raft|shop|raft-bosses|tour|tour-rest|long|beedle|beedle-guns|gunner|crew|boarding|drowned|calm|photo|blood|cyclone|maelstrom|armada|octo|lion|soak|plain|beedle-bosses|all|bosses|duo|titanic-deck|deck|cannon|leviathan-deck|molgera-deck|phantom-deck|molgera-chase|phantom-titanic|anchor-island|seahats-swim|cannon-boat|cannon-boat-deck|coop|coop-raft|coop-record|coop-ghost>"; exit 2 ;;
 esac
 for m in "${SPOOKY[@]}"; do export WWHD_MOD_$m=0; done
 export WWHD_MOD_TURBO=1  # hold T to fast-forward (Claude: live pad bit 28)
@@ -214,9 +215,10 @@ echo
 TRACE="$ROOT/build/try/${1}$T-$(date +%H%M%S).txt"; mkdir -p "$ROOT/build/try"
 echo "It goes straight to the state by itself (no need to press anything at the title). Trace: $TRACE"
 : > "$ROOT/build/try/pad$T.txt"  # Claude can drive the game live through it: "<buttons hex> <lx> <ly> [<rx> <ry>]"
+rm -f "$ROOT/build/try/probe$T.txt"  # (the probe runs what its file holds as the game starts: a last run's pokes would too)
 # straight into the state: A pressed through the title and onto Quest Log 1 (as the audit routes do; the state loads
 # once a Quest Log is played)
-SKIP="WWHD_TEST_ORIGIN=1 WWHD_TEST_PRESS=2-2.15:8000,2.5-2.65:8000,3-3.15:8000,3.5-3.65:8000,4-4.15:8000,4.5-4.65:8000,5-5.15:8000,5.5-5.65:8000,6-6.15:8000,6.5-6.65:8000,7-7.15:8000,7.5-7.65:8000,8-8.15:8000,8.5-8.65:8000,9-9.15:8000,9.5-9.65:8000,10-10.15:8000,10.5-10.65:8000,11-11.15:8000,11.5-11.65:8000,12-12.15:8000"  # (every 0.5 s: each screen moves on as soon as it takes A)
+SKIP="WWHD_TEST_ORIGIN=1 WWHD_TEST_A_UNTIL_ARRIVED=1"  # (A every 0.5 s until the state has arrived: a slow boot, or one uncapped, still gets through)
 mkdir -p "$ROOT/build/try/shots$T"
 # RECORD=1 (chaos, full; or set it yourself): a screenshot every 3 s, shrunk into build/try/rec-<run>/ (tools/rec.sh)
 if [ -n "${RECORD:-}" ]; then
@@ -225,6 +227,7 @@ if [ -n "${RECORD:-}" ]; then
   echo "Recording: ${TRACE%.txt}-rec/"
 fi
 # OWN_SAVE=1: no test state and no presses through the title: you pick and play a Quest Log yourself
-STATE="WWHD_PORTABLE_LOAD=$ROOT/save/haunted.wwstate"
+# STATE_FILE: another state (save/coop-dock.wwstate: Windfall's dock on foot, bombs on X, boomerang on Y, hookshot on R)
+STATE="WWHD_PORTABLE_LOAD=${STATE_FILE:-$ROOT/save/haunted.wwstate} WWHD_QUICK_BOOT=1"  # (uncapped until it has arrived)
 [ -n "${OWN_SAVE:-}" ] && STATE= SKIP=
-cd "$ROOT" && env $EXTRA ${MORE:-} $SKIP WWHD_SCREENSHOT_DIR="$ROOT/build/try/shots$T" WWHD_LIVE_PAD="$ROOT/build/try/pad$T.txt" $STATE WWHD_MODS_TRACE="$TRACE" ./build/cmake/wwhd ${SAVE:+--save "$SAVE"}
+cd "$ROOT" && env $EXTRA ${MORE:-} $SKIP WWHD_PROBE="$ROOT/build/try/probe$T.txt" WWHD_SCREENSHOT_DIR="$ROOT/build/try/shots$T" WWHD_LIVE_PAD="$ROOT/build/try/pad$T.txt" $STATE WWHD_MODS_TRACE="$TRACE" ./build/cmake/wwhd ${SAVE:+--save "$SAVE"}

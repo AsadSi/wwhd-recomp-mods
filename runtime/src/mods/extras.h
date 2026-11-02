@@ -27,6 +27,7 @@ extern const std::vector<std::string> kOften;  // Rare, Now and then (the defaul
 int often(const std::string& id);
 void set_often(const std::string& id, int often);
 void step(Cpu* c);  // game thread, once per full logic step (interp.cpp)
+void before_execute();  // the same, just before the actors' executes (interp.cpp)
 void filter_pad(input::PadState& s);
 void camera_draw(uint32_t cam);  // camera_draw (interp.cpp), before it draws: the Big ship helm's far camera  // each GamePad read (camera.cpp's filter_pad): the deck cannon's controls
 }  // namespace mods::extras

@@ -23,6 +23,7 @@
 // runtime allocations) and guest memory (MEM2, runtime objects, fixed slots, foreground bucket,
 // MEM1; all-zero 64 KiB chunks are left out).
 #include "savestate.h"
+#include "stage_names.h"
 #include "guest_addr.h"
 #include "full_state_header.h"
 #include "input.h"
@@ -63,6 +64,7 @@
 #include "mods/guest_state_section.h"
 #include "quit_prompt.h"
 #include "rumble.h"
+#include "gx2/gx2.h"
 
 // module sections
 bool threads_ss_save(ss::Writer& w, std::string& why);
@@ -449,14 +451,15 @@ bool check_dispatch(Reader r, std::string& why) {
     return r.ok;
 }
 
+}  // namespace
+
 std::string area_label(const char* stage) {
-    static const std::map<std::string, std::string> names = {
-        {"sea", "Great Sea"}, {"LinkRM", "Link's House"}, {"MajyuE", "Forsaken Fortress"}, {"M_NewD2", "Dragon Roost Cavern"},
-        {"kindan", "Forbidden Woods"}, {"Siren", "Tower of the Gods"}, {"Asoko", "Tetra's Ship"},
-    };
-    auto it = names.find(stage);
-    return it == names.end() ? std::string(stage) : it->second;
+    for (const auto& [id, name] : kStageNames)
+        if (!strcmp(id, stage)) return name;
+    return stage;
 }
+
+namespace {
 
 // true when done (saved or failed for good); false to retry on the next frame
 bool do_save(int slot) {
@@ -892,6 +895,8 @@ void place_link(Cpu* c, const std::string& stage, int room, int layer, const flo
 bool apply_portable(Cpu* c, const pstate::State& s, std::string& why, bool& retry) {
     if (!gameplay_ready(why, retry)) return false;
     CallScope scope(c);
+    // (a Quest Log's opening fade still running: the stage change asked for now is lost, and the fade never ends)
+    if (guest_call(c, fn_ovlpDoingReq) & 0xFF) { why = "a scene transition is in progress"; retry = true; return false; }
     const uint32_t sv = ld32(kSaveInfoPtr), info = sv + kInfo, buf = scratch();
     memcpy(mem::ptr(buf), s.savedata.data(), pstate::kSaveDataSize);
     if ((int32_t)guest_call(c, fn_card_to_memory, {info, buf, 0}) == -1) { why = "the game refused the save data"; return false; }
@@ -1044,6 +1049,7 @@ void service_portable_load(Cpu* c) {
 
 // after a portable load: once the new Link exists, the HD sections once more (leaving the old stage
 // updates the live sea-chart position), then log where Link arrived (scripted tests read this line)
+std::atomic<uint32_t> g_portable_arrivals{0};
 void watch_arrival(Cpu* c) {
     if (g_arrival.stage.empty()) return;
     uint32_t link = ld32(kLinkPtr);
@@ -1051,6 +1057,7 @@ void watch_arrival(Cpu* c) {
         if (render::frame_count() - g_arrival.frame > 30 * 60) {
             LOG("[savestate] portable load: did not arrive in %s", g_arrival.stage.c_str());
             g_arrival = Arrival{};
+            if (getenv("WWHD_QUICK_BOOT")) gx2::set_uncapped(false);
         }
         return;
     }
@@ -1077,6 +1084,8 @@ void watch_arrival(Cpu* c) {
         }
     }
     g_arrival = Arrival{};
+    g_portable_arrivals++;
+    if (getenv("WWHD_QUICK_BOOT")) gx2::set_uncapped(false);
 }
 
 // full states: the setting, the environment and the scripted tests
@@ -1384,6 +1393,7 @@ std::atomic<uint64_t> g_last_load_frame{0}, g_last_load_step{0};
 std::atomic<uint32_t> g_last_load_counter{0};
 uint32_t last_load_counter() { return g_last_load_counter.load(); }
 uint64_t last_load_frame() { return g_last_load_frame.load(); }
+uint32_t portable_arrivals() { return g_portable_arrivals.load(); }
 uint64_t last_load_step() { return g_last_load_step.load(); }
 
 std::string states_dir() { return state_dir(); }
@@ -1410,6 +1420,7 @@ void service(Cpu* c) {
     }
     static bool env_load = [] {
         if (const char* e = getenv("WWHD_PORTABLE_LOAD")) request_load_portable_file(e);
+        if (getenv("WWHD_QUICK_BOOT")) gx2::set_uncapped(true);  // test aid: uncapped until the state has arrived
         return true;
     }();
     (void)env_load;

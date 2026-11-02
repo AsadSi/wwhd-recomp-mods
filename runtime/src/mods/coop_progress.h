@@ -3,7 +3,8 @@
 // the step before and sends what it changed, field by field; the others put it in theirs. Anchor's way (Ship of
 // Harkinian), by comparison instead of hooks: the story's event bits, each stage's chests, switches, pickups, visited
 // rooms, small keys and dungeon items, the ocean's salvage bits, the items, songs, pearls, Triforce, charts, maps and
-// capacities. Not shared (Windwaker-coop's choice): health, rupees, magic, ammunition, bottle contents, bags.
+// capacities. Rupees a player gains are gained by everyone too, but each keeps their own wallet: what one spends is
+// theirs alone. Not shared (Windwaker-coop's choice): health, magic, ammunition, bottle contents, bags.
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -20,5 +21,9 @@ void received(const uint8_t* d, size_t n);
 void step(Cpu* c, bool live);
 // the session ended: the others' changes still kept are dropped
 void stop();
+// another player's shutter opening or closing (net::kDoorMove), shown here
+void door_moved(const uint8_t* d, size_t n);
+// rupees another player gained (net::kRupees), added here at the next step
+void rupees_received(const uint8_t* d, size_t n);
 
 }  // namespace mods::coop::progress

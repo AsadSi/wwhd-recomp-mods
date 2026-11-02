@@ -171,6 +171,8 @@ bool test_mouse() {
 }
 }  // namespace
 
+bool first_person() { return in_first_person(); }
+
 void mouse_add(float dx, float dy) {
     std::lock_guard<std::mutex> lk(g_mu);
     g_dx += dx;

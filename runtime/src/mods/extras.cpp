@@ -34,7 +34,10 @@
 
 #include "guest_addr.h"
 #include "mods.h"
+#include "coop_items.h"
+#include "coop_monsters.h"
 #include "coop_pose.h"
+#include "probe.h"
 #include "coop_sync.h"
 #include "darknut.h"
 #include "shadow_beast.h"
@@ -128,6 +131,9 @@ uint32_t g_phantom_actor = 0;                          // Phantom Ganon, and his
 uint32_t g_beedle_actor = 0, g_beedle_lion = 0, g_beedle_mtx = 0;
 std::atomic<int> g_cam_yaw{0};  // the way the camera looks (s16): spawns out of its view, and a test driver
 bool g_beedle_aboard = false;  // Link on its deck: its hut's door (an exit only where Beedle's own ship lies) does nothing
+bool g_beedle_follow = false;  // online co-op, a guest: its craft put where the host's is (g_beedle_at, g_beedle_yaw)
+double g_beedle_at_x = 0, g_beedle_at_z = 0;
+int16_t g_beedle_yaw = 0;
 float g_phantom_size = 1, g_fx_size = 1;               // g_fx_size: his size while his execute runs (particle hook)
 // the Leviathan and Molgera can be killed, by any weapon (a cannonball or bomb 4, an arrow 2, the sword its power):
 // what is left of their health, and the Leviathan's death as its hit test saw it (loot and the event's end follow)
@@ -766,7 +772,7 @@ const char* event_name(int k) { return catalogue()[k].name.c_str(); }
 // (+0x14, 700), set while it is out
 // and put back after. It leaves behind its lock-on helper (ATT, its process id at +0x1E38) and, if it made one, its
 // sand floor (Bwdg, proc 0xDB, a BG mesh that reads Molgera every frame): both go with it
-constexpr uint32_t kMolgeraScale = 0x10462A84, kMolgeraPush = 0x10462A74, kMolgeraBite = 0x10462A7C;
+const uint32_t kMolgeraScale = GD(0x10462A84), kMolgeraPush = GD(0x10462A74), kMolgeraBite = GD(0x10462A7C);
 // a kill's loot: rupees through the game's own item get (execItemGet 0254DA38: silver 0x0F 200, orange 6 100), which
 // the meter counts into the wallet up to what it holds (and the Rupee multiplier then sees), with the rupee sound
 // (0x836); and a blue potion in the first empty bottle (items 14..17, an empty bottle 0x50; item_func_blue_bottle
@@ -800,7 +806,7 @@ void remove_molgera(Cpu* c) {
         guest_call(c, GC(0x025D57E4), {g_molgera.id});
     }
     g_molgera = Single{}, g_molgera_actor = 0, g_molgera_gave_up = false, g_molgera_dying = false;
-    st32(GD(kMolgeraScale), u32_bits(1.3f)), st32(GD(kMolgeraPush), u32_bits(6.f)), st32(GD(kMolgeraBite), u32_bits(700.f));
+    st32(kMolgeraScale, u32_bits(1.3f)), st32(kMolgeraPush, u32_bits(6.f)), st32(kMolgeraBite, u32_bits(700.f));
 }
 void wind(Cpu* c, float power) { c->f[1].ps0 = power; guest_call(c, GC(0x0257E594)); }
 // a scare: everything but the moods (Night of the dead and Blood moon for a night, rain, fog, the Deep), which may come
@@ -1385,6 +1391,7 @@ void second_gunner(Cpu* c, uint32_t sv, uint32_t link, uint32_t hull, const Gun*
 struct Shared { uint16_t n; uint32_t id; int16_t proc; bool adopted; Monster m; uint16_t up; int8_t hp = -128; uint8_t anm_seq = 0; };
 std::vector<Shared> g_coop;  // the host's monsters out, or a guest's copies of them
 bool g_coop_remote_shot = false;
+struct Hurt { uint8_t quarters; int16_t way; } g_hurt{};  // a friend's blow to take (before_execute)
 struct Bytes {  // a message's fields, in order
     std::string b;
     template <class T> Bytes& put(T v) { b.append((const char*)&v, sizeof v); return *this; }
@@ -1441,13 +1448,13 @@ struct CoopKind {
     uint32_t morf;          // its mDoExt_McaMorf pointer (0 none)
     uint32_t anm_init;      // its anm_init(this, idx, f1 morf, loop, f2 speed, flag) (0 none)
 };
-constexpr CoopKind kCoopKinds[] = {
+const CoopKind kCoopKinds[] = {
     {0xE4, 0x3CC, 0, false, 0x3F0, 0},                 // Gyorg (daGy): mode; its one animation
     {0xE1, 0x688, 0, false, 0x6A8, 0},                 // Big Octo (daDaiocta): mode
     {0xB3, 0x3C8, 0x3CC, false, 0, 0},                 // a cannon boat (daOship): mode, submode
-    {0xF1, 0x5BA, 0x5BC, true, 0x3DC, 0x02134108},     // Phantom Ganon (daFganon): action, mode
-    {0xD9, 0x1B32, 0x1B34, true, 0x3DC, 0x020F9AF4},   // Molgera (daBwd): state, substate
-    {0xD1, 0x45B, 0x462, false, 0x3D8, 0x023C9AD8},    // a Seahat (ph_class): u8 mode, s16 submode; its body's morf
+    {0xF1, 0x5BA, 0x5BC, true, 0x3DC, GC(0x02134108)},     // Phantom Ganon (daFganon): action, mode
+    {0xD9, 0x1B32, 0x1B34, true, 0x3DC, GC(0x020F9AF4)},   // Molgera (daBwd): state, substate
+    {0xD1, 0x45B, 0x462, false, 0x3D8, GC(0x023C9AD8)},    // a Seahat (ph_class): u8 mode, s16 submode; its body's morf
 };
 const CoopKind* coop_kind(int16_t proc) {
     for (const CoopKind& k : kCoopKinds) if (k.proc == proc) return &k;
@@ -1463,13 +1470,14 @@ bool coop_puppet(uint32_t actor) { return mods::coop::sync::guest() && coop_find
 // the last animation each of the host's monsters set (its anm_init), by actor id
 struct CoopAnm { uint8_t idx, loop, flag, seq; float morf, speed; };
 std::unordered_map<uint32_t, CoopAnm> g_coop_anm;
-// the host: Link stands where the player a monster goes for is, for its execute (nothing when that is Link himself)
+// the host: Link stands where the player a monster goes for is, for its execute (nothing when that is Link himself); with
+// `placed`, any game for a placed monster it runs (coop_monsters.h)
 std::unordered_map<uint32_t, int> g_coop_target;  // by actor id: the player it goes for
 struct CoopStandIn {
     uint32_t link = 0;
     float was[3];
-    explicit CoopStandIn(uint32_t actor) {
-        if (!mods::coop::sync::host() || !coop_find(actor)) return;
+    explicit CoopStandIn(uint32_t actor, bool placed = false) {
+        if (!placed && (!mods::coop::sync::host() || !coop_find(actor))) return;
         const uint32_t l = ld32(kPlay + 0x5B34);
         if (!in_mem2(l)) return;
         const float at[3] = {(float)ldf32(actor + kPos), (float)ldf32(actor + kPos + 4), (float)ldf32(actor + kPos + 8)};
@@ -1484,11 +1492,11 @@ struct CoopStandIn {
 };
 // a guest's copy into the host's mode: by the type's own mode change where it has one (its init procedure runs)
 void coop_set_mode(Cpu* c, uint32_t a, const CoopKind& k, uint32_t mode, uint16_t mode2) {
-    static constexpr uint32_t kGyorgInit[] = {0x02167258, 0x021695C0, 0x02169B68, 0x02169B48, 0x02169EE8,
-                                              0x0216A674, 0x02169AA8, 0x0216810C, 0x02167FE0, 0x02167F30};
+    static const uint32_t kGyorgInit[] = {GC(0x02167258), GC(0x021695C0), GC(0x02169B68), GC(0x02169B48), GC(0x02169EE8),
+                                          GC(0x0216A674), GC(0x02169AA8), GC(0x0216810C), GC(0x02167FE0), GC(0x02167F30)};
     const uint32_t now = k.mode_s16 ? ld16(a + k.mode) : k.proc == 0xD1 ? ld8(a + k.mode) : ld32(a + k.mode);
     if (now != mode) {
-        if (k.proc == 0xE4 && mode < 10) guest_call(c, GC(kGyorgInit[mode]), {a});
+        if (k.proc == 0xE4 && mode < 10) guest_call(c, kGyorgInit[mode], {a});
         else if (k.proc == 0xE1) guest_call(c, GC(0x0211889C), {a, 0, mode});  // daDaiocta modeProc(init)
         else if (k.proc == 0xB3) guest_call(c, GC(0x023C58DC), {a, 0, mode});  // daOship modeProc(init)
         else if (k.mode_s16) st16(a + k.mode, (uint16_t)mode);
@@ -1557,6 +1565,7 @@ void coop_world(Cpu* c, uint32_t link, bool settled, bool riding, double now) {
     for (auto& m : sync::take_world()) held.push_back(std::move(m));
     if (!sync::arrived()) held.clear();
     coop_boat_shot(c, link);
+    mods::coop::items::step(c);
     for (size_t i = 0; settled && i < held.size(); i++) {
         const sync::WorldMsg& m = held[i];
         Reader r{m.body};
@@ -1571,6 +1580,12 @@ void coop_world(Cpu* c, uint32_t link, bool settled, bool riding, double now) {
             g_coop_remote_shot = true;
             fire(c, 0, link, aboard ? to_world(pos_of(hull), (int16_t)ld16(hull + kAngleY), at) : at, yaw, up, 0xFFFFFFFF);
             g_coop_remote_shot = false;
+        } else if (m.type == net::kPlayerHit) {  // another player's sword on this game's Link (friendly fire)
+            const uint8_t who = r.get<uint8_t>(), quarters = r.get<uint8_t>();
+            const int16_t way = r.get<int16_t>();
+            if (who != net::my_id() || ld8(kPlay + 0x5292)) continue;  // (not during a cutscene or event, as Anchor's)
+            g_hurt = {quarters, way};
+            trace("extras: co-op: hit by player %d (%d quarter hearts)", m.from, quarters);
         } else if (m.type == net::kDamage && sync::host()) {  // a guest's hit on one of ours
             const uint16_t n = r.get<uint16_t>();
             const int dmg = r.get<uint8_t>();
@@ -1580,8 +1595,12 @@ void coop_world(Cpu* c, uint32_t link, bool settled, bool riding, double now) {
                     if (hp <= 0) delete_actor(c, sh.id);  // (gone: to the guests as killed)
                     else st8(a + 0x3A1, (uint8_t)hp);
                 }
+        } else if (m.type == net::kMonHit || m.type == net::kMonGone) {
+            mods::coop::monsters::message(c, m.type, m.body);
         } else if (m.type == net::kBoatShot) {
             boat_shot_from(c, link, r);
+        } else if (m.type == net::kBombed) {
+            mods::coop::items::bombed(c, link, (const uint8_t*)m.body.data(), m.body.size());
         } else if (m.type == net::kSeaEvent) {
             const int op = r.get<uint8_t>(), k = r.get<uint8_t>();
             const double left = r.get<double>(), wx = r.get<double>(), wz = r.get<double>(), far = r.get<double>();
@@ -1684,7 +1703,7 @@ void coop_world(Cpu* c, uint32_t link, bool settled, bool riding, double now) {
         if (Shared& sh = g_coop[j - 1]; kind->anm_init && rb.an.idx != 0xFF && rb.an.seq != sh.anm_seq) {
             sh.anm_seq = rb.an.seq;
             c->f[1].ps0 = rb.an.morf, c->f[2].ps0 = rb.an.speed;
-            guest_call(c, GC(kind->anm_init), {m, rb.an.idx, rb.an.loop, rb.an.flag});
+            guest_call(c, kind->anm_init, {m, rb.an.idx, rb.an.loop, rb.an.flag});
         }
         if (morf) {
             st32(morf + 0x98, u32_bits(rb.rate));
@@ -1692,9 +1711,32 @@ void coop_world(Cpu* c, uint32_t link, bool settled, bool riding, double now) {
         }
     }
     if (sync::host()) net::put_state(sync::kMonsters, out.b);
+    if (settled) mods::coop::monsters::step(c, link);
+    // friendly fire (Asad's rule: always on): a sword attack of this game's Link (as it starts: daPy_lk_c::mCurProc +0x65F0
+    // entering a cut, d_a_player_main.h daPyProc_CUT_*) hits each other player shown within 200 in front of him (75 degrees
+    // either side); spin and jump cuts a heart, the others half. The puppets have no colliders: this game decides
+    const V3 me = pos_of(link);
+    {
+        static uint32_t was = 0;
+        const uint32_t proc = ld32(link + 0x65F0);
+        const bool spin = proc == 0x55 || proc == 0x58 || proc == 0x59, jump = proc == 0x5B || proc == 0x5E || proc == 0x63;
+        const bool cut = (proc >= 0x41 && proc <= 0x4A) || proc == 0x56 || proc == 0x5A || proc == 0x61 || spin || jump;
+        if (cut && proc != was) {
+            const double yaw = (int16_t)ld16(link + kAngleY) * M_PI / 32768;
+            for (int id = 0; id < net::kMaxPlayers; id++)
+                if (float p[3]; id != net::my_id() && sync::place(id, p)) {
+                    const double dx = p[0] - me.x, dz = p[2] - me.z, d = std::hypot(dx, dz);
+                    const double off = std::remainder(atan2(dx, dz) - yaw, 2 * M_PI);
+                    if (d > 200 || std::fabs(p[1] - me.y) > 120 || (!spin && std::fabs(off) > 75 * M_PI / 180)) continue;
+                    const int16_t way = (int16_t)(atan2(dx, dz) * 32768 / M_PI);
+                    net::send(-1, net::kPlayerHit, Bytes{}.put<uint8_t>((uint8_t)id).put<uint8_t>(spin || jump ? 4 : 2).put(way).b);
+                    trace("extras: co-op: this game's cut %#x hits player %d", proc, id);
+                }
+        }
+        was = proc;
+    }
     // the players push each other: this game moves only its own Link out of the others' room (radius 35 each)
     if (riding) return;
-    const V3 me = pos_of(link);
     for (int id = 0; id < net::kMaxPlayers; id++)
         if (float p[3]; sync::place(id, p)) {
             const double dx = me.x - p[0], dz = me.z - p[2], d = std::hypot(dx, dz);
@@ -1704,6 +1746,24 @@ void coop_world(Cpu* c, uint32_t link, bool settled, bool riding, double now) {
 }  // namespace
 
 // ---- the game thread, once per full logic step ----
+
+// a friend's blow (kPlayerHit) on this game's Link, taken as a monster's is: a hit on his own body's cylinder (mCyl
+// +0x765C: its TG hit flags +0x1C and +0x98, the way it came +0xC0) with its damage (mStts +0x7620, +0x16), put in just
+// before his execute, where daPy_lk_c::changeDamageProc (023FA578) finds it and plays his damage (procDamage_init:
+// knocked the way the blow went, his flinch, voice and sound; setDamagePoint takes the hearts). Not while he still
+// flinches from the last (+0x3B0, his damage timer; mode +0x6A70 bit 8), as the game's own hits; a friend's blow
+// leaves the last quarter heart
+void before_execute() {
+    const uint32_t link = ld32(kPlay + 0x5B34);
+    if (!g_hurt.quarters || !in_mem2(link) || ld16(link + 0x3B0) || ld32(link + 0x6A70) & 8) return;
+    const int q = std::min<int>(g_hurt.quarters, ld16(save() + 2) - 1);
+    const double a = g_hurt.way * M_PI / 32768;
+    g_hurt = {};
+    if (q <= 0) return;
+    st32(link + 0x765C + 0x1C, ld32(link + 0x765C + 0x1C) | 1), st32(link + 0x765C + 0x98, ld32(link + 0x765C + 0x98) | 1);
+    st8(link + 0x7620 + 0x16, (uint8_t)q);
+    st32(link + 0x765C + 0xC0, u32_bits((float)(sin(a) * 10))), st32(link + 0x765C + 0xC4, 0), st32(link + 0x765C + 0xC8, u32_bits((float)(cos(a) * 10)));
+}
 
 void step(Cpu* c) {
     mods::coop::sync::poll(c, on<kCoop>());  // (at the title too: the session's messages)
@@ -1718,7 +1778,7 @@ void step(Cpu* c) {
     const bool fresh = link != last_link;  // a file loaded, a stage entered: start over
     last_link = link;
     std::string stage((const char*)mem::ptr(kStage), strnlen((const char*)mem::ptr(kStage), 8));
-    g_beedle_actor = g_beedle_lion = 0, g_beedle_aboard = false;  // (set again below while Beedle's ship is out)
+    g_beedle_actor = g_beedle_lion = 0, g_beedle_aboard = g_beedle_follow = false;  // (set again below while Beedle's ship is out)
     if (!in_mem2(link) || stage.empty() || stage == "sea_T" || stage == "Name" || stage == "ENDumi") {  // title, file select
         g_manned = -1, g_take_pad = false, g_cannon_btn = 0, g_cannon_cam = false, g_file_at = -1;
         return;
@@ -1874,7 +1934,7 @@ void step(Cpu* c) {
         const float to = live(kBlood, now) && night ? 1.f : 0.f, was = blood;
         blood = to > blood ? std::min(to, blood + 1 / 2700.f) : std::max(to, blood - 1 / 2700.f);
         if (blood > 0 || was > 0)
-            for (uint32_t f : {0x025553B8u, 0x02556B38u}) c->f[1].ps0 = blood, guest_call(c, GC(f), {90, (uint32_t)-110, (uint32_t)-110});
+            for (uint32_t f : {GC(0x025553B8), GC(0x02556B38)}) c->f[1].ps0 = blood, guest_call(c, f, {90, (uint32_t)-110, (uint32_t)-110});
     }
     if (deep > 0 || blood > 0) {
         c->f[1].ps0 = (1 - 0.45 * deep) * (1 - 0.2 * blood);
@@ -2067,8 +2127,10 @@ void step(Cpu* c) {
     beast::step(c, link, now);
     darknut::replace_all(on<kTpDarknuts>());
     darknut::step(c, link);
+    probe::step(c, link);
+    coop::own_character(coop::sync::settings().character);  // (also without a session)
     coop::step(c, link, on<kCoop>());
-    coop::sync::step(c, link, hull);
+    coop::sync::step(c, link, hull ? hull : beedle, deck);  // (Tetra's ship, or the craft in tow: the deck shared)
     // Leviathan: one Gyorg (made as the others are, a child of the Haunted sea's GyCtrl, which is made here too if
     // needed) at 8x: setMtx (0216731C) copies the actor's scale (+0x330) into its model each execute, its spheres are
     // sized through the SetR hooks (g_big_hits) but its body collider's radius (+0x9B4) is a plain store each execute,
@@ -2143,7 +2205,7 @@ void step(Cpu* c) {
         }
         if (const uint32_t a = g_molgera_actor = g_molgera.actor(c); a && !mods::coop::sync::guest()) {  // (a guest's: the host's)
             st8(a + 0x1B5C, 1), st32(a + 0x3EC8, 0);
-            st32(GD(kMolgeraScale), u32_bits(1.3f * 2.5f)), st32(GD(kMolgeraPush), 0), st32(GD(kMolgeraBite), u32_bits(1300.f));
+            st32(kMolgeraScale, u32_bits(1.3f * 2.5f)), st32(kMolgeraPush, 0), st32(kMolgeraBite, u32_bits(1300.f));
             // It makes itself at the world's origin (its boss room's centre) and is put far off ahead of Link, then
             // hunts him as a Gyorg does, in its own flight through the sand, here the sea (state 10 "fly"), its head
             // 80-300 above the sea so it shows: it circles him 3000 out for 6-10 s (nearer, its body sweeps the Big ship's deck),
@@ -2854,6 +2916,20 @@ void step(Cpu* c) {
             }
         } else {
             g_beedle_actor = beedle, g_beedle_lion = korl, g_beedle_aboard = deck;
+            // in online co-op the craft is the host's (as Tetra's ship): its place out to the guests; a guest's own put
+            // where the host's is (hook_02363164), with no tow-shaft from its boat
+            if (mods::coop::sync::host()) {
+                std::string b(15, '\0');
+                const float f[3] = {(float)ldf32(beedle + kPos), (float)ldf32(beedle + kPos + 4), (float)ldf32(beedle + kPos + 8)};
+                const int16_t a = (int16_t)ld16(beedle + kAngleY);
+                memcpy(&b[0], f, 12), memcpy(&b[12], &a, 2);
+                mods::coop::net::put_state(mods::coop::sync::kShip, b);
+            }
+            V3 hp;
+            int16_t hy;
+            bool hs;
+            g_beedle_follow = mods::coop::sync::guest() && coop_host_ship(hp, hy, hs);
+            if (g_beedle_follow) g_beedle_at_x = hp.x, g_beedle_at_z = hp.z, g_beedle_yaw = hy;
             // kept in the room the stage is in now (dStage_roomControl_c::mStayNo, 1047E6C8), and its deck's polygons
             // with it (dBgW's room +0xB8, which dBgS::Regist sets from the actor's room once): made on the boat, they
             // had the boat's room, which may be none, and Link standing on the deck took it as his own (a salvage
@@ -2874,20 +2950,33 @@ void step(Cpu* c) {
             // far end, 100 segments of 20, no path) in its mode 2 (byte +0x3DA), straight from where it is to a point
             // (+0x2624), here from his stern to the ship's bow, kept in his room; the segments it uses (+0x1828) as many as
             // that takes, so none hang past the bow (it lays them out in its next execute)
-            if (const uint32_t r = g_tow_rope.actor(c)) {
+            if (const uint32_t r = g_tow_rope.actor(c); r && g_beedle_follow) {
+                guest_call(c, GC(0x025D57E4), {g_tow_rope.id}), g_tow_rope = Single{};
+            } else if (r) {
                 const V3 a = to_world(pos_of(korl), (int16_t)ld16(korl + kAngleY), {0, 60, -150});
                 const V3 b = to_world(pos_of(beedle), (int16_t)ld16(beedle + kAngleY), {0, g_craft->top + 40, g_craft->bow});
                 st32(r + kPos, u32_bits((float)a.x)), st32(r + kPos + 4, u32_bits((float)a.y)), st32(r + kPos + 8, u32_bits((float)a.z));
                 st32(r + 0x2624, u32_bits((float)b.x)), st32(r + 0x2628, u32_bits((float)b.y)), st32(r + 0x262C, u32_bits((float)b.z));
                 st8(r + kRoom, ld8(link + kRoom)), st8(r + 0x3DA, 2);
                 st32(r + 0x1828, (uint32_t)std::clamp((int)(std::hypot(b.x - a.x, b.y - a.y, b.z - a.z) / 20) + 2, 2, 100));
-            } else if (g_tow_rope.wanted(c, now)) {
+            } else if (!g_beedle_follow && g_tow_rope.wanted(c, now)) {
                 Spawner none;
                 g_tow_rope.id = spawn(c, none, Monster{0x1BF, -1, 0xFF006401}, korl, 0, false, 60, false);
                 g_tow_rope.next = now + 5;
             }
             static Leap leap;
             static bool to_boat = false;  // the leap is into the boat
+            // (test aid: live pad bit 27 drops Link onto its deck, before the hut, as onto Tetra's ship's)
+            static bool drop_was = false;
+            if (const bool drop = input::live_buttons() & 0x08000000u; drop && !drop_was && leap.step < 0) {
+                const V3 w = to_world(pos_of(beedle), (int16_t)ld16(beedle + kAngleY), {0, g_craft->top + 300, g_craft->onto_z});
+                put_link(link, w);
+                st32(link + 0x340, 0), st32(link + 0x6A48, u32_bits((float)w.y)), st32(link + 0x6A4C, u32_bits((float)w.y));
+                c->f[1].ps0 = 0;
+                guest_call(c, GC(0x023F6564), {link, 1});
+                trace("extras: (test) Link dropped onto the craft's deck");
+            }
+            drop_was = input::live_buttons() & 0x08000000u;
             // out of the boat: the get-off jump (its jump phase, link +0x69C0 1) a leap back onto its deck, before the hut
             const double isle = std::hypot(ldf32(link + kPos) - std::round(ldf32(link + kPos) / 1e5) * 1e5,
                                            ldf32(link + kPos + 8) - std::round(ldf32(link + kPos + 8) / 1e5) * 1e5);
@@ -3617,7 +3706,12 @@ extern "C" void hook_023C6DB4(Cpu* c) {
 extern "C" void f_02363164_orig(Cpu* c);
 extern "C" void hook_02363164(Cpu* c) {
     using namespace mods::extras;
-    if (const uint32_t a = c->r[3], k = g_beedle_lion; a && a == g_beedle_actor && in_mem2(k)) {
+    if (const uint32_t a = c->r[3]; a && a == g_beedle_actor && g_beedle_follow) {  // (a guest's: where the host's is)
+        for (uint32_t o : {(uint32_t)kPos, 0x300u})
+            st32(a + o, u32_bits((float)g_beedle_at_x)), st32(a + o + 8, u32_bits((float)g_beedle_at_z));
+        st16(a + 0x322, (uint16_t)g_beedle_yaw), st16(a + kAngleY, (uint16_t)g_beedle_yaw);
+        for (int i = 0; i < 3; i++) st32(a + 0x330 + 4 * i, u32_bits(g_craft->scale));
+    } else if (const uint32_t k = g_beedle_lion; a && a == g_beedle_actor && in_mem2(k)) {
         const V3 lion = pos_of(k), p = pos_of(a);
         const double tow = g_craft->tow;
         double dx = lion.x - p.x, dz = lion.z - p.z, d = std::hypot(dx, dz);
@@ -3720,8 +3814,8 @@ extern "C" void hook_0211BFFC(Cpu* c) {
     f_0211BFFC_orig(c);
 }
 
-// fopAcM_fastCreate (025D5928): the boat's own cannon making its ball (daShip execute, returning to 02479684), for the
-// other players (online co-op)
+// fopAcM_fastCreate (025D5928): the boat's own cannon making its ball (daShip execute, returning to 02479684), and what
+// Link makes as he uses an item, for the other players (online co-op)
 extern "C" void f_025D5928_orig(Cpu* c);
 extern "C" void hook_025D5928(Cpu* c) {
     const bool boat = c->lr == GC(0x02479684) && c->r[3] == 0x126, coop = mods::coop::net::role() != mods::coop::net::Role::kOff;
@@ -3730,7 +3824,10 @@ extern "C" void hook_025D5928(Cpu* c) {
         auto& b = mods::extras::g_boat_shot;
         for (int i = 0; i < 3; i++) b.pos[i] = (float)ldf32(pos + 4 * i), b.angle[i] = (int16_t)ld16(angle + 2 * i);
     }
+    const int16_t proc = (int16_t)c->r[3];
+    const bool his = mods::coop::executing() != 0;  // (Link's items: online co-op, coop_items.h)
     f_025D5928_orig(c);
+    if (his) mods::coop::items::made(proc, c->r[3]);
     if (boat && coop) mods::extras::g_boat_shot.ball = c->r[3];
 }
 
@@ -3738,6 +3835,31 @@ extern "C" void hook_025D5928(Cpu* c) {
 // where the player it goes for is (CoopStandIn): Gyorg 021689C8, its controller 0216C13C, Big Octo 0211AE68, Molgera
 // 020FA614, a Seahat 023CC070, the Shadow stalker's Bokoblin body 0209BD1C (its mind reads Link's place there too);
 // Phantom Ganon and the cannon boats in their hooks above
+// fopAc_Execute (025D475C): a placed monster this game runs goes for the nearest player, and takes the other players'
+// hits as its own; another's copy here takes their kills as its own death (coop_monsters.h)
+extern "C" void f_025D475C_orig(Cpu* c);
+extern "C" void hook_025D475C(Cpu* c) {
+    const uint32_t a = c->r[3];
+    const bool takes = mods::coop::monsters::takes(a);
+    mods::extras::CoopStandIn s(a, mods::coop::monsters::runs(a));
+    if (takes) mods::coop::monsters::before(a);
+    f_025D475C_orig(c);
+    if (const uint32_t r = c->r[3]; takes) mods::coop::monsters::after(c, a), c->r[3] = r;
+}
+// dSv_info_c::isActor (025BA6A4, r4 set id, r5 room): a placed monster killed in this stage while a player was in it is
+// not made again (coop_monsters.h)
+extern "C" void f_025BA6A4_orig(Cpu* c);
+extern "C" void hook_025BA6A4(Cpu* c) {
+    const int set = (int)c->r[4], room = (int)c->r[5];
+    f_025BA6A4_orig(c);
+    if (!c->r[3] && mods::coop::monsters::killed(set, room)) c->r[3] = 1;
+}
+// fopAcM_createDisappear (025D99E8, r6 the drop): one of ours another player killed drops nothing here (theirs did)
+extern "C" void f_025D99E8_orig(Cpu* c);
+extern "C" void hook_025D99E8(Cpu* c) {
+    if (mods::coop::monsters::dropless(c->r[3])) c->r[6] = 1, mods::trace("coop: a monster another player killed: no drop here");  // daDisItem_NONE1_e
+    f_025D99E8_orig(c);
+}
 #define COOP_STAND_IN(addr)                                                   \
     extern "C" void f_##addr##_orig(Cpu* c);                                  \
     extern "C" void hook_##addr(Cpu* c) {                                     \

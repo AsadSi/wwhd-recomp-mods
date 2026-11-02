@@ -1,6 +1,7 @@
 // Online co-op over UDP (docs/online-coop.md): one socket a game, the host's world, guests as thin copies.
 // Each packet carries the sender's reliable messages until they are acked (Quake 3's way) and its newest acks; poses
-// and the host's ship go unreliably at ~20 Hz and are shown 100 ms behind, between the two snapshots around that time.
+// and the host's ship go unreliably at 30 Hz (each game step) and are shown 60 ms behind, between the two snapshots
+// around that time.
 #pragma once
 #include <cstdint>
 #include <string>
@@ -9,7 +10,7 @@ struct Cpu;
 
 namespace mods::coop::net {
 
-constexpr int kProto = 2, kPort = 7777, kMaxPlayers = 4;
+constexpr int kProto = 3, kPort = 7777, kMaxPlayers = 4;
 
 // the reliable messages (the game's side reads them through on_message)
 enum Msg : uint8_t {
@@ -30,13 +31,26 @@ enum Msg : uint8_t {
     kBoatShot,    // any -> host -> others: the boat's own cannon fired {f32 pos[3], s16 angle[3], f32 speedF, speed y, gravity}
     kDamage,      // guest -> host: {u16 n, u8 health}: its hit on the host's monster n (the host's health counts)
     kProgress,    // any -> host -> others: save data fields a player changed (coop_progress.h)
+    kDown,        // guest -> host: its Link fell (no health left): brought back beside the host
+    kSound,       // any -> host -> others: the sound effects a player's Link started in a step (JAIZelBasic::seStart)
+    kPlayerHit,   // any -> host -> others: {u8 player hit, u8 quarter hearts, s16 the way the blow goes}
+    kBombed,      // any -> host -> others: {stage[8], s8 room, f32 pos[3]}: a player's bomb went off there (coop_items.h)
+    kOwner,       // host -> guests: who runs each place's monsters: {stage[8], s8 room, u8 player} each (coop_monsters.h)
+    kMonHit,      // guest -> host -> others: {stage[8], u32 key, u8 health}: its hit on a monster another player runs
+    kMonGone,     // any -> host -> others: {stage[8], u32 key, s8 room, u16 set id}: a monster killed
+    kDead,        // host -> guests: the placed monsters killed in the stages the players are in: {stage[8], s8 room, u16 set id} each
+    kDoorAsk,     // guest -> host: {stage[8]}: it would go into a stage the host isn't in (coop_sync.cpp, doors)
+    kDoorAnswer,  // host -> guest: {stage[8], u8 let in}
+    kCutscene,    // host -> guests: {stage[8], s8 room, name[32]}: a cutscene of the stage's event list started (no name: over)
+    kDoorMove,    // any -> host -> others: {stage[8], s16 proc, f32 home x, z, u8 open, u8 way}: a player's door moving
+    kRupees,      // any -> host -> others: {s32 rupees}: what a player just gained, gained by everyone
 };
 
 enum class Role { kOff, kHost, kGuest };
 Role role();
 int my_id();                     // 0 is the host
 const char* status();            // one line for the menu: "Hosting on 7777, 2 players, ping 3 ms"
-uint32_t build_hash();           // FNV-1a of this executable
+uint32_t build_hash();           // FNV-1a of the source commit (with local changes: of this executable)
 
 // start or stop; WWHD_COOP=host[:port] or join:<addr>[:port] (with WWHD_COOP_NAME, WWHD_COOP_TUNIC) at the first step
 bool start(Role r, const std::string& addr, int port, const std::string& my_name, int my_tunic, std::string& why);
@@ -46,6 +60,8 @@ void stop(const char* why);
 void send(int to, Msg type, const std::string& body);
 // unreliable: this game's newest snapshot of kind k (a pose, the ship), sent at the next tick to everyone
 void put_state(uint8_t kind, const std::string& body);
+// unreliable, a stream: added to what of kind k goes at the next tick (voice frames: none overwritten)
+void add_state(uint8_t kind, const std::string& more);
 
 // each logic step: read the socket, call back, send what is due
 struct Handler {

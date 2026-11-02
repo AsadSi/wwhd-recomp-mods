@@ -3,6 +3,8 @@ Third-party material in the mods added on this branch
 - runtime/src/mods/coop_tunic_masks.h is generated from the colour masks of the TWWHD Randomizer
   (https://github.com/SuperDude88/TWWHD-Randomizer), MIT licence, Copyright (c) SuperDude88 and contributors.
   The MIT notice applies to that file.
+- runtime/src/stage_names.h is generated from the stage names of wwrando (https://github.com/LagoLunatic/wwrando),
+  MIT licence, Copyright (c) 2018 LagoLunatic. The MIT notice applies to that file.
 
 Everything else is under the licence in LICENSE (MPL-2.0), as in the original project.
 No game data, dump, key or recorded game audio is part of this repository; the tools that need

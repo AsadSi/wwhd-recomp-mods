@@ -221,7 +221,6 @@ void sound(uint32_t id, float x, float y, float z, float seconds) {
 }
 
 void camera_drawn(uint32_t cam) {
-    if (g_monsters.empty() && !tpfx::any()) return;
     static std::vector<uint32_t> words;
     static std::vector<float> fx, world;
     static std::vector<uint32_t> groups;
@@ -233,7 +232,8 @@ void camera_drawn(uint32_t cam) {
     const float V[12] = {f(0), f(1), f(2), f(3), f(4), f(5), f(6), f(7), f(8), f(9), f(10), f(11)};
     const float eye[3] = {-(V[0] * V[3] + V[4] * V[7] + V[8] * V[11]), -(V[1] * V[3] + V[5] * V[7] + V[9] * V[11]),
                           -(V[2] * V[3] + V[6] * V[7] + V[10] * V[11])};
-    sfx::listener(eye, V);  // the view matrix's first row: the camera's right
+    sfx::listener(eye, V);  // the view matrix's first row: the camera's right (every frame: co-op voices are heard by it)
+    if (g_monsters.empty() && !tpfx::any()) return;
     const float t = interp::pass_t(), back = 1 - t;
     uint32_t count = 0;
     for (const Monster* m : g_monsters) {

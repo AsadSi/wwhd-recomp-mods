@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <deque>
+#include <map>
 #include <mutex>
 #include <vector>
 
@@ -18,6 +20,8 @@ std::mutex g_mu;
 std::vector<Clip> g_clips;
 std::vector<Voice> g_voices;
 uint32_t g_next = 1;
+struct Stream { std::deque<float> q; int rate = 16000; double pos = 0; bool playing = false; float x = 0, y = 0, z = 0; };
+std::map<int, Stream> g_streams;
 float g_eye[3] = {}, g_right[3] = {1, 0, 0};
 constexpr float kNear = 600, kFar = 5000;  // full volume within kNear, silent beyond kFar
 // a cut-short clip fades out over its last 10 ms (no click)
@@ -88,6 +92,15 @@ bool playing(uint32_t h) {
     return std::any_of(g_voices.begin(), g_voices.end(), [h](const Voice& v) { return v.handle == h; });
 }
 
+void stream(int key, const int16_t* pcm, int n, int rate, float x, float y, float z) {
+    std::lock_guard<std::mutex> lk(g_mu);
+    Stream& st = g_streams[key];
+    st.rate = rate, st.x = x, st.y = y, st.z = z;
+    for (int i = 0; i < n; i++) st.q.push_back(pcm[i]);
+    while (st.q.size() > (size_t)rate * 2 / 5) st.q.pop_front();
+    if (!st.playing && st.q.size() >= (size_t)rate * 3 / 50) st.playing = true, st.pos = 0;
+}
+
 void listener(const float eye[3], const float right[3]) {
     std::lock_guard<std::mutex> lk(g_mu);
     memcpy(g_eye, eye, sizeof g_eye), memcpy(g_right, right, sizeof g_right);
@@ -114,6 +127,24 @@ void mix(int32_t* left, int32_t* right, int frames) {
         }
     }
     std::erase_if(g_voices, [](const Voice& v) { return v.pos < 0; });
+    for (auto& [key, st] : g_streams) {
+        if (!st.playing) continue;
+        const float dx = st.x - g_eye[0], dy = st.y - g_eye[1], dz = st.z - g_eye[2], d = std::sqrt(dx * dx + dy * dy + dz * dz);
+        const float gain = std::clamp((kFar - d) / (kFar - kNear), 0.f, 1.f);
+        const float pan = d > 1 ? std::clamp((dx * g_right[0] + dy * g_right[1] + dz * g_right[2]) / d, -1.f, 1.f) : 0;
+        const float gl = gain * std::sqrt(0.5f * (1 - pan)), gr = gain * std::sqrt(0.5f * (1 + pan));
+        const double step = st.rate / 48000.0;
+        for (int i = 0; i < frames; i++) {
+            if (st.pos + 1 >= st.q.size()) { st.playing = false; break; }  // (ran dry: queues again)
+            const size_t k = (size_t)st.pos;
+            const float t = (float)(st.pos - k), v = st.q[k] + (st.q[k + 1] - st.q[k]) * t;
+            left[i] += (int32_t)(v * gl), right[i] += (int32_t)(v * gr);
+            st.pos += step;
+        }
+        const size_t used = (size_t)st.pos;
+        st.q.erase(st.q.begin(), st.q.begin() + std::min(used, st.q.size()));
+        st.pos -= (double)used;
+    }
 }
 
 }  // namespace sfx

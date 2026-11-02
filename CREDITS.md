@@ -4,6 +4,8 @@
 - **[Cemu](https://github.com/cemu-project/Cemu)**, whose documentation of the Wii U GPU and GX2 the original project follows.
 - **[zeldaret/tww](https://github.com/zeldaret/tww)**, the Wind Waker decompilation: function names, structures and game logic the mods rely on.
 - **[TWWHD Randomizer](https://github.com/SuperDude88/TWWHD-Randomizer)** (SuperDude88 and contributors, MIT): the tunic colour masks used for co-op players (see NOTICE).
+- **[wwrando](https://github.com/LagoLunatic/wwrando)** (LagoLunatic, MIT): the stage names in `runtime/src/stage_names.h` (see NOTICE).
+- **[coop-anything](https://github.com/cranebeaker/coop-anything)** (cranebeaker and contributors, MIT): the network test relay in `tools/chaos/`.
 - Online co-op design ideas from **[Ship of Harkinian](https://github.com/HarbourMasters/Shipwright)**'s Anchor and the earlier Wind Waker co-op projects (ww-multiplayer, Windwaker-coop).
 
 ## How this was made
