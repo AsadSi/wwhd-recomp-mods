@@ -11,7 +11,7 @@
 #include "rumble.h"
 #include "platform/input_sdl.h"
 static int savedSlot=0, loadedSlot=0, saveRequests=0, loadRequests=0;
-namespace ss { void request_save(int slot){savedSlot=slot;++saveRequests;} void request_load(int slot){loadedSlot=slot;++loadRequests;} }
+namespace ss { void request_save(int slot){savedSlot=slot;++saveRequests;} void request_load(int slot){loadedSlot=slot;++loadRequests;} uint32_t portable_arrivals(){return 0;} }  // (savestate.cpp needs the game)
 static int graphicsRequests=0; static char graphicsKey=0;
 namespace render { uint64_t frame_count(){return 0;} }
 namespace gfxvk { bool graphics_hotkey(char key,bool activate){if(activate){++graphicsRequests;graphicsKey=key;}return true;} }
