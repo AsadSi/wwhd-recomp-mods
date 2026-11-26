@@ -173,7 +173,9 @@ void take(int li, const uint8_t* d, size_t n, Handler& h) {
     memcpy(&id, d, 4);
     for (size_t o = 4; o + 4 <= n; id++) {
         const Msg type = (Msg)d[o];
-        const uint8_t origin = d[o + 1];
+        // whose message: on the host the link it came on (a guest can't speak for another); on a guest as the host
+        // says, a player id (as states are taken in poll)
+        const uint8_t origin = g_role == Role::kHost ? (uint8_t)li : (uint8_t)(d[o + 1] % kMaxPlayers);
         uint16_t len;
         memcpy(&len, d + o + 2, 2);
         const uint8_t* b = d + o + 4;
