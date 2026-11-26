@@ -1,5 +1,6 @@
 // Standalone host-side tests; no game files, player settings or guest code needed.
 #include "mods/manager.h"
+#include "mods/extras.h"
 #include "mods/mods.h"
 #include "mods/climb.h"
 #include "overlay/hostui.h"
@@ -35,6 +36,14 @@ bool quick_doors() { return state[4]; } void set_quick_doors(bool b) { state[4]=
 bool fast_scenes() { return state[5]; } void set_fast_scenes(bool b) { state[5]=b; }
 void set_camera_speed(float f) { speed=f; }
 void set_mouse_sensitivity(float f) { sensitivity=f; }
+}
+// extras.cpp needs the game (guest memory, overlay): an empty list here, so these tests see only the built-in mods
+namespace mods::extras {
+const std::vector<Mod>& catalogue() { static const std::vector<Mod> none; return none; }
+bool (*enabled_fn(const std::string&))() { return nullptr; }
+void (*apply_fn(const std::string&))(bool) { return nullptr; }
+void set_choice(const std::string&, int) {}
+void set_often(const std::string&, int) {}
 }
 namespace hostui {
 bool get(const char* k, std::string& value) {
