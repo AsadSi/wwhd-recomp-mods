@@ -181,6 +181,10 @@ void take(int li, const uint8_t* d, size_t n, Handler& h) {
         if (o > n) return;
         if (id != l.got + 1) continue;  // taken already, or one before it is missing (it comes again)
         l.got = id;
+        // link messages go one way only: hello guest -> host; welcome, joined and left host -> guest
+        if ((type == kHello && g_role != Role::kHost) ||
+            ((type == kWelcome || type == kJoined || type == kLeft) && g_role != Role::kGuest)) continue;
+        if (type == kWelcome && (len < 2 || b[0] == 0 || b[0] >= kMaxPlayers)) continue;  // (the host gives ids 1..3)
         if (type == kHello) {  // host: the new guest in, everyone told
             g_link[li].heard = now_ms();
             queue(l, kWelcome, 0, std::string{(char)li, (char)g_player[li].tunic});
