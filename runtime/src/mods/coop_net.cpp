@@ -173,7 +173,9 @@ void take(int li, const uint8_t* d, size_t n, Handler& h) {
     memcpy(&id, d, 4);
     for (size_t o = 4; o + 4 <= n; id++) {
         const Msg type = (Msg)d[o];
-        const uint8_t origin = d[o + 1];
+        // whose message: on the host the link it came on (a guest can't speak for another); on a guest as the host
+        // says, a player id (as states are taken in poll)
+        const uint8_t origin = g_role == Role::kHost ? (uint8_t)li : (uint8_t)(d[o + 1] % kMaxPlayers);
         uint16_t len;
         memcpy(&len, d + o + 2, 2);
         const uint8_t* b = d + o + 4;
@@ -181,6 +183,10 @@ void take(int li, const uint8_t* d, size_t n, Handler& h) {
         if (o > n) return;
         if (id != l.got + 1) continue;  // taken already, or one before it is missing (it comes again)
         l.got = id;
+        // link messages go one way only: hello guest -> host; welcome, joined and left host -> guest
+        if ((type == kHello && g_role != Role::kHost) ||
+            ((type == kWelcome || type == kJoined || type == kLeft) && g_role != Role::kGuest)) continue;
+        if (type == kWelcome && (len < 2 || b[0] == 0 || b[0] >= kMaxPlayers)) continue;  // (the host gives ids 1..3)
         if (type == kHello) {  // host: the new guest in, everyone told
             g_link[li].heard = now_ms();
             queue(l, kWelcome, 0, std::string{(char)li, (char)g_player[li].tunic});
@@ -341,7 +347,8 @@ void poll(Handler& h) {
     uint8_t buf[8192];
     sockaddr_in from{};
     socklen_t fl = sizeof from;
-    for (int n; (n = (int)recvfrom(g_sock, (char*)buf, sizeof buf, 0, (sockaddr*)&from, &fl)) >= (int)sizeof(Head); fl = sizeof from) {
+    for (int n; (n = (int)recvfrom(g_sock, (char*)buf, sizeof buf, 0, (sockaddr*)&from, &fl)) >= 0; fl = sizeof from) {
+        if (n < (int)sizeof(Head)) continue;  // (a stray short datagram must not end this step's reading)
         Head hd;
         memcpy(&hd, buf, sizeof hd);
         const uint8_t* d = buf + sizeof hd;

@@ -953,6 +953,7 @@ bool unpack(const uint8_t* d, size_t n, Pose& p, size_t* used) {
     }
     uint8_t nr = 0;
     if (!get(&p.chain, 2) || (p.chain && (!get(p.chain_root, 6) || !get(p.chain_angle, 4))) || !get(&nr, 1)) return false;
+    if (p.chain > 300 || nr > 200) return false;  // the sender's own caps; a rope line is made for 200 points (make_rope)
     p.rope_pts.resize(3 * nr);
     if (nr && (!get(&p.rope_width, 4) || !get(p.rope_pts.data(), 6 * nr))) return false;
     if (used) *used = size;

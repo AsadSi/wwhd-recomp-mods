@@ -272,6 +272,15 @@ bool door_held(Cpu* c) {
 
 struct Handler : net::Handler {
     void message(int from, net::Msg type, const uint8_t* d, size_t n) override {
+        // the host's world, sent only by the host (each send is under host()): taken only on a guest, from player 0.
+        // The host relays only the "any" kinds, and on the host a message's sender is the link it came on (coop_net)
+        switch (type) {
+        case net::kJoinState: case net::kSeaEvent: case net::kSpawn: case net::kKill: case net::kOwner:
+        case net::kDead: case net::kDoorAnswer: case net::kCutscene:
+            if (net::role() != net::Role::kGuest || from != 0) return;
+            break;
+        default: break;
+        }
         if (type == net::kEffect) return g_effects_in.push_back({from, net::now_ms(), std::string((const char*)d, n)});
         if (type == net::kProgress) return progress::received(d, n);
         if (type == net::kDoorMove) return progress::door_moved(d, n);
