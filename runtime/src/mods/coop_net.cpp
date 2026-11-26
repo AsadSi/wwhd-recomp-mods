@@ -347,7 +347,8 @@ void poll(Handler& h) {
     uint8_t buf[8192];
     sockaddr_in from{};
     socklen_t fl = sizeof from;
-    for (int n; (n = (int)recvfrom(g_sock, (char*)buf, sizeof buf, 0, (sockaddr*)&from, &fl)) >= (int)sizeof(Head); fl = sizeof from) {
+    for (int n; (n = (int)recvfrom(g_sock, (char*)buf, sizeof buf, 0, (sockaddr*)&from, &fl)) >= 0; fl = sizeof from) {
+        if (n < (int)sizeof(Head)) continue;  // (a stray short datagram must not end this step's reading)
         Head hd;
         memcpy(&hd, buf, sizeof hd);
         const uint8_t* d = buf + sizeof hd;
